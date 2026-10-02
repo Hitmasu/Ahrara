@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+# Public, static localhost TLS fixture shipped by go-smtp v0.25.0.
+# This file is test-only and is never compiled into the server binary.
+[[rules]]
+id = "private-key"
+[[rules.allowlists]]
+description = "Upstream go-smtp localhost TLS test fixture"
+paths = ['''(^|/)server/third_party/go-smtp/client_test\.go$''']

@@ -1,0 +1,588 @@
+openapi: 3.1.0
+info:
+  title: Ahrara local API
+  description: HTTPS loopback API. Server stores neither aliases nor email. All inbox data is local SQLite.
+  license:
+    name: ''
+  version: 0.1.0
+paths:
+  /v1/addresses:
+    get:
+      tags: []
+      operationId: list_addresses
+      parameters:
+      - name: after_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Address'
+    post:
+      tags: []
+      operationId: create_address
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAddress'
+        required: true
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+  /v1/addresses/{id}:
+    get:
+      tags: []
+      operationId: get_address
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+        '404':
+          description: Not found
+    delete:
+      tags: []
+      operationId: delete_address
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+  /v1/addresses/{id}/disable:
+    post:
+      tags: []
+      operationId: disable_address
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+  /v1/addresses/{id}/enable:
+    post:
+      tags: []
+      operationId: enable_address
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+  /v1/emails:
+    get:
+      tags: []
+      operationId: list_emails
+      parameters:
+      - name: address
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: subject
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: after_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Email'
+    delete:
+      tags: []
+      summary: 'Destructive: permanently delete every email in this local profile. Aliases remain.'
+      operationId: clear_inbox
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deleted'
+  /v1/emails/wait:
+    get:
+      tags: []
+      operationId: wait
+      parameters:
+      - name: timeout
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: address
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: subject
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: after_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaitResult'
+        '401':
+          description: Token revoked
+  /v1/emails/{id}:
+    get:
+      tags: []
+      operationId: get_email
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: max_body_bytes
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParsedEmail'
+    delete:
+      tags: []
+      operationId: delete_email
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deleted'
+  /v1/emails/{id}/attachments:
+    get:
+      tags: []
+      operationId: list_attachments
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attachment'
+  /v1/emails/{id}/attachments/{attachmentId}:
+    get:
+      tags: []
+      operationId: download_attachment
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+  /v1/emails/{id}/eml:
+    get:
+      tags: []
+      operationId: eml
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: Range
+        in: header
+        description: Single bytes range
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '200':
+          description: ''
+          content:
+            message/rfc822:
+              schema:
+                type: string
+        '206':
+          description: Partial EML
+        '416':
+          description: Invalid range
+  /v1/events:
+    get:
+      tags: []
+      summary: Ephemeral metadata events from this API process only; resynchronize via REST after disconnect.
+      operationId: events
+      responses:
+        '200':
+          description: ''
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/status:
+    get:
+      tags: []
+      operationId: status
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+components:
+  schemas:
+    Address:
+      type: object
+      required:
+      - id
+      - identity_fingerprint
+      - route_id
+      - alias_id
+      - address
+      - created_at
+      - enabled
+      properties:
+        address:
+          type: string
+        alias_id:
+          type: string
+        created_at:
+          type: string
+        enabled:
+          type: boolean
+        id:
+          type: integer
+          format: int64
+        identity_fingerprint:
+          type: string
+        label:
+          type:
+          - string
+          - 'null'
+        route_id:
+          type: string
+    Attachment:
+      type: object
+      required:
+      - attachment_id
+      - filename
+      - content_type
+      - size
+      - content_disposition
+      properties:
+        attachment_id:
+          type: string
+        content_disposition:
+          type: string
+        content_type:
+          type: string
+        filename:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+    CreateAddress:
+      type: object
+      properties:
+        label:
+          type:
+          - string
+          - 'null'
+      additionalProperties: false
+    Deleted:
+      type: object
+      required:
+      - deleted
+      properties:
+        deleted:
+          type: integer
+          minimum: 0
+    Email:
+      type: object
+      required:
+      - id
+      - transfer_id
+      - identity_fingerprint
+      - recipient
+      - envelope_sender
+      - received_at
+      - from
+      - to
+      - subject
+      - size_bytes
+      properties:
+        envelope_sender:
+          type: string
+        from:
+          type: string
+        id:
+          type: integer
+          format: int64
+        identity_fingerprint:
+          type: string
+        message_id:
+          type:
+          - string
+          - 'null'
+        received_at:
+          type: string
+        recipient:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        subject:
+          type: string
+        to:
+          type: string
+        transfer_id:
+          type: string
+    Owner:
+      type: object
+      required:
+      - mode
+      - pid
+      - fingerprint
+      properties:
+        fingerprint:
+          type: string
+        mode:
+          type: string
+        pid:
+          type: integer
+          format: int32
+          minimum: 0
+    ParsedEmail:
+      allOf:
+      - $ref: '#/components/schemas/Email'
+      - type: object
+        required:
+        - cc
+        - date
+        - text_body
+        - text_body_truncated
+        - html_available
+        - attachments
+        - parse_error
+        properties:
+          attachments:
+            type: array
+            items:
+              $ref: '#/components/schemas/Attachment'
+          cc:
+            type: string
+          date:
+            type: string
+          html_available:
+            type: boolean
+          parse_error:
+            type: boolean
+          text_body:
+            type: string
+          text_body_truncated:
+            type: boolean
+    Status:
+      type: object
+      required:
+      - connected
+      - status
+      - identity_fingerprint
+      - route_id
+      - addresses
+      - enabled_addresses_count
+      - emails_count
+      - server
+      - cursor
+      properties:
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        connected:
+          type: boolean
+        cursor:
+          type: integer
+          format: int64
+        emails_count:
+          type: integer
+          format: int64
+        enabled_addresses_count:
+          type: integer
+          format: int64
+        identity_fingerprint:
+          type: string
+        last_email_at:
+          type:
+          - string
+          - 'null'
+        last_error:
+          type:
+          - string
+          - 'null'
+        next_cursor:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        owner:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Owner'
+        route_id:
+          type: string
+        server:
+          type: string
+        status:
+          type: string
+    WaitResult:
+      oneOf:
+      - type: object
+        required:
+        - email
+        - status
+        properties:
+          email:
+            $ref: '#/components/schemas/ParsedEmail'
+          status:
+            type: string
+            enum:
+            - matched
+      - type: object
+        required:
+        - status
+        properties:
+          status:
+            type: string
+            enum:
+            - timeout
+  securitySchemes:
+    localToken:
+      type: http
+      scheme: bearer
+security:
+- localToken: []

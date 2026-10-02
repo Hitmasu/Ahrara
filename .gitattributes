@@ -1,0 +1,4 @@
+*.pdf binary
+*.eml -text
+# Preserve the upstream license byte-for-byte, including its final blank line.
+cli/third_party/mailparse/LICENSE -whitespace

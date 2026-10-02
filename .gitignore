@@ -1,0 +1,14 @@
+.dev/
+dist/
+target/
+**/target/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.DS_Store
+*.key
+*.pem
+*.token
+.env
+.env.*
