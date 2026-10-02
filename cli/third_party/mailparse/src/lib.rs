@@ -159,12 +159,15 @@ fn test_find_from_u8() {
 // Like find_from_u8, but additionally filters such that `key` is at the start
 // of a line (preceded by `\n`) or at the start of the search space.
 fn find_from_u8_line_prefix(line: &[u8], ix_start: usize, key: &[u8]) -> Option<usize> {
-    let mut start = ix_start;
-    while let Some(ix) = find_from_u8(line, start, key) {
-        if ix == ix_start || line[ix - 1] == b'\n' {
-            return Some(ix);
+    // Ahrara: MIME boundaries are bounded and cannot contain newlines. Search
+    // only line starts; do not compare a whole boundary at every body byte.
+    assert!(!key.is_empty());
+    let mut offset = ix_start;
+    for segment in line[ix_start..].split_inclusive(|&b| b == b'\n') {
+        if segment.starts_with(key) {
+            return Some(offset);
         }
-        start = ix + 1;
+        offset += segment.len();
     }
     None
 }
@@ -182,6 +185,61 @@ fn test_find_from_u8_line_prefix() {
         find_from_u8_line_prefix(b"hello\nworld", 0, b"world"),
         Some(6)
     );
+}
+
+#[test]
+fn ahrara_mime_boundary_budget() {
+    for (size, accepted) in [(70, true), (71, false)] {
+        let raw = format!(
+            "Content-Type: multipart/mixed; boundary={}\r\n\r\nbody\r\n",
+            "x".repeat(size)
+        );
+        assert_eq!(parse_mail(raw.as_bytes()).is_ok(), accepted);
+    }
+}
+
+#[test]
+fn ahrara_ignores_unused_boundary_on_plain_text() {
+    let raw = format!(
+        "Content-Type: text/plain; boundary={}\r\n\r\nbody\r\n",
+        "x".repeat(71)
+    );
+    assert_eq!(
+        parse_mail(raw.as_bytes()).unwrap().get_body().unwrap(),
+        "body\r\n"
+    );
+}
+
+#[test]
+fn ahrara_mime_parameter_budget() {
+    for header in [
+        "Content-Type: text/plain",
+        "Content-Disposition: attachment",
+    ] {
+        for (count, accepted) in [(128, true), (129, false)] {
+            let params: String = (0..count).map(|i| format!("; p{i}=value")).collect();
+            let raw = format!("{header}{params}\r\n\r\nbody\r\n");
+            assert_eq!(parse_mail(raw.as_bytes()).is_ok(), accepted);
+        }
+        let raw = format!("{header}; name={}\r\n\r\nbody\r\n", "x".repeat(16 * 1024));
+        assert!(parse_mail(raw.as_bytes()).is_err());
+    }
+}
+
+#[test]
+fn ahrara_mime_checks_decoded_headers_and_subparts() {
+    let value = format!("text/plain{}", "; p=value".repeat(129));
+    let encoded = data_encoding::BASE64.encode(value.as_bytes());
+    let raw = format!("Content-Type: =?utf-8?B?{encoded}?=\r\n\r\nbody\r\n");
+    assert!(parse_mail(raw.as_bytes()).is_err());
+    let raw = format!("Content-Type: multipart/mixed; boundary=outer\r\n\r\n--outer\r\nContent-Disposition: attachment{}\r\n\r\nbody\r\n--outer--\r\n", "; p=value".repeat(129));
+    assert!(parse_mail(raw.as_bytes()).is_err());
+    let raw = format!(
+        "Content-Type: multipart/mixed; boundary*0={}; boundary*1={}\r\n\r\nbody\r\n",
+        "x".repeat(40),
+        "y".repeat(40)
+    );
+    assert!(parse_mail(raw.as_bytes()).is_err());
 }
 
 impl<'a> MailHeader<'a> {
@@ -940,10 +998,10 @@ pub fn parse_mail(raw_data: &[u8]) -> Result<ParsedMail, MailParseError> {
 
 #[test]
 fn ahrara_parsing_budget() {
-    let raw=b"Subject: example\r\n\r\nhello\r\n";
-    assert!(parse_mail_recursive(raw,false,32,&mut 1).is_ok());
-    assert!(parse_mail_recursive(raw,false,33,&mut 1).is_err());
-    assert!(parse_mail_recursive(raw,false,0,&mut 0).is_err());
+    let raw = b"Subject: example\r\n\r\nhello\r\n";
+    assert!(parse_mail_recursive(raw, false, 32, &mut 1).is_ok());
+    assert!(parse_mail_recursive(raw, false, 33, &mut 1).is_err());
+    assert!(parse_mail_recursive(raw, false, 0, &mut 0).is_err());
 }
 
 /// Strips LF or CRLF if there is one at the end of the string raw_data[ix_start..ix].
@@ -972,10 +1030,34 @@ fn parse_mail_recursive<'a>(
     }
     *remaining -= 1;
     let (headers, ix_body) = parse_headers(raw_data)?;
+    // Ahrara: validate the same decoded representation used by the parameter
+    // parser, including deferred Content-Disposition parsing for attachments.
+    for header in &headers {
+        let key = header.get_key_ref();
+        if key.eq_ignore_ascii_case("Content-Type")
+            || key.eq_ignore_ascii_case("Content-Disposition")
+        {
+            if header.get_value_raw().len() > 16 * 1024 {
+                return Err(MailParseError::Generic("MIME parameter header too large"));
+            }
+            let value = header.get_value();
+            if value.len() > 16 * 1024 || value.split(';').skip(1).take(129).count() > 128 {
+                return Err(MailParseError::Generic("MIME parameter budget exceeded"));
+            }
+        }
+    }
     let ctype = headers
         .get_first_value("Content-Type")
         .map(|s| parse_content_type(&s))
         .unwrap_or_else(|| ParsedContentType::default_conditional(in_multipart_digest));
+
+    if ctype.mimetype.starts_with("multipart/") {
+        if let Some(boundary) = ctype.params.get("boundary") {
+            if boundary.is_empty() || boundary.len() > 70 || boundary.contains(['\r', '\n']) {
+                return Err(MailParseError::Generic("MIME boundary budget exceeded"));
+            }
+        }
+    }
 
     let mut result = ParsedMail {
         raw_bytes: raw_data,
@@ -1126,6 +1208,10 @@ fn compute_parameter_encodings(
     // that is encoded. For continuation segments the encoding from the *0 segment
     // overwrites the continuation segment's encoding, if there is one.
     let mut encodings: HashMap<String, (String, bool)> = HashMap::new();
+    // Ahrara: index once, then visit only matching continuations. Preserve the
+    // original processing order/precedence, even for unusual upstream names.
+    let mut sorted_keys: Vec<&str> = decode_key_list.iter().map(String::as_str).collect();
+    sorted_keys.sort_unstable();
     for decode_key in decode_key_list {
         if let Some(unwrap_key) = decode_key.strip_suffix("*0") {
             // Per spec, there should always be an encoding. If it's missing, handle that case gracefully
@@ -1137,16 +1223,22 @@ fn compute_parameter_encodings(
                 .next()
                 .unwrap_or("");
             let continuation_prefix = format!("{}*", unwrap_key);
-            for continuation_key in decode_key_list {
-                if continuation_key.starts_with(&continuation_prefix) {
-                    // This may (intentionally) overwite encodings previously found for the
-                    // continuation segments (which are bogus). In those cases, the flag
-                    // in the tuple should get updated from true to false.
-                    encodings.insert(
-                        continuation_key.clone(),
-                        (encoding.to_string(), continuation_key == decode_key),
-                    );
-                }
+            let first = sorted_keys.partition_point(|key| *key < continuation_prefix.as_str());
+            for continuation_key in sorted_keys[first..]
+                .iter()
+                .copied()
+                .take_while(|key| key.starts_with(&continuation_prefix))
+            {
+                // This may (intentionally) overwite encodings previously found for the
+                // continuation segments (which are bogus). In those cases, the flag
+                // in the tuple should get updated from true to false.
+                encodings.insert(
+                    continuation_key.to_string(),
+                    (
+                        encoding.to_string(),
+                        continuation_key == decode_key.as_str(),
+                    ),
+                );
             }
         } else if !encodings.contains_key(decode_key) {
             let encoding = map

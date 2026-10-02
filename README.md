@@ -1,331 +1,239 @@
-# Ahrara V1
+<p align="center">
+  <img src="site/assets/ahrara-logo.webp" width="160" height="160" alt="Ahrara macaw logo">
+</p>
 
-Receba e-mails temporários com histórico exclusivamente no seu computador.
-Servidor Go encaminha SMTP por WSS; o executável Rust oferece CLI, MCP stdio e
-API HTTPS local sobre o mesmo core. Não há deploy, DNS real ou inbox cloud nesta V1.
+<h1 align="center">Ahrara</h1>
 
-```
-SMTP + STARTTLS → Go → WSS autenticada → ahrara listen | mcp | api → SQLite local
-```
+<p align="center">Zero Retention. Fast. Simple. Free.</p>
 
-Uma Identity Ed25519 possui uma conexão e quantos aliases locais forem
-necessários. A public key identifica a Identity; a assinatura do challenge
-autentica. A private key permanece local. Cada endereço contém `routeId` de
-128 bits e `aliasId` aleatório de 64 bits, codificados em Base64URL sem padding:
-32 caracteres sensíveis a case, seguidos de `@ahrara.dev`.
+Ahrara lets you create unique email addresses and receive messages in an inbox
+on your own computer. Read mail in the terminal or browser, or let an AI agent
+work with your inbox through MCP.
 
-```
-server/                 Go: SMTP, WSS, autenticação, roteamento e ferramentas dev
-cli/src/                Rust: core, SQLite/MIME, CLI, MCP e API
-cli/migrations/         Schema local versionado
-cli/tests/              Testes locais e processos reais
-protocol/               Contrato binário e vetores compartilhados
-scripts/                Builders e verificações
-openapi.yaml            Contrato HTTPS local gerado
-docker-compose.yml      Servidor local, TLS e healthcheck
-```
+**Ahrara receives email; it does not send it.** Zero Retention applies to the
+relay. Received messages stay on your computer until you delete them.
 
-## Desenvolvimento local
+## 📦 Install
 
-Pré-requisitos para desenvolvimento: Docker Engine com Compose e Make. Go e Rust
-rodam em builders fixados; não é necessário instalar toolchains globalmente.
-O binário final Linux musl inclui SQLite e TLS Rustls, sem OpenSSL ou runtime
-externo. Os scripts usam caminhos do checkout e não modificam outros containers.
+Install Ahrara on Linux, macOS, or Windows, on x64 or ARM64.
+
+<details>
+<summary>🍺 Homebrew — macOS and Linux</summary>
+
+With Homebrew installed:
 
 ```sh
-make dev-certs
-docker compose build
-docker compose up -d --wait
-make cli
-./dist/ahrara --config .dev/profile/config.toml
+brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git
+brew install hitmasu/ahrara/ahrara
 ```
 
-Portas padrão: SMTP `127.0.0.1:2525`, WSS `127.0.0.1:8443`, API
-`https://127.0.0.1:8787`. Se 8443 estiver ocupada:
+Run `ahrara --version` to confirm the installation.
+
+</details>
+
+<details>
+<summary><code>&gt;_</code> Shell — macOS and Linux</summary>
+
+Requires `curl` and a POSIX shell:
 
 ```sh
-make dev-certs AHRARA_WSS_PORT=18443
-AHRARA_WSS_PORT=18443 docker compose up -d --wait
+curl -fsSL https://ahrara.dev/install.sh | sh
 ```
 
-Certificados e configuração já existentes não são substituídos silenciosamente.
-Se mudar a porta depois da criação, ajuste `server_url` no TOML existente.
-`make dev-certs` cria uma CA privada de desenvolvimento e certificado com SANs
-`localhost`, `127.0.0.1` e `::1`. A confiança é explícita via `tls_ca_path` ou
-`--cacert`; não há opção para desabilitar validação TLS. Certificados/chaves,
-bancos, tokens, caches e binários ficam ignorados pelo Git.
+Apply any PATH instructions printed by the installer, then open a new terminal
+and run `ahrara --version`.
 
-O Compose publica somente em loopback, usa usuário sem root, rootfs somente
-leitura, nenhuma capability e apenas certificados montados read-only. A chave
-da CA não é montada. Caso o UID/GID local seja diferente de 1000, defina
-`AHRARA_UID` e `AHRARA_GID` com seu UID/GID antes de subir o Compose.
-O healthcheck HTTPS utiliza a própria CA e o binário Go.
+</details>
 
-Para enviar um EML de teste com STARTTLS e CA validada:
+<details>
+<summary>💻 PowerShell — Windows</summary>
+
+Run in PowerShell:
+
+```powershell
+iwr https://ahrara.dev/install.ps1 -useb | iex
+```
+
+Open a new PowerShell window and run `ahrara --version`.
+
+</details>
+
+<details>
+<summary>⬇️ Manual download — All platforms</summary>
+
+Choose the executable for your operating system and architecture:
+
+| Platform | x64 | ARM64 |
+| --- | --- | --- |
+| Linux | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-linux-x86_64) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-linux-aarch64) |
+| macOS | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-darwin-x86_64) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-darwin-aarch64) |
+| Windows | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-windows-x86_64.exe) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-windows-aarch64.exe) |
+
+On **Linux or macOS**, rename the download to `ahrara` and run these commands
+from its directory:
 
 ```sh
-./dist/ahrara-dev send --to '<endereco>@ahrara.dev' --file mensagem.eml
+chmod +x ahrara
+sudo mkdir -p /usr/local/bin
+sudo mv ahrara /usr/local/bin/ahrara
 ```
 
-`ahrara-dev` é uma ferramenta de desenvolvimento. O remetente SMTP não precisa
-conhecer chaves ou tokens. Para testar preservação byte a byte, use EML original
-com CRLF; o enquadramento SMTP remove dot-stuffing e o terminador DATA.
+If `/usr/local/bin` is not on your `PATH`, add
+`export PATH="/usr/local/bin:$PATH"` to your shell's startup file and reopen
+the terminal.
 
-## CLI e endereços
+On **Windows**, rename the download to `ahrara.exe` and move it to a permanent
+folder, such as `C:\Ahrara`. Open **Edit environment variables for your account →
+Path → Edit → New**, add that folder, and reopen PowerShell.
+
+Run `ahrara --version` to confirm the installation.
+
+</details>
+
+## 🚀 Quick start
 
 ```sh
-ahrara                         # equivale a listen
-ahrara listen
-ahrara status
-ahrara version
-ahrara --help
-
-ahrara address create
-ahrara address create --label 'cadastro'
-ahrara address list --limit 20 --after-id 0
-ahrara address show <address-or-id>
-ahrara address disable <address-or-id>
-ahrara address enable <address-or-id>
-ahrara address delete <address-or-id>
-
-ahrara inbox list --address <address> --from <texto> --subject <texto>
-ahrara inbox show <id>
-ahrara inbox eml <id> --output mensagem.eml
-ahrara inbox eml <id> > mensagem.eml
-ahrara inbox attachments <id>
-ahrara inbox attachment save <email-id> <attachment-id> <destino>
-ahrara inbox delete <id>
-ahrara inbox clear
+ahrara
 ```
 
-Criação de aliases funciona offline: derive route, gere alias com CSPRNG,
-insira no SQLite e regenere se a constraint detectar colisão, inclusive entre
-processos. Não há limite de aliases no servidor. Labels têm até 256 bytes UTF-8.
-Na primeira inicialização de listen/MCP/API, crie um alias se a Identity ainda
-não tiver nenhum. Ter aliases desabilitados não cria ou habilita outro.
-Excluir um alias preserva os e-mails já recebidos.
+1. Wait for **Connected**. Your first address is created automatically and shown
+   in the **Email** row; press **C** to copy it.
+2. Send a message to that address using your usual email provider.
+3. Select the received message with **↑/↓** and press **Enter** to read it.
 
-`--config <arquivo.toml>` e `--json` são opções globais. O listener usa UI com
-cores em TTY, respeita `NO_COLOR` e emite JSON fora de TTY. Conteúdo de e-mail
-exibido no terminal tem controles neutralizados. Exportar EML em stdout exige
-redirecionamento; anexos recebem nomes seguros e nunca sobrescrevem arquivos.
-`inbox clear`, delete e exclusão de aliases são operações explicitamente destrutivas.
+**Keep Ahrara running and connected to receive messages.** Press **Ctrl+C** to
+stop. Ahrara does not queue messages for disconnected clients; already received
+mail remains in your local inbox.
 
-## Identity, Recovery e backups
+Press **/** to manage addresses and interfaces. See the [user guide](docs/usage.md)
+for the full command and configuration reference.
 
-```sh
-ahrara auth fingerprint
-ahrara auth export
-ahrara auth export --copy
-ahrara auth import                  # prompt sem eco
-ahrara auth import --stdin          # leitura de stdin
-ahrara auth import '<Recovery Key>' # suportado; pode ficar no histórico do shell
-ahrara auth regenerate
-```
+## 🌐 Web interface
 
-Substituição de Identity exige confirmação interativa ou `--yes`. Encerre o
-listener antes de importar/regenerar. Recovery usa `ahrara_sk_v1_` + seed
-Ed25519 em Base64URL. Só é mostrada automaticamente na criação interativa;
-export é uma operação explícita de segredo. MCP e logs não a expõem.
-Clipboard não imprime o segredo nem faz fallback silencioso. No Linux, o
-processo mantém o clipboard disponível por até 60 segundos para a colagem;
-ambientes sem clipboard retornam erro.
+The Web interface starts with `ahrara` by default. Open the URL shown in
+the terminal's **Web** row, or select **/ → Web Page → Open Web Page**.
 
-Recovery restaura a Identity e o mesmo route; **não restaura aliases ou histórico**.
-Esses dados exigem backup consistente do SQLite. Encerre todos os processos que
-usam o banco antes de copiar seus arquivos, ou use a API de backup do SQLite.
-Não copie isoladamente um `.db` ativo em WAL. Nunca descarte `.db-wal` de um
-banco em uso. Um alias antigo ausente no banco restaurado será rejeitado.
+Search and read messages, view HTML, download EML and attachments, and create,
+disable, or delete addresses.
 
-Os diretórios padrão seguem `directories::ProjectDirs`: config/data por usuário
-no Linux, Application Support no macOS e diretórios da aplicação no Windows.
-Segredos são escritos atomicamente, com permissões Unix 0600/diretórios 0700
-ou DACL protegida restrita ao proprietário no Windows.
+Access is limited to your own computer by default, with no password required.
+Use **/ → Web Page** to set a password or disable the interface. See the
+[Web guide](docs/usage.md#web) for session settings, HTML privacy controls, and
+LAN access.
 
-## Configuração e ownership
+## 🤖 MCP
 
-Exemplo de TOML (paths relativos são resolvidos a partir desse arquivo):
+MCP lets an AI agent manage addresses, wait for incoming mail, read messages,
+and save attachments. Install the [Ahrara plugin](docs/agents.md) to let the
+agent install and start Ahrara itself. The plugin is distributed through this
+repository for Claude Code, Codex, Copilot CLI, Gemini CLI, and other agents.
 
-```toml
-server_url = "wss://localhost:8443/ws"
-smtp_dev_address = "localhost:2525"
-domain = "ahrara.dev"
-tls_ca_path = "../certs/ca.pem"
-identity_path = "identity.key"
-database_path = "ahrara.db"
-api_bind = "127.0.0.1:8787"
-api_tls_cert_path = "../certs/server.pem"
-api_tls_key_path = "../certs/server-key.pem"
-api_token_path = "api.token"
-```
+For an already running Ahrara, MCP is enabled by default; use **/ → MCP**
+to copy its URL or disable it. Local connections use HTTP without authentication
+by default.
 
-Use um diretório privado próprio para cada profile. `listen`, `mcp` e `api`
-disputam o mesmo lock do profile; só um processo possui a WSS. O erro identifica
-modo e PID do proprietário. O lock permanece durante reconnect e é liberado
-ao encerrar, inclusive após crash pelo sistema operacional. Comandos curtos de
-SQLite continuam funcionando com WAL e `busy_timeout`. Não existe daemon ou
-proxy entre processos. Outra instalação da mesma Identity recebe
-`identity_in_use` do servidor, sem takeover.
-
-## MCP stdio
-
-Configure seu cliente MCP usando caminho absoluto do binário e do TOML:
+**Claude Code.** Add the following to `.mcp.json` in your project directory.
+If you changed the local address, use the complete MCP URL shown in the terminal.
 
 ```json
 {
   "mcpServers": {
     "ahrara": {
-      "command": "/caminho/ahrara",
-      "args": ["--config", "/caminho/profile/config.toml", "mcp"]
+      "type": "http",
+      "url": "http://127.0.0.1:8787/mcp"
     }
   }
 }
 ```
 
-Tools: `ahrara_start`, `ahrara_stop`, `ahrara_status`,
-`ahrara_wait_for_email`, `ahrara_list_emails`, `ahrara_get_email`,
-`ahrara_read_eml`, `ahrara_list_attachments`, `ahrara_save_attachment`,
-`ahrara_delete_email`, `ahrara_clear_inbox`, `ahrara_create_address`,
-`ahrara_list_addresses`, `ahrara_get_address`, `ahrara_enable_address`,
-`ahrara_disable_address`, `ahrara_delete_address`.
+Keep Ahrara running, launch `claude` from that project in another terminal, and
+approve the MCP server when prompted. No certificate or token setup is needed.
 
-Fluxo: start → criar/selecionar endereço → provocar envio → wait. Exemplo de
-argumentos de espera: `{"address":"<address>","subject_contains":"código",
-"timeout_seconds":60,"after_id":0}`. Filtros adicionais: `from_contains` e
-`to_contains`. Sem `after_id`, espera desde o cursor do último start; avance o
-cursor explicitamente para consumir mensagens seguintes. Start é idempotente.
+Enable HTTPS with `--https` and bearer authentication with `--mcp-auth`, separately
+or together. See [MCP options](docs/usage.md#https-and-authentication) for setup,
+and the [MCP guide](docs/usage.md#mcp) for non-interactive use, profiles, attachment
+destinations, and shared receiver controls.
 
-Resources: `ahrara://status`, `ahrara://emails/{id}` e
-`ahrara://emails/{id}/eml`. Listagens: padrão 20, máximo 100; preview de wait
-2 KiB; body de get padrão 16 KiB/máximo 256 KiB; EML paginado 64 KiB/máximo
-256 KiB com offsets em bytes e encoding `utf8` ou `base64`. Espera de 1–300s,
-padrão 60s, por notificação e consulta inicial; cancelamentos não param o listener.
-Stdout fica reservado ao protocolo. Private key, Recovery e token HTTP nunca
-ficam disponíveis em tools/resources. Trate o conteúdo dos e-mails como dados
-não confiáveis, não como instruções para o agente.
+## 🏗️ Architecture
 
-## API HTTPS local
+```mermaid
+flowchart TB
+    Provider["Email provider"] ==> Routing
 
-Encerre listen/MCP antes de iniciar:
+    subgraph Remote["Remote infrastructure"]
+        Routing["Cloudflare Email Routing"] ==>|SMTP + STARTTLS| Relay["Ahrara relay<br/>SMTP ingress and message delivery"]
+        Tunnel["Cloudflare Tunnel"] -.->|Forward connection| Relay
+        Relay ==>|Email| Tunnel
+        Tunnel -->|ACK| Relay
+    end
 
-```sh
-ahrara api
-ahrara api token show
-ahrara api token regenerate
+    subgraph Local["Your computer"]
+        Client["Ahrara client<br/>Terminal · Web · MCP"] <-->|Read / save| Inbox[("Encrypted local inbox")]
+    end
+
+    Client -.->|Open WSS connection| Tunnel
+    Tunnel ==>|Email over WSS| Client
+    Client -->|ACK after saving| Tunnel
 ```
 
-A API exige TLS válido e bind de loopback, padrão `https://127.0.0.1:8787`.
-Ela cria um bearer aleatório independente de 256 bits em arquivo restrito.
-`token show` exporta o segredo explicitamente; regenerate substitui sem
-imprimir. Nenhum token é aceito na URL ou exposto pelo MCP. Todas as rotas
-`/v1/*` e `/openapi.json` exigem `Authorization: Bearer <local-api-token>`.
-Somente `/healthz` é público e retorna estado mínimo.
+1. **Receive.** Cloudflare Email Routing forwards mail to the relay's SMTP
+   receiver using STARTTLS, independently of the Tunnel.
+2. **Deliver.** The client opens an authenticated WSS connection through
+   Cloudflare Tunnel. The relay streams incoming mail over that connection.
+3. **Save and confirm.** The client saves mail in the encrypted inbox shared by
+   Terminal, Web, and MCP, then sends an ACK. Only then does the relay confirm
+   SMTP delivery.
 
-| Operação | Endpoint |
-|---|---|
-| Status | `GET /v1/status` |
-| Criar/listar endereços | `POST /v1/addresses`, `GET /v1/addresses` |
-| Consultar/excluir endereço | `GET /v1/addresses/{id}`, `DELETE /v1/addresses/{id}` |
-| Habilitar/desabilitar | `POST /v1/addresses/{id}/enable`, `POST /v1/addresses/{id}/disable` |
-| Listar/limpar e-mails | `GET /v1/emails`, `DELETE /v1/emails` |
-| Consultar/excluir e-mail | `GET /v1/emails/{id}`, `DELETE /v1/emails/{id}` |
-| EML original, Range de bytes | `GET /v1/emails/{id}/eml` |
-| Anexos | `GET /v1/emails/{id}/attachments`, `GET /v1/emails/{id}/attachments/{attachmentId}` |
-| Espera | `GET /v1/emails/wait` |
-| Eventos SSE | `GET /v1/events` |
+See the [server documentation](server/README.md) for deployment details.
 
-Listagem aceita `address`, `from`, `subject`, `after_id`, `limit`; espera aceita
-os mesmos filtros e `timeout` no lugar de limit. Metadados são retornados nas
-listas; EML e anexos só por download explícito. Get aceita `max_body_bytes`.
-Paginação usa IDs crescentes: passe o último ID como `after_id`.
+## 🔐 Security
 
-Exemplo com token fornecido pelo seu gerenciador de segredos, sem copiá-lo para
-uma URL (curl é apenas exemplo de cliente, não dependência do executável):
+**Identity.** Ahrara creates an Ed25519 Identity locally to authenticate with the
+relay. Your Recovery Key restores that Identity and derives the inbox encryption
+key. Keep it private; restoring messages also requires an
+[encrypted inbox backup](docs/usage.md#backups).
 
-```sh
-curl --cacert .dev/certs/ca.pem \
-  -H "Authorization: Bearer $AHRARA_LOCAL_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"label":"automacao"}' \
-  https://127.0.0.1:8787/v1/addresses
+**Transport.** SMTP ingress requires STARTTLS. WSS and a pinned Noise session
+protect relay-to-client traffic. Senders, forwarding providers, and the relay
+can read messages; Ahrara does not provide sender-to-recipient end-to-end
+encryption.
 
-curl --cacert .dev/certs/ca.pem \
-  -H "Authorization: Bearer $AHRARA_LOCAL_TOKEN" --get \
-  --data-urlencode 'address=<address>' --data-urlencode 'timeout=60' \
-  https://127.0.0.1:8787/v1/emails/wait
+**Local access.** Web and MCP use HTTP on loopback without authentication by
+default. HTTPS, a Web password, and MCP bearer authentication are optional; the
+API always requires its token. LAN access requires HTTPS and an MCP token.
+The Web password does not encrypt Identity or token files. See
+[access options](docs/usage.md#https-and-authentication) and
+[Web sessions and LAN access](docs/usage.md#web).
 
-curl --no-buffer --cacert .dev/certs/ca.pem \
-  -H "Authorization: Bearer $AHRARA_LOCAL_TOKEN" https://127.0.0.1:8787/v1/events
-```
+**Storage and retention.** SQLCipher encrypts messages, attachments, and addresses
+locally. Exported EML, attachments saved outside the inbox, and runtime memory are
+not covered. Local data has no automatic expiry; deleting an address preserves
+its messages, which you can delete separately. The relay keeps delivery state in
+memory without a persistent inbox, but emits operational logs. Zero Retention
+does not mean zero logging.
 
-Eventos: `email_received`, `connection_state_changed`, `address_created`,
-`address_deleted`, `address_updated`. SSE usa o mesmo event bus do MCP, com
-buffer limitado e heartbeat de 15s. Revogação de token é verificada antes de
-entregar dados e nos heartbeats. Consumidores atrasados são desconectados.
-Não há replay persistente: recupere e-mails por `after_id` e consulte endereços
-novamente. Alterações de CLI em outro processo aparecem nas consultas SQLite,
-mas não geram eventos no SSE da API. Não há IPC nesta V1.
+Treat email as untrusted input, including when passing it to an AI agent.
+See [SECURITY.md](SECURITY.md) for security boundaries and vulnerability reporting.
 
-`openapi.yaml` é gerado por utoipa e verificado por teste contra o contrato em
-execução. `make openapi` atualiza; `make openapi-check` detecta divergência.
-Não há Swagger UI. A API continua consultando o banco local durante queda do
-Go e o listener tenta reconectar. Sem o processo local, não existe inbox remota.
+## 🤝 Contributing
 
-## Persistência e entrega
-
-Servidor: **zero persistência de e-mails e aliases**, sem banco, spool, Redis,
-R2, Durable Objects ou fila persistente. Apenas `route → conexão autenticada`
-e estado temporário de transações. Em `RCPT TO`, oferece o recipient ao cliente
-e espera até 5s pela validação no SQLite antes de aceitar.
-
-Cliente: migrations versionadas, WAL, EML original e uma linha por recipient;
-vários aliases na mesma transação recebem um único stream e compartilham o
-buffer em RAM. O commit conjunto precede ACK. SQLite pode guardar o mesmo EML
-em mais de uma linha para recipients diferentes. Anexos não são duplicados em
-outra tabela. Parsing MIME sob demanda tem limite de 32 níveis e 256 partes;
-MIME inválido/complexo é marcado `parse_error`, preservando o EML para exportação.
-
-Limite inclusivo de 10 MiB, chunks de até 64 KiB, backpressure, checksum SHA-256
-e sequência. Uma transação por Identity; até 100 recipients distintos por
-transação, sem limite de aliases criados. Offline/alias desconhecido: 550;
-ocupada: 450; timeout/desconexão: 451. SMTP 250 final só após todos os ACKs.
-Falha parcial ou perda de confirmação pode gerar duplicatas numa nova tentativa.
-O contrato completo está em [protocol/protocol.md](protocol/protocol.md).
-
-## Validação e distribuição
+See [CONTRIBUTING.md](CONTRIBUTING.md#build-and-run) for development requirements
+and build commands. Before submitting changes, run:
 
 ```sh
-make dev-certs
-make check                  # gofmt, go vet, rustfmt, Clippy -D warnings
-make test                   # Go race, Rust e regressões das dependências
-make openapi-check
-docker compose build
-docker compose up -d --wait
-docker compose ps
-make cli
-make e2e
-make mcp-e2e
-make api-e2e
-make e2e-static             # quatro cenários usando o executável musl final
-make secrets-check          # requer Gitleaks; saída redigida
+make check
+make test
 ```
 
-Os E2E usam perfis/identidades/tokens/bancos isolados e executam processos reais.
-Usam o endpoint do TOML de desenvolvimento e devem ser sequenciais. Não use um
-servidor remoto: são testes locais. `docker compose down` encerra este servidor.
+Use the [checks guide](CONTRIBUTING.md#checks) for API and integration checks,
+and the [release guide](docs/releasing.md) when preparing a release.
 
-| Script | Artefatos |
-|---|---|
-| `scripts/build-linux.sh x86_64` | `dist/ahrara-linux-x86_64` |
-| `scripts/build-linux.sh aarch64` | `dist/ahrara-linux-aarch64` |
-| `scripts/build-windows.ps1` | `dist/ahrara-windows-x86_64.exe`, `dist/ahrara-windows-aarch64.exe` |
-| `scripts/build-macos.sh` | `dist/ahrara-darwin-x86_64`, `dist/ahrara-darwin-aarch64` |
+Report reproducible bugs through [issues](https://github.com/Hitmasu/Ahrara/issues)
+and propose focused changes through pull requests. Keep code and documentation
+in English.
 
-Linux usa musl. ARM64 exige host nativo ou emulação Docker já configurada.
-Windows exige host Windows, SDK/MSVC x64 e ARM64; CRT estático. macOS exige host
-macOS com SDK/Xcode Command Line Tools; usa bibliotecas do sistema. Toolchains
-de desenvolvimento são Go 1.27.1 e Rust 1.98.1, com lockfiles e imagens por digest.
-Não são produzidas releases públicas nem instalados SDKs globais pelos scripts Docker.
+## 📄 License
 
-Consulte [VALIDATION.md](VALIDATION.md) para resultados efetivamente executados
-e limitações das plataformas indisponíveis. As adaptações de dependências estão
-documentadas em `server/third_party/README.md` e `cli/third_party/README.md`.
+[MIT](LICENSE). Vendored dependencies and icons retain their licenses:
+[client](cli/third_party/README.md), [server](server/third_party/README.md),
+and [icons](site/assets/icons/README.md).

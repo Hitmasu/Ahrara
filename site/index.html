@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ahrara — Disposable email for developers, QA and AI agents</title>
+  <meta name="description" content="Disposable email for developers, QA teams and AI agents. Receive messages on your computer with zero server-side retention.">
+  <meta name="theme-color" content="#080d14">
+  <meta name="color-scheme" content="dark">
+  <link rel="canonical" href="https://ahrara.dev/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ahrara">
+  <meta property="og:title" content="Ahrara — Disposable email for developers, QA and AI agents">
+  <meta property="og:description" content="Disposable email for developers, QA teams and AI agents. Receive messages on your computer with zero server-side retention.">
+  <meta property="og:url" content="https://ahrara.dev/">
+  <meta property="og:image" content="https://ahrara.dev/assets/ahrara-icon-512.png">
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <meta property="og:image:alt" content="The Ahrara macaw">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Ahrara — Disposable email for developers, QA and AI agents">
+  <meta name="twitter:description" content="Disposable email for developers, QA teams and AI agents. Receive messages on your computer with zero server-side retention.">
+  <meta name="twitter:image" content="https://ahrara.dev/assets/ahrara-icon-512.png">
+  <meta name="twitter:image:alt" content="The Ahrara macaw">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="apple-touch-icon" href="assets/ahrara-icon-192.png">
+  <!-- script.js attaches the manifest over HTTP(S); file:// cannot load manifests. -->
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="copy" viewBox="0 0 24 24"><rect x="5" y="6" width="12" height="15" rx="2"/><path d="M9 6V3h12v15h-4"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5"/></symbol>
+    <symbol id="mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+    <symbol id="server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></symbol>
+    <symbol id="computer" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="13" rx="1"/><path d="M2 20h20M9 16v4m6-4v4"/></symbol>
+  </svg>
+
+  <header class="header container">
+    <a class="wordmark" href="./" aria-label="Ahrara home">Ahrara</a>
+    <nav class="navigation" aria-label="Main navigation">
+      <a href="https://github.com/Hitmasu/Ahrara/blob/main/docs/usage.md">Docs</a>
+      <a class="desktop-link" href="https://github.com/Hitmasu/Ahrara">GitHub</a>
+    </nav>
+    <a class="button get-started" href="#install">Get Started <svg aria-hidden="true"><use href="#arrow"/></svg></a>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <img class="hero-logo" src="assets/ahrara-logo.webp" alt="Ahrara macaw with red, yellow and blue feathers" width="224" height="224" fetchpriority="high">
+      <h1 id="hero-title">Ahrara</h1>
+      <p class="hero-tagline">Zero Retention. Fast. Simple. Free.</p>
+      <p class="headline">Disposable emails, delivered instantly.</p>
+      <p class="subheadline">Built for developers, QA teams and AI agents.</p>
+    </section>
+
+    <section class="install container" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install Ahrara</h2>
+      <p class="install-intro">Choose how you want to install Ahrara.</p>
+      <div class="installer">
+        <!-- TODO: Verify package publication, hosted SH/PowerShell installers and
+             complete Codex/Claude registration commands before publishing. -->
+        <div class="install-methods" role="tablist" aria-label="Installation method">
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-brew" type="button" role="tab" aria-selected="true" aria-controls="install-panel" data-command="brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git &amp;&amp;&#10;brew install hitmasu/ahrara/ahrara"><img src="assets/icons/brew.svg" width="30" height="30" alt="">Brew</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-sh" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-command="curl -fsSL https://ahrara.dev/install.sh | sh"><img src="assets/icons/shell.svg" width="30" height="30" alt="">SH</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-powershell" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-command="iwr https://ahrara.dev/install.ps1 -useb | iex"><img src="assets/icons/powershell.svg" width="30" height="30" alt="">PowerShell</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-codex" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-command="codex mcp add ahrara"><img src="assets/icons/codex.svg" width="30" height="30" alt="">Codex</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-claude" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-command="claude mcp add ahrara"><img src="assets/icons/claude.svg" width="30" height="30" alt="">Claude</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-mcp" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-command="ahrara mcp"><img src="assets/icons/mcp.svg" width="30" height="30" alt="">MCP</button>
+            <span class="method-separator" aria-hidden="true">|</span>
+          </span>
+          <span class="method-option" role="presentation">
+            <button class="method-tab" id="method-binaries" type="button" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1"><img src="assets/icons/package.svg" width="30" height="30" alt="">Binaries</button>
+          </span>
+        </div>
+        <div class="install-panel" id="install-panel" role="tabpanel" aria-labelledby="method-brew" tabindex="0">
+          <div class="command"><span class="prompt" aria-hidden="true">$</span><code id="install-command">brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git &amp;&amp;
+brew install hitmasu/ahrara/ahrara</code></div>
+          <button class="copy-button" type="button" aria-label="Copy command" title="Copy command"><svg class="copy-icon" aria-hidden="true"><use href="#copy"/></svg><svg class="check-icon" aria-hidden="true"><use href="#check"/></svg></button>
+          <!-- TODO: Add the public binary release URL when releases are available. -->
+          <a class="download" role="link" aria-disabled="true" title="Binary downloads are not published yet" hidden><svg aria-hidden="true"><use href="#download"/></svg>Download binaries <svg aria-hidden="true"><use href="#arrow"/></svg></a>
+        </div>
+      </div>
+      <noscript><p class="install-note">Enable JavaScript to select another installation method. You can select and copy the Brew command above.</p></noscript>
+      <p class="install-note">Pre-release: package and installer publication is pending. <a href="https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#build-and-run">Build from source</a> to try Ahrara, and follow the <a href="https://github.com/Hitmasu/Ahrara/blob/main/docs/usage.md#mcp">MCP setup guide</a> to connect your agent.</p>
+    </section>
+
+    <section class="how-to container" id="how-to-use" aria-labelledby="how-to-title">
+      <h2 id="how-to-title">How to use</h2>
+      <p class="how-to-intro">After installing and <a href="https://github.com/Hitmasu/Ahrara/blob/main/docs/usage.md#configuration">configuring Ahrara</a>, run <code>ahrara</code> in your terminal.<br> Your email address is created automatically.</p>
+      <figure class="terminal-preview">
+        <figcaption class="visually-hidden">Example Ahrara terminal session with two received emails.</figcaption>
+        <div class="terminal-prompt"><span aria-hidden="true">$</span> <code>ahrara</code></div>
+        <div class="terminal-dashboard">
+          <div class="terminal-brand">
+            <span class="terminal-version">v0.1.0</span>
+            <pre class="terminal-logo" aria-hidden="true">   _    _   _ ____      _    ____      _
+  / \  | | | |  _ \    / \  |  _ \    / \
+ / _ \ | |_| | |_) |  / _ \ | |_) |  / _ \
+/ ___ \|  _  |  _ &lt;  / ___ \|  _ &lt;  / ___ \
+/_/   \_\_| |_|_| \_\/_/   \_\_| \_\/_/   \_\</pre>
+          </div>
+          <dl class="terminal-status">
+            <dt class="terminal-connected"><span aria-hidden="true">●</span> Status</dt><dd class="terminal-connected">[+] Connected</dd>
+            <dt><span aria-hidden="true">✉</span> Email</dt><dd>nIvUcbwtK1bCU7Ivf6iXR1WFXe9NL8Pl@ahrara.dev (+3 more)</dd>
+            <dt class="terminal-web"><span aria-hidden="true">◉</span> Web</dt><dd class="terminal-web">http://localhost:8787</dd>
+            <dt><span aria-hidden="true">◇</span> MCP</dt><dd>http://localhost:8787/mcp</dd>
+            <dt class="terminal-memory"><span aria-hidden="true">▣</span> RAM usage</dt><dd class="terminal-memory">13.0 MB</dd>
+            <dt class="terminal-storage"><span aria-hidden="true">▤</span> SQLite</dt><dd class="terminal-storage">1.1 MB (DB + WAL + SHM)</dd>
+          </dl>
+        </div>
+        <table class="terminal-inbox">
+          <caption>Inbox — Page 1 — newest first</caption>
+          <thead><tr><th scope="col" class="terminal-marker"><span class="visually-hidden">Selected</span></th><th scope="col" class="terminal-received">Received (local)</th><th scope="col" class="terminal-from">From</th><th scope="col" class="terminal-subject">Subject</th><th scope="col" class="terminal-size">Size</th></tr></thead>
+          <tbody>
+            <tr><td class="terminal-marker"><span aria-hidden="true">*</span><span class="visually-hidden">Selected email</span></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">GitHub &lt;noreply@github.com&gt;</td><td class="terminal-subject">Your verification code: 482916</td><td class="terminal-size">1.0 KB</td></tr>
+            <tr><td class="terminal-marker"></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">Linear &lt;notifications@linear.app&gt;</td><td class="terminal-subject">You're invited to the workspace</td><td class="terminal-size">1.4 KB</td></tr>
+          </tbody>
+        </table>
+      </figure>
+      <p class="how-to-note">Press <strong>/</strong> to open commands. Keep Ahrara running to receive emails.</p>
+    </section>
+
+    <section class="feature-section container" id="about" aria-labelledby="about-title">
+      <h2 id="about-title">What, How &amp; Why Ahrara</h2>
+      <dl class="overview-facts">
+        <dt>What is Ahrara?</dt>
+        <dd>Disposable email addresses with an inbox on your computer. Read messages in the terminal or browser, or automate with MCP and the local API.</dd>
+        <dt>How does it work?</dt>
+        <dd>Ahrara generates addresses locally. While it runs, the server streams incoming emails over an encrypted connection to the inbox on your computer.</dd>
+        <dt>Why use Ahrara?</dt>
+        <dd>Use dedicated addresses to test signups, verification codes and email templates. Keep test emails out of your personal inbox and let your agent handle repetitive checks.</dd>
+      </dl>
+    </section>
+
+    <section class="feature-section container" id="zero-retention" aria-labelledby="retention-title">
+      <h2 id="retention-title">Zero Data Retention</h2>
+      <p class="feature-intro">The Ahrara server saves no emails or address records.<br> Its stateless design keeps delivery simple, with no server inbox to maintain.</p>
+      <ol class="retention-flow" aria-label="Email delivery flow">
+        <li><svg aria-hidden="true"><use href="#mail"/></svg><strong>Incoming email</strong><span>Delivered in real time</span></li>
+        <li class="flow-arrow" aria-hidden="true"><svg><use href="#arrow"/></svg></li>
+        <li><svg aria-hidden="true"><use href="#server"/></svg><strong>Ahrara server</strong><span>No data retained</span></li>
+        <li class="flow-arrow" aria-hidden="true"><svg><use href="#arrow"/></svg></li>
+        <li><svg aria-hidden="true"><use href="#computer"/></svg><strong>Your computer</strong><span>Your local inbox</span></li>
+      </ol>
+      <p class="feature-note">Your emails and addresses are saved only on your computer.</p>
+    </section>
+
+    <section class="feature-section container" id="ownership" aria-labelledby="ownership-title">
+      <h2 id="ownership-title">You own your email</h2>
+      <p class="feature-intro">Your addresses are generated locally and tied to your cryptographic Identity.<br> Your private key stays on your computer and proves ownership when you connect.</p>
+    </section>
+
+    <section class="feature-section container" id="agents" aria-labelledby="agents-title">
+      <h2 id="agents-title">Ready for Agents</h2>
+      <p class="feature-intro">Give your agent access to disposable email through MCP.<br> It can create addresses, retrieve verification codes and validate email templates.</p>
+      <figure class="agent-chat">
+        <figcaption class="chat-header"><span>E2E test</span><span><img src="assets/icons/mcp.svg" width="18" height="18" alt="">Ahrara MCP</span></figcaption>
+        <div class="chat-conversation">
+          <div class="chat-message chat-user" data-chat-step style="--step: 0"><span class="chat-author">You</span><p>Run an E2E test on my app. Use Ahrara to sign up.</p></div>
+          <div class="chat-message chat-agent" data-chat-step style="--step: 1"><span class="chat-author">Agent</span><p>I'll sign up with an Ahrara address, verify the account and check the emails.</p></div>
+          <ol class="chat-actions" aria-label="Example agent actions">
+            <li data-chat-step style="--step: 2"><svg aria-hidden="true"><use href="#check"/></svg><div><strong>Disposable address created</strong><span>Listening for emails through Ahrara MCP.</span></div></li>
+            <li data-chat-step style="--step: 3"><svg aria-hidden="true"><use href="#check"/></svg><div><strong>Account created in your app</strong><span>Submitted the signup form with the Ahrara address.</span></div></li>
+            <li data-chat-step style="--step: 4"><svg aria-hidden="true"><use href="#check"/></svg><div><strong>Email verified</strong><span>Used code <code>482916</code> from the verification email to confirm the account.</span></div></li>
+            <li data-chat-step style="--step: 5"><svg aria-hidden="true"><use href="#check"/></svg><div><strong>Email templates validated</strong><span>Checked subjects, plain text and HTML in the verification and welcome emails.</span></div></li>
+          </ol>
+          <div class="chat-result" data-chat-step style="--step: 6"><svg aria-hidden="true"><use href="#check"/></svg><p><strong>E2E passed.</strong> Account verified and email templates matched expectations.</p></div>
+        </div>
+      </figure>
+    </section>
+
+    <section class="feature-section free-section container" id="free" aria-labelledby="free-title">
+      <h2 id="free-title">100% Free</h2>
+      <p class="feature-intro">All Ahrara features are free to use.<br> No subscriptions or paid upgrades.</p>
+      <p class="feature-note">Donations are welcome and entirely optional.</p>
+    </section>
+
+    <section class="feature-section container" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">FAQ</h2>
+      <div class="faq-list">
+        <details open>
+          <summary>Does Ahrara store my emails or addresses on its servers?<svg aria-hidden="true"><use href="#arrow"/></svg></summary>
+          <p>No. Messages pass through the server without being saved, and email addresses are not registered there. Your inbox and addresses are stored locally on your computer.</p>
+        </details>
+        <details>
+          <summary>Can I send emails with Ahrara?<svg aria-hidden="true"><use href="#arrow"/></svg></summary>
+          <p>No. Ahrara only receives emails. It does not support sending messages or replying to them.</p>
+        </details>
+        <details>
+          <summary>Is Ahrara an open email relay?<svg aria-hidden="true"><use href="#arrow"/></svg></summary>
+          <p>No. Senders can deliver email without logging in, but Ahrara never relays it to external mail servers. Messages go only to the authenticated Ahrara client for the receiving address.</p>
+        </details>
+        <details>
+          <summary>Can I use my own domain?<svg aria-hidden="true"><use href="#arrow"/></svg></summary>
+          <p>Yes. Set up forwarding from your domain to an Ahrara address, then add the domain in Ahrara. New addresses will use your domain instead of <code>ahrara.dev</code>. See the <a class="faq-docs" href="https://github.com/Hitmasu/Ahrara/blob/main/docs/usage.md#custom-domains">custom domain guide</a> for setup instructions.</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer container"><p>Build. Test. Ship. Privately.</p><div class="install-note">Open source under the <a href="https://github.com/Hitmasu/Ahrara/blob/main/LICENSE">MIT License</a>. <a href="https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md">Contribute</a>.</div></footer>
+  <span class="visually-hidden" role="status" id="copy-status"></span>
+</body>
+</html>

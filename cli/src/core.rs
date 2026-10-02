@@ -72,13 +72,19 @@ impl Drop for Ownership {
 
 impl Ownership {
     pub fn acquire(cfg: &Config, mode: &str, fingerprint: &str) -> Result<Self> {
+        Self::acquire_file(cfg, "listener.lock", mode, fingerprint)
+    }
+    pub fn acquire_http(cfg: &Config, fingerprint: &str) -> Result<Self> {
+        Self::acquire_file(cfg, "http.lock", "local server", fingerprint)
+    }
+    fn acquire_file(cfg: &Config, name: &str, mode: &str, fingerprint: &str) -> Result<Self> {
         private_dir(cfg.profile_dir())?;
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(cfg.profile_dir().join("listener.lock"))?;
+            .open(cfg.profile_dir().join(name))?;
         if FileExt::try_lock_exclusive(&file).is_err() {
             let mut text = String::new();
             file.read_to_string(&mut text)?;
@@ -102,7 +108,13 @@ impl Ownership {
         Ok(Self { file })
     }
     pub fn current(cfg: &Config) -> Result<Option<Owner>> {
-        let path = cfg.profile_dir().join("listener.lock");
+        Self::current_file(cfg, "listener.lock")
+    }
+    pub fn current_http(cfg: &Config) -> Result<Option<Owner>> {
+        Self::current_file(cfg, "http.lock")
+    }
+    fn current_file(cfg: &Config, name: &str) -> Result<Option<Owner>> {
+        let path = cfg.profile_dir().join(name);
         if !path.exists() {
             return Ok(None);
         }
@@ -132,13 +144,23 @@ pub struct Core {
     pub events: broadcast::Sender<Event>,
     pub state: watch::Sender<ConnectionState>,
     pub start_cursor: AtomicI64,
+    pub web: crate::web_state::WebState,
     running: Mutex<Option<Running>>,
 }
 
 impl Core {
     pub fn open(config: Config) -> Result<(Arc<Self>, bool)> {
         let (identity, created) = Identity::load_or_create(&config)?;
-        let storage = Storage::open(&config.database_path)?;
+        let _migration = if Storage::is_plaintext(&config.database_path)? {
+            Some(Ownership::acquire(
+                &config,
+                "database encryption",
+                &identity.fingerprint(),
+            )?)
+        } else {
+            None
+        };
+        let storage = Storage::open(&config.database_path, &identity.database_key())?;
         let (events, _) = broadcast::channel(256);
         let (state, _) = watch::channel(ConnectionState {
             state: "stopped".into(),
@@ -146,6 +168,7 @@ impl Core {
         });
         Ok((
             Arc::new(Self {
+                web: crate::web_state::WebState::load(&config)?,
                 config,
                 identity,
                 storage,
@@ -324,7 +347,8 @@ impl Core {
         }
         filters.validate()?;
         if let Some(address) = &filters.address
-            && crate::auth::decode_address(address)?.0 != self.identity.route()
+            && crate::auth::decode_address(&self.storage.routing_filter(address.clone()).await?)?.0
+                != self.identity.route()
         {
             bail!("address belongs to another Identity")
         }
@@ -401,5 +425,23 @@ impl Core {
         for email in emails {
             self.emit("email_received", json!(email));
         }
+    }
+
+    pub async fn delete_emails(&self, id: Option<i64>) -> Result<usize> {
+        let deleted = self.storage.delete(id).await?;
+        self.emit(
+            if id.is_some() {
+                "email_deleted"
+            } else {
+                "emails_cleared"
+            },
+            json!({"id":id,"deleted":deleted}),
+        );
+        Ok(deleted)
+    }
+
+    pub async fn html_email(&self, id: i64, allow_remote: bool) -> Result<mail::HtmlEmail> {
+        let (_, raw) = self.storage.email(id).await?;
+        tokio::task::spawn_blocking(move || mail::html_body(&raw, allow_remote)).await?
     }
 }

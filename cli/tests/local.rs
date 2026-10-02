@@ -17,6 +17,163 @@ fn config(dir: &Path) -> Config {
 }
 
 #[test]
+fn default_relay_connects_at_the_domain_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "").unwrap();
+    assert_eq!(
+        Config::load(Some(&path)).unwrap().server_url,
+        "wss://ahrara.dev"
+    );
+}
+
+#[tokio::test]
+async fn custom_domain_is_local_default_with_stable_internal_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let (core, _) = Core::open(cfg.clone()).unwrap();
+    let fp = core.identity.fingerprint();
+    let target = core.create_address(None).await.unwrap();
+    let domain = core
+        .storage
+        .set_custom_domain(fp.clone(), "AB.com".into(), target.id.to_string())
+        .await
+        .unwrap();
+    assert_eq!(domain.domain, "ab.com");
+    assert_eq!(domain.forwarding_address, target.address);
+    let first = core.create_address(None).await.unwrap();
+    let second = core.create_address(None).await.unwrap();
+    assert!(first.address.ends_with("@ab.com"));
+    assert_ne!(first.address, second.address);
+    assert_eq!(first.forwarding_address, target.address);
+    assert_eq!(
+        first.routing_address,
+        first.address.replace("@ab.com", "@ahrara.dev")
+    );
+    assert_eq!(first.route_id, target.route_id);
+    assert!(
+        core.storage
+            .accepts(fp.clone(), first.routing_address.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !core
+            .storage
+            .accepts(fp.clone(), first.address.clone())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        core.storage
+            .get_address(fp.clone(), first.address.clone())
+            .await
+            .unwrap()
+            .id,
+        first.id
+    );
+    assert_eq!(
+        core.storage
+            .get_address(fp.clone(), first.routing_address.clone())
+            .await
+            .unwrap()
+            .id,
+        first.id
+    );
+    let raw = format!(
+        "To: signup@ab.com\r\nX-Forwarded-To: {}\r\n\r\nbody\r\n",
+        target.address
+    )
+    .into_bytes();
+    let saved = core
+        .storage
+        .insert(
+            "forwarded".into(),
+            fp.clone(),
+            vec![target.address.clone()],
+            "sender@example.test".into(),
+            raw.clone(),
+        )
+        .await
+        .unwrap();
+    let parsed = core.get_email(saved[0].id, 100).await.unwrap();
+    assert_eq!(
+        parsed.forwarded_to.as_deref(),
+        Some(target.address.as_str())
+    );
+    assert_eq!(parsed.metadata.to_header, "signup@ab.com");
+    assert_eq!(core.storage.email(saved[0].id).await.unwrap().1, raw);
+    assert_eq!(
+        core.storage
+            .list(
+                Filters {
+                    address: Some(first.address.clone()),
+                    ..Default::default()
+                },
+                Some(fp.clone())
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    for invalid in [
+        "ahrara.dev",
+        "https://ab.com",
+        "ab.com/path",
+        "a@ab.com",
+        "-ab.com",
+        "ab..com",
+    ] {
+        assert!(
+            core.storage
+                .set_custom_domain(fp.clone(), invalid.into(), target.address.clone())
+                .await
+                .is_err()
+        );
+    }
+    core.change_address(target.id.to_string(), Some(false))
+        .await
+        .unwrap();
+    assert!(core.create_address(None).await.is_err());
+    core.change_address(target.id.to_string(), Some(true))
+        .await
+        .unwrap();
+    drop(core);
+    let (reopened, _) = Core::open(cfg).unwrap();
+    assert!(
+        reopened
+            .create_address(None)
+            .await
+            .unwrap()
+            .address
+            .ends_with("@ab.com")
+    );
+    reopened
+        .storage
+        .remove_custom_domain(fp.clone())
+        .await
+        .unwrap();
+    assert!(
+        reopened
+            .create_address(None)
+            .await
+            .unwrap()
+            .address
+            .ends_with("@ahrara.dev")
+    );
+    assert_eq!(
+        reopened
+            .storage
+            .get_address(fp, first.id.to_string())
+            .await
+            .unwrap()
+            .address,
+        first.address
+    );
+}
+
+#[test]
 fn identity_recovery_and_shared_go_rust_vectors() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
@@ -142,15 +299,18 @@ async fn aliases_collisions_disabled_and_history_survive_deletion() {
     assert!(core.read_eml(saved[0].id, 0, 256 * 1024 + 1).await.is_err());
     assert_eq!(core.storage.delete(Some(saved[0].id)).await.unwrap(), 1);
     assert_eq!(core.storage.delete(None).await.unwrap(), 1);
-    assert_eq!(core.storage.schema_version().await.unwrap(), 2);
+    assert_eq!(core.storage.schema_version().await.unwrap(), 4);
     drop(core);
     assert_eq!(
-        Storage::open(&dir.path().join("ahrara.db"))
-            .unwrap()
-            .stats()
-            .await
-            .unwrap()
-            .0,
+        Storage::open(
+            &dir.path().join("ahrara.db"),
+            &Identity::load(&config(dir.path())).unwrap().database_key()
+        )
+        .unwrap()
+        .stats()
+        .await
+        .unwrap()
+        .0,
         0
     );
 }
@@ -173,6 +333,180 @@ async fn failed_multi_recipient_commit_is_atomic() {
             .is_err()
     );
     assert_eq!(core.storage.stats().await.unwrap().0, 0);
+}
+
+#[tokio::test]
+async fn mime_budget_failure_preserves_original_eml() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = Core::open(config(dir.path())).unwrap();
+    let address = core.create_address(None).await.unwrap();
+    let raw = format!("Subject: retained original\r\nContent-Disposition: attachment; filename={}\r\n\r\nbody\r\n", "x".repeat(16 * 1024)).into_bytes();
+    let saved = core
+        .storage
+        .insert(
+            "mime-budget".into(),
+            core.identity.fingerprint(),
+            vec![address.address],
+            "sender@example.test".into(),
+            raw.clone(),
+        )
+        .await
+        .unwrap();
+    let id = saved[0].id;
+    let parsed = core.get_email(id, 1024).await.unwrap();
+    assert!(parsed.parse_error);
+    assert!(parsed.attachments.is_empty());
+    assert_eq!(core.storage.email(id).await.unwrap().1, raw);
+    assert!(ahrara::mail::attachment(&raw, "1").is_err());
+}
+
+#[tokio::test]
+async fn indexed_queries_preserve_filters_identity_order_and_stats() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = Core::open(config(dir.path())).unwrap();
+    let a = core.create_address(None).await.unwrap();
+    let b = core.create_address(None).await.unwrap();
+    let fp = core.identity.fingerprint();
+    for identity in [&fp, "other identity"] {
+        for transfer in ["first", "second"] {
+            core.storage.insert(format!("{identity}-{transfer}"), identity.into(),
+                vec![a.address.clone(), b.address.clone()], "bounce@example.test".into(),
+                b"From: Sender <from@example.test>\r\nTo: somebody@example.test\r\nSubject: SQL ' % _ ;\r\n\r\nbody\r\n".to_vec()).await.unwrap();
+        }
+    }
+    // Exercise all combinations of optional filters, including an Identity
+    // restriction used by wait, and literal punctuation in substring filters.
+    for mask in 0..64 {
+        let filters = Filters {
+            address: (mask & 1 != 0).then(|| a.address.replace("@ahrara.dev", "@AHRARA.DEV")),
+            from_contains: (mask & 2 != 0).then(|| "BOUNCE".into()),
+            to_contains: (mask & 4 != 0).then(|| "SOMEBODY".into()),
+            subject_contains: (mask & 8 != 0).then(|| "' % _ ;".into()),
+            after_id: Some(1),
+            limit: Some(100),
+        };
+        let identity = (mask & 16 != 0).then(|| fp.clone());
+        let mut expected: Vec<_> = (2..=8)
+            .filter(|id| (mask & 1 == 0 || id % 2 == 1) && (mask & 16 == 0 || *id <= 4))
+            .collect();
+        let mut filters = filters;
+        if mask & 32 != 0 {
+            filters.limit = Some(1);
+            expected.truncate(1);
+        }
+        let actual = core.storage.list(filters, identity).await.unwrap();
+        assert_eq!(
+            actual.iter().map(|email| email.id).collect::<Vec<_>>(),
+            expected
+        );
+    }
+    if a.address != a.address.to_ascii_lowercase() {
+        assert!(
+            core.storage
+                .list(
+                    Filters {
+                        address: Some(a.address.to_ascii_lowercase()),
+                        ..Default::default()
+                    },
+                    None
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    for id in [a.id.to_string(), a.address.clone()] {
+        assert_eq!(
+            core.storage
+                .get_address(fp.clone(), id.clone())
+                .await
+                .unwrap()
+                .id,
+            a.id
+        );
+        assert!(
+            core.storage
+                .get_address("other identity".into(), id)
+                .await
+                .is_err()
+        );
+    }
+    // Keep canonical numeric ID handling: leading zero or +prefix is not an ID.
+    for id in [
+        format!("0{}", a.id),
+        format!("+{}", a.id),
+        "9223372036854775808".into(),
+    ] {
+        assert!(core.storage.get_address(fp.clone(), id).await.is_err());
+    }
+    core.change_address(a.address.clone(), Some(false))
+        .await
+        .unwrap();
+    assert_eq!(
+        core.storage.address_count(fp.clone(), true).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        core.storage
+            .addresses(fp.clone(), 0, 20, true)
+            .await
+            .unwrap()[0]
+            .id,
+        b.id
+    );
+    assert_eq!(
+        core.storage
+            .addresses(fp.clone(), 0, 20, false)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let before = core.storage.stats().await.unwrap();
+    assert_eq!(before.0, 8);
+    assert_eq!(before.2, 8);
+    assert!(before.1.is_some());
+    assert_eq!(core.storage.delete(Some(8)).await.unwrap(), 1);
+    assert_eq!(core.storage.delete(Some(8)).await.unwrap(), 0);
+    let after = core.storage.stats().await.unwrap();
+    assert_eq!((after.0, after.2), (7, 7));
+    assert_eq!(core.storage.delete(None).await.unwrap(), 7);
+    assert_eq!(core.storage.stats().await.unwrap(), (0, None, 0));
+}
+
+#[tokio::test]
+async fn query_index_migration_preserves_existing_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v2.db");
+    let (identity, _) = Identity::load_or_create(&config(dir.path())).unwrap();
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(include_str!("../migrations/001_messages.sql"))
+            .unwrap();
+        c.execute_batch(include_str!("../migrations/002_addresses.sql"))
+            .unwrap();
+        c.pragma_update(None, "user_version", 2).unwrap();
+        c.execute("INSERT INTO messages(transfer_id,identity_fingerprint,recipient,envelope_sender,received_at,from_header,to_header,subject,size_bytes,raw_eml) VALUES('existing','fp','recipient','sender','timestamp','','','',3,?1)",[b"\0\r\n".as_slice()]).unwrap();
+        c.execute("INSERT INTO addresses(identity_fingerprint,route_id,alias_id,address,created_at) VALUES('fp',zeroblob(16),zeroblob(8),'existing','timestamp')",[]).unwrap();
+    }
+    for _ in 0..2 {
+        let storage = Storage::open(&path, &identity.database_key()).unwrap();
+        assert_eq!(storage.schema_version().await.unwrap(), 4);
+        assert_eq!(
+            storage.stats().await.unwrap(),
+            (1, Some("timestamp".into()), 1)
+        );
+        assert_eq!(storage.email(1).await.unwrap().1, b"\0\r\n");
+        assert_eq!(storage.address_count("fp".into(), true).await.unwrap(), 1);
+        assert_eq!(
+            storage
+                .get_address("fp".into(), "1".into())
+                .await
+                .unwrap()
+                .address,
+            "existing"
+        );
+    }
 }
 
 #[test]
@@ -225,13 +559,16 @@ fn simultaneous_first_database_open() {
     for _ in 0..30 {
         let dir = tempfile::tempdir().unwrap();
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let (identity, _) = Identity::load_or_create(&config(dir.path())).unwrap();
+        let key = identity.database_key();
         let mut threads = Vec::new();
         for _ in 0..3 {
             let barrier = barrier.clone();
             let path = dir.path().join("new.db");
+            let key = key.clone();
             threads.push(std::thread::spawn(move || {
                 barrier.wait();
-                Storage::open(&path)
+                Storage::open(&path, &key)
             }));
         }
         let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
@@ -282,7 +619,8 @@ async fn concurrent_alias_creation_and_recovery_without_sqlite() {
     let second = tempfile::tempdir().unwrap();
     let cfg = config(first.path());
     let (core, _) = Core::open(cfg.clone()).unwrap();
-    let second_connection = Storage::open(&cfg.database_path).unwrap();
+    let second_connection =
+        Storage::open(&cfg.database_path, &core.identity.database_key()).unwrap();
     let mut first_attempt = 0;
     let a = core.storage.create_address_with(
         core.identity.fingerprint(),
@@ -331,7 +669,9 @@ async fn concurrent_alias_creation_and_recovery_without_sqlite() {
 async fn start_preserves_disabled_aliases_and_offline_ownership() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(dir.path());
-    cfg.server_url = "wss://127.0.0.1:1/ws".into();
+    cfg.server_url = "wss://127.0.0.1:1".into();
+    cfg.server_public_key =
+        Some(ahrara::secure::keygen(&dir.path().join("server-noise.key")).unwrap());
     let (core, _) = Core::open(cfg.clone()).unwrap();
     let alias = core.create_address(None).await.unwrap();
     core.change_address(alias.id.to_string(), Some(false))

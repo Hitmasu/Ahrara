@@ -1,10 +1,11 @@
-//! Real Go SMTP/WSS server, real Rust processes, isolated profiles and real TLS.
+//! Real SMTP ingress, real Rust clients, isolated profiles and real TLS.
 //! Run through make e2e / mcp-e2e / api-e2e after docker compose up --wait.
 use ahrara::{auth, config::Config};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -16,6 +17,129 @@ impl Drop for Process {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+#[ignore = "requires make dev-certs; launches an isolated ingress"]
+fn forwarding_end_to_end() {
+    let mut p = TestProfile::new();
+    let port = || {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    };
+    let smtp_port = port();
+    let wss_port = port();
+    p.config.server_url = p.ingress_url(&format!("localhost:{wss_port}"));
+    p.config.smtp_dev_address = format!("localhost:{smtp_port}");
+    std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
+    let server_dir = tempfile::tempdir().unwrap();
+    let _server = Process(
+        Command::new(p.ingress_binary())
+            .env("AHRARA_SMTP_BIND", format!("127.0.0.1:{smtp_port}"))
+            .env(
+                "AHRARA_ENABLE_SSE",
+                if p.config.server_url.starts_with("https://") {
+                    "1"
+                } else {
+                    "0"
+                },
+            )
+            .env("AHRARA_HTTPS_BIND", format!("127.0.0.1:{wss_port}"))
+            .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
+            .env("AHRARA_TLS_KEY", &p.config.api_tls_key_path)
+            .env(
+                "AHRARA_TRANSPORT_KEY_FILE",
+                p.root.join(".dev/certs/transport.key"),
+            )
+            .env("AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS", "127.0.0.1/32")
+            .current_dir(server_dir.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let destination = p.run(&["address", "create"]);
+    let target = destination["address"].as_str().unwrap();
+    p.run(&["domain", "set", "ab.com", &format!("--forward-to={target}")]);
+    let public = p.run(&["address", "create"]);
+    assert!(public["address"].as_str().unwrap().ends_with("@ab.com"));
+    assert_eq!(public["forwarding_address"], target);
+    let listener = Process(
+        p.command(&["--web", "listen"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    p.ready();
+    // The envelope deliberately has no online Identity. Only the trusted header
+    // selects the actual destination; neither this envelope nor To can select it.
+    let envelope = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@ahrara.dev";
+    let raw = format!("From: sender@example.test\r\nTo: signup@ab.com\r\nX-Forwarded-To: {target}\r\nSubject: Custom domain\r\n\r\n.first\r\n..second\r\n").into_bytes();
+    std::fs::write(&p.eml, &raw).unwrap();
+    p.deliver(envelope);
+    let list = p.run(&[
+        "inbox",
+        "list",
+        "--address",
+        public["address"].as_str().unwrap(),
+    ]);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["recipient"], target);
+    assert_eq!(list[0]["to"], "signup@ab.com");
+    let email = p.run(&["inbox", "show", "1"]);
+    assert_eq!(email["forwarded_to"], target);
+    let exported = p._dir.path().join("exported.eml");
+    assert!(
+        p.command(&["inbox", "eml", "1", "--output", exported.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read(exported).unwrap(), raw);
+    std::fs::write(&p.eml, "To: signup@ab.com\r\n\r\nNo routing header\r\n").unwrap();
+    assert!(p.send(envelope, None, 0).is_err());
+    assert_eq!(p.run(&["status"])["emails_count"], 1);
+    assert_eq!(std::fs::read_dir(server_dir.path()).unwrap().count(), 0);
+    drop(listener);
+    let mut mcp = McpClient::new(&p);
+    let created = mcp.tool("ahrara_create_address", json!({}));
+    assert!(created["address"].as_str().unwrap().ends_with("@ab.com"));
+    assert_eq!(created["forwarding_address"], target);
+    let found = mcp.tool(
+        "ahrara_wait_for_email",
+        json!({"address":created["address"],"after_id":0,"timeout_seconds":1}),
+    );
+    assert_eq!(found["email"]["recipient"], target);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let token =
+            zeroize::Zeroizing::new(std::fs::read_to_string(&p.config.api_token_path).unwrap());
+        let client = reqwest::Client::builder()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(
+                    &std::fs::read(p.config.tls_ca_path.as_ref().unwrap()).unwrap(),
+                )
+                .unwrap(),
+            )
+            .build()
+            .unwrap();
+        let response = client
+            .post(format!("https://{}/v1/addresses", p.config.api_bind))
+            .bearer_auth(token.as_str())
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 201);
+        let created: Value = response.json().await.unwrap();
+        assert!(created["address"].as_str().unwrap().ends_with("@ab.com"));
+        assert_eq!(created["forwarding_address"], target);
+    });
 }
 struct TestProfile {
     _dir: tempfile::TempDir,
@@ -44,11 +168,17 @@ impl TestProfile {
             .unwrap()
             .port();
         let config = Config {
-            server_url: dev.server_url,
-            smtp_dev_address: dev.smtp_dev_address,
+            server_url: std::env::var("AHRARA_TEST_SERVER_URL").unwrap_or(dev.server_url),
+            smtp_dev_address: std::env::var("AHRARA_TEST_SMTP_ADDRESS")
+                .unwrap_or(dev.smtp_dev_address),
+            server_public_key: std::env::var("AHRARA_TEST_SERVER_PUBLIC_KEY")
+                .ok()
+                .or(dev.server_public_key),
             database_path: dir.join("ahrara.db"),
             identity_path: dir.join("identity.key"),
             api_token_path: dir.join("api.token"),
+            api_https: true,
+            mcp_auth: true,
             tls_ca_path: Some(root.join(".dev/certs/ca.pem")),
             api_tls_cert_path: root.join(".dev/certs/server.pem"),
             api_tls_key_path: root.join(".dev/certs/server-key.pem"),
@@ -70,6 +200,18 @@ impl TestProfile {
             root,
             eml,
             raw,
+        }
+    }
+    fn ingress_binary(&self) -> PathBuf {
+        std::env::var_os("AHRARA_TEST_INGRESS_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.root.join("dist/ahrara-server"))
+    }
+    fn ingress_url(&self, address: &str) -> String {
+        if self.config.server_url.starts_with("https://") {
+            format!("https://{address}/sse")
+        } else {
+            format!("wss://{address}")
         }
     }
     fn command(&self, args: &[&str]) -> Command {
@@ -111,29 +253,75 @@ impl TestProfile {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    fn send(&self, to: &str, file: Option<&Path>, size: usize) -> std::process::Output {
-        Command::new(self.root.join("dist/ahrara-dev"))
-            .arg("send")
-            .arg("--addr")
-            .arg(&self.config.smtp_dev_address)
-            .arg("--ca")
-            .arg(self.config.tls_ca_path.as_ref().unwrap())
-            .arg("--to")
-            .arg(to)
-            .arg("--file")
-            .arg(file.unwrap_or(&self.eml))
-            .arg("--size")
-            .arg(size.to_string())
-            .output()
-            .unwrap()
+    fn send(&self, to: &str, file: Option<&Path>, size: usize) -> anyhow::Result<()> {
+        fn exchange(
+            stream: &mut BufReader<impl Read + Write>,
+            command: &str,
+            code: &str,
+        ) -> anyhow::Result<()> {
+            stream.get_mut().write_all(command.as_bytes())?;
+            stream.get_mut().flush()?;
+            loop {
+                let mut line = String::new();
+                stream.read_line(&mut line)?;
+                anyhow::ensure!(line.starts_with(code), "SMTP expected {code}: {line}");
+                if line.as_bytes().get(3) != Some(&b'-') {
+                    return Ok(());
+                }
+            }
+        }
+
+        let socket = TcpStream::connect(&self.config.smtp_dev_address)?;
+        socket.set_read_timeout(Some(Duration::from_secs(90)))?;
+        socket.set_write_timeout(Some(Duration::from_secs(90)))?;
+        let mut stream = BufReader::new(socket);
+        exchange(&mut stream, "", "220")?;
+        exchange(&mut stream, "EHLO localhost\r\n", "250")?;
+        exchange(&mut stream, "STARTTLS\r\n", "220")?;
+        let ca = std::fs::read(self.config.tls_ca_path.as_ref().unwrap())?;
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut ca.as_slice()) {
+            roots.add(cert?)?;
+        }
+        let tls = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let host = self.config.smtp_dev_address.rsplit_once(':').unwrap().0;
+        let connection = rustls::ClientConnection::new(
+            std::sync::Arc::new(tls),
+            rustls::pki_types::ServerName::try_from(host.trim_matches(['[', ']']).to_owned())?,
+        )?;
+        let mut stream = BufReader::new(rustls::StreamOwned::new(connection, stream.into_inner()));
+        exchange(&mut stream, "EHLO localhost\r\n", "250")?;
+        let size = if size == 0 {
+            String::new()
+        } else {
+            format!(" SIZE={size}")
+        };
+        exchange(
+            &mut stream,
+            &format!("MAIL FROM:<sender@example.test>{size}\r\n"),
+            "250",
+        )?;
+        for recipient in to.split(',') {
+            exchange(&mut stream, &format!("RCPT TO:<{recipient}>\r\n"), "250")?;
+        }
+        exchange(&mut stream, "DATA\r\n", "354")?;
+        let raw = std::fs::read(file.unwrap_or(&self.eml))?;
+        for line in raw.split_inclusive(|byte| *byte == b'\n') {
+            if line.starts_with(b".") {
+                stream.get_mut().write_all(b".")?;
+            }
+            stream.get_mut().write_all(line)?;
+        }
+        if !raw.ends_with(b"\r\n") {
+            stream.get_mut().write_all(b"\r\n")?;
+        }
+        exchange(&mut stream, ".\r\n", "250")?;
+        exchange(&mut stream, "QUIT\r\n", "221")
     }
     fn deliver(&self, to: &str) {
-        let o = self.send(to, None, 0);
-        assert!(
-            o.status.success(),
-            "SMTP failed: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
+        self.send(to, None, 0).expect("SMTP delivery failed");
     }
 }
 
@@ -212,11 +400,10 @@ fn cli_end_to_end() {
         Some(Path::new("/this-file-must-not-be-read-before-RCPT")),
         0,
     );
-    assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("550"));
+    assert!(rejected.unwrap_err().to_string().contains("550"));
     assert_eq!(p.run(&["inbox", "list"]).as_array().unwrap().len(), 3);
     p.run(&["address", "disable", recipients[0]]);
-    assert!(!p.send(recipients[0], None, 0).status.success());
+    assert!(p.send(recipients[0], None, 0).is_err());
     p.run(&["address", "enable", recipients[0]]);
     let busy = p.command(&["mcp"]).output().unwrap();
     assert!(!busy.status.success());
@@ -232,19 +419,11 @@ fn cli_end_to_end() {
     let file = p._dir.path().join("boundary.eml");
     std::fs::write(&file, &boundary).unwrap();
     let sent = p.send(recipients[0], Some(&file), boundary.len());
-    assert!(
-        sent.status.success(),
-        "exact limit: {}",
-        String::from_utf8_lossy(&sent.stderr)
-    );
+    assert!(sent.is_ok(), "exact limit: {sent:?}");
     boundary.insert(0, b'x');
     std::fs::write(&file, &boundary).unwrap();
-    assert!(!p.send(recipients[0], Some(&file), 0).status.success());
-    assert!(
-        !p.send(recipients[0], Some(&file), boundary.len())
-            .status
-            .success()
-    );
+    assert!(p.send(recipients[0], Some(&file), 0).is_err());
+    assert!(p.send(recipients[0], Some(&file), boundary.len()).is_err());
     assert_eq!(p.run(&["status"])["emails_count"], 4);
     drop(listener);
     std::thread::sleep(Duration::from_millis(300));
@@ -256,53 +435,178 @@ fn cli_end_to_end() {
     assert_eq!(p.run(&["status"])["emails_count"], 0);
 }
 
-// Speak JSON-RPC over actual stdio, keeping stdout protocol purity under test.
+#[test]
+#[ignore = "requires Docker SMTP/WSS server"]
+fn mcp_stdio_end_to_end() {
+    use rmcp::{ServiceExt, model::CallToolRequestParam, transport::async_rw::AsyncRwTransport};
+    let p = TestProfile::new();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (mut process, client) = runtime.block_on(async {
+        let mut command =
+            tokio::process::Command::from(p.command(&["mcp", "--transport", "stdio"]));
+        let mut process = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let transport = AsyncRwTransport::new_client(
+            process.stdout.take().unwrap(),
+            process.stdin.take().unwrap(),
+        );
+        let client = tokio::time::timeout(Duration::from_secs(15), ().serve(transport))
+            .await
+            .unwrap()
+            .unwrap();
+        (process, client)
+    });
+    p.ready();
+    let tool = |name: &str, arguments: Value| {
+        let result = runtime
+            .block_on(client.call_tool(CallToolRequestParam {
+                name: name.to_owned().into(),
+                arguments: arguments.as_object().cloned(),
+            }))
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        result.structured_content.unwrap()
+    };
+    assert_eq!(tool("ahrara_start", json!({}))["connected"], true);
+    let address = tool("ahrara_create_address", json!({"label":"Stdio"}));
+    let recipient = address["address"].as_str().unwrap();
+    p.deliver(recipient);
+    let received = tool(
+        "ahrara_wait_for_email",
+        json!({"address":recipient,"timeout_seconds":5}),
+    );
+    assert_eq!(received["status"], "matched");
+    let id = received["email"]["id"].as_i64().unwrap();
+    let eml = tool("ahrara_read_eml", json!({"id":id}));
+    assert_eq!(eml["content"].as_str().unwrap().as_bytes(), p.raw);
+    runtime.block_on(async {
+        client.cancel().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), process.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while ahrara::core::Ownership::current_http(&p.config)
+                .unwrap()
+                .is_some()
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+}
+
+// Speak JSON-RPC over real HTTP(S), including negotiated sessions and SSE responses.
 struct McpClient {
-    process: Process,
-    out: BufReader<std::process::ChildStdout>,
+    _process: Process,
+    runtime: tokio::runtime::Runtime,
+    client: reqwest::Client,
+    url: String,
+    token: Option<zeroize::Zeroizing<String>>,
+    session: Option<String>,
+    protocol_version: Option<String>,
+    pending: Option<reqwest::Response>,
     next: u64,
 }
 impl McpClient {
     fn new(p: &TestProfile) -> Self {
-        let mut process = Process(
-            p.command(&["mcp"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
+        let process = p.spawn("mcp");
+        p.ready();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let client = reqwest::Client::builder()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(
+                    &std::fs::read(p.config.tls_ca_path.as_ref().unwrap()).unwrap(),
+                )
                 .unwrap(),
-        );
-        let out = BufReader::new(process.0.stdout.take().unwrap());
+            )
+            .build()
+            .unwrap();
         let mut c = Self {
-            process,
-            out,
+            _process: process,
+            runtime,
+            client,
+            url: format!(
+                "{}://{}/mcp",
+                if p.config.api_https { "https" } else { "http" },
+                p.config.api_bind
+            ),
+            token: p.config.mcp_auth.then(|| {
+                zeroize::Zeroizing::new(std::fs::read_to_string(&p.config.api_token_path).unwrap())
+            }),
+            session: None,
+            protocol_version: None,
+            pending: None,
             next: 0,
         };
-        c.request("initialize",json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ahrara-tests","version":"1"}}));
+        let initialized = c.request("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ahrara-tests","version":"1"}}));
+        assert_eq!(initialized["protocolVersion"], "2025-03-26");
+        c.protocol_version = Some(initialized["protocolVersion"].as_str().unwrap().into());
         c.write(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
         c
     }
+    fn post(&self, v: Value) -> reqwest::Response {
+        let mut request = self
+            .client
+            .post(&self.url)
+            .header("Accept", "application/json, text/event-stream")
+            .json(&v);
+        if let Some(token) = &self.token {
+            request = request.bearer_auth(token.as_str());
+        }
+        if let Some(version) = &self.protocol_version {
+            request = request.header("MCP-Protocol-Version", version);
+        }
+        if let Some(session) = &self.session {
+            request = request.header("Mcp-Session-Id", session);
+        }
+        let response = self.runtime.block_on(request.send()).unwrap();
+        assert!(
+            response.status().is_success(),
+            "MCP HTTP status: {}",
+            response.status()
+        );
+        response
+    }
     fn write(&mut self, v: Value) {
-        let input = self.process.0.stdin.as_mut().unwrap();
-        writeln!(input, "{v}").unwrap();
-        input.flush().unwrap();
+        let response = self.post(v);
+        if response.status() == 200 {
+            self.pending = Some(response);
+        }
     }
     fn request(&mut self, method: &str, params: Value) -> Value {
         self.next += 1;
-        self.write(json!({"jsonrpc":"2.0","id":self.next,"method":method,"params":params}));
-        loop {
-            let mut line = String::new();
-            assert!(
-                self.out.read_line(&mut line).unwrap() > 0,
-                "MCP closed stdout"
-            );
-            assert!(!line.contains("ahrara_sk_v1_"));
-            let v: Value = serde_json::from_str(&line).unwrap();
-            if v["id"] == self.next {
-                assert!(v.get("error").is_none(), "MCP protocol error: {v}");
-                return v["result"].clone();
-            }
+        let response =
+            self.post(json!({"jsonrpc":"2.0","id":self.next,"method":method,"params":params}));
+        if let Some(id) = response.headers().get("mcp-session-id") {
+            self.session = Some(id.to_str().unwrap().into());
         }
+        let text = self.runtime.block_on(response.text()).unwrap();
+        assert!(
+            !text.contains("ahrara_sk_v1_")
+                && self
+                    .token
+                    .as_ref()
+                    .is_none_or(|token| !text.contains(token.as_str()))
+        );
+        let value: Value = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+            .find(|v| v["id"] == self.next)
+            .expect("MCP response event");
+        assert!(value.get("error").is_none(), "MCP protocol error: {value}");
+        value["result"].clone()
     }
     fn tool(&mut self, name: &str, args: Value) -> Value {
         let r = self.request("tools/call", json!({"name":name,"arguments":args}));
@@ -314,88 +618,94 @@ impl McpClient {
 #[test]
 #[ignore = "requires Docker SMTP/WSS server"]
 fn mcp_end_to_end() {
-    let p = TestProfile::new();
-    let mut c = McpClient::new(&p);
-    let tools = c.request("tools/list", json!({}));
-    assert_eq!(tools["tools"].as_array().unwrap().len(), 17);
-    let start = c.tool("ahrara_start", json!({}));
-    assert_eq!(start["connected"], true);
-    assert_eq!(start["addresses"].as_array().unwrap().len(), 1);
-    let address = c.tool("ahrara_create_address", json!({"label":"MCP"}));
-    let recipient = address["address"].as_str().unwrap();
-    assert_eq!(
-        c.tool("ahrara_start", json!({}))["route_id"],
-        start["route_id"]
-    );
-    c.tool("ahrara_get_address", json!({"address_or_id":recipient}));
-    c.tool("ahrara_disable_address", json!({"address_or_id":recipient}));
-    c.tool("ahrara_enable_address", json!({"address_or_id":recipient}));
-    assert_eq!(
-        c.tool("ahrara_list_addresses", json!({"limit":1}))["addresses"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    p.deliver(recipient);
-    let received = c.tool(
-        "ahrara_wait_for_email",
-        json!({"address":recipient,"timeout_seconds":5}),
-    );
-    assert_eq!(received["status"], "matched");
-    let id = received["email"]["id"].as_i64().unwrap();
-    assert_eq!(
-        c.tool("ahrara_list_emails", json!({"address":recipient}))["emails"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    c.tool("ahrara_get_email", json!({"id":id}));
-    let eml = c.tool("ahrara_read_eml", json!({"id":id}));
-    assert_eq!(eml["encoding"], "utf8");
-    assert_eq!(eml["content"].as_str().unwrap().as_bytes(), p.raw);
-    assert_eq!(
-        c.tool("ahrara_list_attachments", json!({"id":id}))["attachments"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    c.tool(
+    for secure in [false, true] {
+        let mut p = TestProfile::new();
+        p.config.api_https = secure;
+        p.config.mcp_auth = secure;
+        std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
+        let mut c = McpClient::new(&p);
+        let tools = c.request("tools/list", json!({}));
+        assert_eq!(tools["tools"].as_array().unwrap().len(), 17);
+        let start = c.tool("ahrara_start", json!({}));
+        assert_eq!(start["connected"], true);
+        assert_eq!(start["addresses"].as_array().unwrap().len(), 1);
+        let address = c.tool("ahrara_create_address", json!({"label":"MCP"}));
+        let recipient = address["address"].as_str().unwrap();
+        assert_eq!(
+            c.tool("ahrara_start", json!({}))["route_id"],
+            start["route_id"]
+        );
+        c.tool("ahrara_get_address", json!({"address_or_id":recipient}));
+        c.tool("ahrara_disable_address", json!({"address_or_id":recipient}));
+        c.tool("ahrara_enable_address", json!({"address_or_id":recipient}));
+        assert_eq!(
+            c.tool("ahrara_list_addresses", json!({"limit":1}))["addresses"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        p.deliver(recipient);
+        let received = c.tool(
+            "ahrara_wait_for_email",
+            json!({"address":recipient,"timeout_seconds":5}),
+        );
+        assert_eq!(received["status"], "matched");
+        let id = received["email"]["id"].as_i64().unwrap();
+        assert_eq!(
+            c.tool("ahrara_list_emails", json!({"address":recipient}))["emails"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        c.tool("ahrara_get_email", json!({"id":id}));
+        let eml = c.tool("ahrara_read_eml", json!({"id":id}));
+        assert_eq!(eml["encoding"], "utf8");
+        assert_eq!(eml["content"].as_str().unwrap().as_bytes(), p.raw);
+        assert_eq!(
+            c.tool("ahrara_list_attachments", json!({"id":id}))["attachments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        c.tool(
         "ahrara_save_attachment",
         json!({"email_id":id,"attachment_id":"1","destination":p._dir.path().join("saved.txt")}),
     );
-    c.request("resources/list", json!({}));
-    c.request("resources/templates/list", json!({}));
-    for uri in [
-        "ahrara://status".to_owned(),
-        format!("ahrara://emails/{id}"),
-        format!("ahrara://emails/{id}/eml"),
-    ] {
-        c.request("resources/read", json!({"uri":uri}));
+        c.request("resources/list", json!({}));
+        c.request("resources/templates/list", json!({}));
+        for uri in [
+            "ahrara://status".to_owned(),
+            format!("ahrara://emails/{id}"),
+            format!("ahrara://emails/{id}/eml"),
+        ] {
+            c.request("resources/read", json!({"uri":uri}));
+        }
+        assert_eq!(
+            c.tool(
+                "ahrara_wait_for_email",
+                json!({"address":recipient,"after_id":id,"timeout_seconds":1})
+            )["status"],
+            "timeout"
+        );
+        c.tool("ahrara_delete_email", json!({"id":id}));
+        // A cancelled wait must not block subsequent requests or stop the listener.
+        c.next += 1;
+        let cancelled = c.next;
+        c.write(json!({"jsonrpc":"2.0","id":cancelled,"method":"tools/call","params":{"name":"ahrara_wait_for_email","arguments":{"after_id":id,"timeout_seconds":300}}}));
+        std::thread::sleep(Duration::from_millis(20));
+        c.write(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":cancelled,"reason":"test cancellation"}}));
+        assert_eq!(c.tool("ahrara_status", json!({}))["connected"], true);
+        c.tool("ahrara_clear_inbox", json!({}));
+        c.tool("ahrara_delete_address", json!({"address_or_id":recipient}));
+        c.tool("ahrara_stop", json!({}));
+        assert_eq!(c.tool("ahrara_status", json!({}))["connected"], false);
+        drop(c);
+        let _listener = p.spawn("listen");
+        assert_eq!(p.ready()["route_id"], start["route_id"]);
     }
-    assert_eq!(
-        c.tool(
-            "ahrara_wait_for_email",
-            json!({"address":recipient,"after_id":id,"timeout_seconds":1})
-        )["status"],
-        "timeout"
-    );
-    c.tool("ahrara_delete_email", json!({"id":id}));
-    // A cancelled wait must not block subsequent requests or stop the listener.
-    c.next += 1;
-    let cancelled = c.next;
-    c.write(json!({"jsonrpc":"2.0","id":cancelled,"method":"tools/call","params":{"name":"ahrara_wait_for_email","arguments":{"after_id":id,"timeout_seconds":300}}}));
-    std::thread::sleep(Duration::from_millis(20));
-    c.write(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":cancelled,"reason":"test cancellation"}}));
-    assert_eq!(c.tool("ahrara_status", json!({}))["connected"], true);
-    c.tool("ahrara_clear_inbox", json!({}));
-    c.tool("ahrara_delete_address", json!({"address_or_id":recipient}));
-    c.tool("ahrara_stop", json!({}));
-    assert_eq!(c.tool("ahrara_status", json!({}))["connected"], false);
-    let _listener = p.spawn("listen");
-    assert_eq!(p.ready()["route_id"], start["route_id"]);
 }
 
 #[tokio::test]
@@ -732,9 +1042,13 @@ async fn api_end_to_end() {
     assert!(!remaining.contains("after-rotation"));
 }
 
-#[tokio::test]
-#[ignore = "starts isolated Go server and Rust API processes"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "real TLS, kill/restart and network blackhole; up to 5 minutes"]
 async fn reconnect_end_to_end() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     let mut p = TestProfile::new();
     let port = || {
         std::net::TcpListener::bind("127.0.0.1:0")
@@ -745,16 +1059,63 @@ async fn reconnect_end_to_end() {
     };
     let smtp = format!("127.0.0.1:{}", port());
     let https = format!("127.0.0.1:{}", port());
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_address = proxy_listener.local_addr().unwrap();
+    let (fault, _) = tokio::sync::watch::channel(0u8);
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let proxy = tokio::spawn({
+        let fault = fault.clone();
+        let accepted = accepted.clone();
+        let upstream = https.clone();
+        async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                let (mut incoming, _) = proxy_listener.accept().await.unwrap();
+                let upstream = upstream.clone();
+                let mut events = fault.subscribe();
+                accepted.fetch_add(1, Ordering::SeqCst);
+                connections.spawn(async move {
+                    let Ok(mut outgoing) = tokio::net::TcpStream::connect(upstream).await else {
+                        return;
+                    };
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut incoming, &mut outgoing) => {},
+                        _ = events.changed() => {
+                            let mode = *events.borrow_and_update();
+                            if mode == 2 {
+                                // Keep both TCP sockets established but stop forwarding.
+                                // New TCP connections still reach the real TLS Rust server.
+                                std::future::pending::<()>().await;
+                            }
+                        }
+                    }
+                    drop((incoming, outgoing));
+                });
+            }
+        }
+    });
     p.config.smtp_dev_address = smtp.clone();
-    p.config.server_url = format!("wss://{https}/ws");
+    p.config.server_url = p.ingress_url(&proxy_address.to_string());
     std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
     let server = || {
         Process(
-            Command::new(p.root.join("dist/ahrara-server"))
+            Command::new(p.ingress_binary())
                 .env("AHRARA_SMTP_BIND", &smtp)
+                .env(
+                    "AHRARA_ENABLE_SSE",
+                    if p.config.server_url.starts_with("https://") {
+                        "1"
+                    } else {
+                        "0"
+                    },
+                )
                 .env("AHRARA_HTTPS_BIND", &https)
                 .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
                 .env("AHRARA_TLS_KEY", &p.config.api_tls_key_path)
+                .env(
+                    "AHRARA_TRANSPORT_KEY_FILE",
+                    p.root.join(".dev/certs/transport.key"),
+                )
                 .env("AHRARA_TLS_CA", p.config.tls_ca_path.as_ref().unwrap())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -762,12 +1123,12 @@ async fn reconnect_end_to_end() {
                 .unwrap(),
         )
     };
-    let go = server();
+    let ingress = server();
     let _api = p.spawn("api");
     let before = p.ready();
     let recipient = before["addresses"][0]["address"].as_str().unwrap();
     p.deliver(recipient);
-    drop(go);
+    drop(ingress);
     let deadline = Instant::now() + Duration::from_secs(5);
     while p.run(&["status"])["connected"] == true {
         assert!(Instant::now() < deadline);
@@ -796,10 +1157,403 @@ async fn reconnect_end_to_end() {
         .await
         .unwrap();
     assert_eq!(list.as_array().unwrap().len(), 1);
-    let _new_go = server();
+    let _new_ingress = server();
     let after = p.ready();
     assert_eq!(after["route_id"], before["route_id"]);
     assert_eq!(after["addresses"], before["addresses"]);
     p.deliver(recipient);
     assert_eq!(p.run(&["status"])["emails_count"], 2);
+
+    let connections_before = accepted.load(Ordering::SeqCst);
+    fault.send(1).unwrap(); // Abrupt TCP close, without a WS close frame.
+    let deadline = Instant::now() + Duration::from_secs(35);
+    while accepted.load(Ordering::SeqCst) == connections_before
+        || p.run(&["status"])["connected"] != true
+    {
+        assert!(Instant::now() < deadline, "TCP close did not reconnect");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    p.deliver(recipient);
+    assert_eq!(p.run(&["status"])["emails_count"], 3);
+
+    fault.send(2).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(150);
+    while p.run(&["status"])["connected"] == true {
+        assert!(
+            Instant::now() < deadline,
+            "blackhole not detected by PONG timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let deadline = Instant::now() + Duration::from_secs(260);
+    let restored = loop {
+        let status = p.run(&["status"]);
+        assert_ne!(
+            status["status"], "failed",
+            "reconnect gave up while old socket awaited expiry: {status}"
+        );
+        assert_ne!(
+            status["status"], "stopped",
+            "listener exited during network recovery: {status}"
+        );
+        if status["connected"] == true {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no reconnect after stale Identity expiry"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    assert_eq!(restored["route_id"], before["route_id"]);
+    p.deliver(recipient);
+    assert_eq!(p.run(&["status"])["emails_count"], 4);
+    proxy.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker SMTP/WSS server"]
+async fn web_end_to_end() {
+    let p = TestProfile::new();
+    p.run(&["address", "create"]);
+    let mut listener = Process(
+        p.command(&[])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    p.ready();
+    let conflict = p.command(&["listen"]).output().unwrap();
+    assert!(!conflict.status.success());
+    assert!(
+        String::from_utf8_lossy(&conflict.stderr).contains("listener_owned"),
+        "a Web listener conflict must identify its owner"
+    );
+
+    let ca = reqwest::Certificate::from_pem(
+        &std::fs::read(p.config.tls_ca_path.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca.clone())
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!("https://{}", p.config.api_bind);
+    let page = client.get(&base).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    let page = page.text().await.unwrap();
+    let csrf = page
+        .split("name=\"csrf\" value=\"")
+        .nth(1)
+        .map(|s| s.split('"').next().unwrap().to_owned());
+    // Empty inbox has no mutation forms; the addresses page always has one.
+    let csrf = match csrf {
+        Some(value) => value,
+        None => {
+            let text = client
+                .get(format!("{base}/addresses"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            text.split("name=\"csrf\" value=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    assert_eq!(
+        client
+            .post(format!("{base}/addresses"))
+            .form(&[("csrf", csrf.as_str()), ("label", "Web E2E")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    let aliases = p.run(&["address", "list"]);
+    let address = aliases
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["label"] == "Web E2E")
+        .unwrap()["address"]
+        .as_str()
+        .unwrap();
+    let response = client.get(format!("{base}/events")).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let mut events = response.bytes_stream();
+    p.deliver(address);
+    let mut data = String::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !data.contains("event: email_received") {
+            data.push_str(&String::from_utf8_lossy(
+                &events.next().await.unwrap().unwrap(),
+            ));
+        }
+    })
+    .await
+    .unwrap();
+    let inbox = client
+        .get(&base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(inbox.contains("Verification code 123456"));
+    let email = p.run(&["inbox", "list"]);
+    let id = email[0]["id"].as_i64().unwrap();
+    let detail = client
+        .get(format!("{base}/emails/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(detail.contains("Attachments"));
+    assert!(detail.contains("sandbox"));
+    assert!(detail.contains("Your code is 123456."));
+    let attachment = client
+        .get(format!("{base}/emails/{id}/attachments/1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(attachment.status(), 200);
+    assert!(
+        attachment.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    assert!(!attachment.bytes().await.unwrap().is_empty());
+    assert_eq!(
+        client
+            .get(format!("{base}/emails/{id}/eml"))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        p.raw.as_slice()
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}/emails/{id}/delete"))
+            .form(&[("csrf", csrf.as_str()), ("confirm", "true")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    assert!(p.run(&["inbox", "list"]).as_array().unwrap().is_empty());
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("action", "lan"),
+                ("enabled", "true")
+            ])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let password = ahrara::web_state::random_secret();
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("action", "password"),
+                ("password", password.as_str()),
+                ("password_confirm", password.as_str())
+            ])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    assert_eq!(client.get(&base).send().await.unwrap().status(), 303);
+    let login = client
+        .post(format!("{base}/login"))
+        .form(&[("csrf", csrf.as_str()), ("password", password.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 303);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .header("cookie", &cookie)
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("action", "lan"),
+                ("enabled", "true")
+            ])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    tokio::time::sleep(Duration::from_millis(1400)).await;
+    let ip = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    ip.connect("192.0.2.1:9").unwrap();
+    let ip = ip.local_addr().unwrap().ip();
+    let port = p
+        .config
+        .api_bind
+        .parse::<std::net::SocketAddr>()
+        .unwrap()
+        .port();
+    // Resolve localhost to the LAN interface so the existing development SAN remains valid.
+    let lan = reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(ca)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve("localhost", std::net::SocketAddr::new(ip, port))
+        .build()
+        .unwrap();
+    let lan_url = format!("https://localhost:{port}");
+    assert_eq!(lan.get(&lan_url).send().await.unwrap().status(), 303);
+    assert_eq!(
+        lan.get(&lan_url)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .header("cookie", &cookie)
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("action", "api"),
+                ("enabled", "true")
+            ])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    let api_token = std::fs::read_to_string(&p.config.api_token_path).unwrap();
+    assert_eq!(
+        lan.get(format!("{lan_url}/v1/status"))
+            .bearer_auth(&api_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let next = ahrara::web_state::random_secret();
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .header("cookie", &cookie)
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("action", "password"),
+                ("password", next.as_str()),
+                ("password_confirm", next.as_str())
+            ])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    assert_eq!(
+        client
+            .get(&base)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    let login = client
+        .post(format!("{base}/login"))
+        .form(&[("csrf", csrf.as_str()), ("password", next.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 303);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let values = [
+        ("csrf", csrf.as_str()),
+        ("action", "remove_password"),
+        ("confirm", "true"),
+    ];
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .header("cookie", &cookie)
+            .form(&values)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let mut values = values.to_vec();
+    values.push(("acknowledge", "true"));
+    assert_eq!(
+        client
+            .post(format!("{base}/settings"))
+            .header("cookie", &cookie)
+            .form(&values)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    assert_eq!(client.get(&base).send().await.unwrap().status(), 200);
+    drop(events);
+    listener.0.kill().unwrap();
+    listener.0.wait().unwrap();
+    let restarted = p.spawn("listen");
+    p.ready();
+    assert_eq!(client.get(&base).send().await.unwrap().status(), 200);
+    drop(restarted);
+    println!(
+        "Web E2E: HTTPS, shared process, address creation, SMTP/SSE, content, attachment, exact EML, delete, LAN login, password reset, revocation and persisted no-auth acknowledgement passed."
+    );
 }

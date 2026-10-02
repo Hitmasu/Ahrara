@@ -1,0 +1,16 @@
+{
+  "name": "ahrara",
+  "version": "0.1.0",
+  "description": "Install and run local disposable email for AI agents.",
+  "contextFileName": "skills/ahrara/SKILL.md",
+  "mcpServers": {
+    "ahrara": {
+      "command": "node",
+      "args": [
+        "${extensionPath}/plugin/ahrara.mjs"
+      ],
+      "cwd": "${extensionPath}",
+      "timeout": 330000
+    }
+  }
+}

@@ -10,15 +10,20 @@ use std::{
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub server_url: String,
+    /// Public Noise key provisioned independently of the relay connection.
+    pub server_public_key: Option<String>,
     pub smtp_dev_address: String,
     pub domain: String,
     pub tls_ca_path: Option<PathBuf>,
     pub database_path: PathBuf,
     pub identity_path: PathBuf,
     pub api_bind: String,
+    pub api_https: bool,
     pub api_tls_cert_path: PathBuf,
     pub api_tls_key_path: PathBuf,
     pub api_token_path: PathBuf,
+    pub mcp_auth: bool,
+    pub check_for_updates: bool,
 }
 
 impl Default for Config {
@@ -26,16 +31,22 @@ impl Default for Config {
         let dirs = ProjectDirs::from("dev", "Ahrara", "ahrara")
             .expect("application directories unavailable");
         Self {
-            server_url: "wss://localhost:8443/ws".into(),
+            server_url: "wss://ahrara.dev".into(),
+            server_public_key: option_env!("AHRARA_SERVER_PUBLIC_KEY")
+                .filter(|key| !key.is_empty())
+                .map(str::to_owned),
             smtp_dev_address: "localhost:2525".into(),
             domain: "ahrara.dev".into(),
             tls_ca_path: None,
             database_path: dirs.data_local_dir().join("ahrara.db"),
             identity_path: dirs.config_dir().join("identity.key"),
             api_bind: "127.0.0.1:8787".into(),
+            api_https: false,
             api_tls_cert_path: dirs.config_dir().join("api.pem"),
             api_tls_key_path: dirs.config_dir().join("api-key.pem"),
             api_token_path: dirs.config_dir().join("api.token"),
+            mcp_auth: false,
+            check_for_updates: true,
         }
     }
 }
@@ -75,8 +86,18 @@ impl Config {
         {
             *p = base.join(&*p);
         }
-        if !cfg.server_url.starts_with("wss://") {
-            bail!("server_url must use wss://")
+        let server = reqwest::Url::parse(&cfg.server_url).context("invalid server_url")?;
+        if let Some(key) = &cfg.server_public_key {
+            crate::secure::parse_public_key(key)?;
+        }
+        if server.scheme() != "wss" && !(server.scheme() == "https" && server.path() == "/sse") {
+            bail!("server_url must use wss:// or https:// with /sse")
+        }
+        if !server.username().is_empty()
+            || server.password().is_some()
+            || server.fragment().is_some()
+        {
+            bail!("server_url must not contain credentials or a fragment")
         }
         if cfg.domain != "ahrara.dev" {
             bail!("v1 domain must be ahrara.dev")

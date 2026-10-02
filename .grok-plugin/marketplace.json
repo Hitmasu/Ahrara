@@ -1,0 +1,14 @@
+{
+  "name": "ahrara",
+  "owner": {
+    "name": "Ahrara"
+  },
+  "plugins": [
+    {
+      "name": "ahrara",
+      "description": "Install and run local disposable email for AI agents.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

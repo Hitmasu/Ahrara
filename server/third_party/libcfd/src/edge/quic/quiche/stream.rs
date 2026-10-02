@@ -1,0 +1,216 @@
+//! Async stream adapter over a quiche stream.
+//!
+//! Provides `futures_io::AsyncRead`/`AsyncWrite` over a single QUIC stream
+//! so the RPC client and request serving code can treat it like any byte
+//! stream. All access to the quiche connection is serialized through the
+//! shared `Inner` mutex; blocked readers/writers register their wakers there
+//! and the driver task wakes them as data or flow-control credit arrives.
+//!
+//! quiche 0.29 semantics used here: `stream_recv` returns `Err(Done)` when no
+//! data is currently available, `Ok((0, true))` when the peer's FIN has been
+//! consumed, and `Err(InvalidStreamState)` when the stream no longer exists.
+
+use std::io;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+
+use futures_util::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Notify;
+
+use super::Inner;
+
+#[derive(Clone)]
+pub(crate) struct QuicStream {
+    inner: Arc<Mutex<Inner>>,
+    notify: Arc<Notify>,
+    stream_identifier: u64,
+    // EOF belongs to the stream, not one clone: request-body and drain
+    // handles may observe the same receive side in succession.
+    read_eof: Arc<AtomicBool>,
+}
+
+impl QuicStream {
+    pub(crate) fn new(
+        inner: Arc<Mutex<Inner>>,
+        notify: Arc<Notify>,
+        stream_identifier: u64,
+    ) -> Self {
+        Self {
+            inner,
+            notify,
+            stream_identifier,
+            read_eof: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The QUIC stream identifier, for diagnostics.
+    pub(crate) fn id(&self) -> u64 {
+        self.stream_identifier
+    }
+
+    /// Sends a FIN for the write side.
+    pub(crate) fn finish(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.closed {
+            let _ = g.connection.stream_send(self.stream_identifier, &[], true);
+        }
+        drop(g);
+        self.notify.notify_waiters();
+    }
+
+    /// Resets the write side (the edge sees a stream reset instead of EOF).
+    pub(crate) fn cancel_write(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.closed {
+            let _ =
+                g.connection
+                    .stream_shutdown(self.stream_identifier, quiche::Shutdown::Write, 0);
+            if let Some(w) = g.write_wakers.remove(&self.stream_identifier) {
+                w.wake();
+            }
+        }
+    }
+
+    /// Stops reading, releasing the flow-control window for abandoned data.
+    pub(crate) fn stop_read(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.closed {
+            let _ = g
+                .connection
+                .stream_shutdown(self.stream_identifier, quiche::Shutdown::Read, 0);
+        }
+    }
+}
+
+fn closed_error() -> io::Error {
+    io::Error::new(io::ErrorKind::ConnectionReset, "quic connection closed")
+}
+
+fn stream_error(e: quiche::Error) -> io::Error {
+    match e {
+        quiche::Error::InvalidStreamState(_) => {
+            io::Error::new(io::ErrorKind::ConnectionAborted, "stream state error")
+        }
+        other => io::Error::other(other.to_string()),
+    }
+}
+
+impl AsyncRead for QuicStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        {
+            let mut g = this.inner.lock().unwrap();
+            if g.closed {
+                return Poll::Ready(Err(closed_error()));
+            }
+            if this.read_eof.load(Ordering::Relaxed) {
+                return Poll::Ready(Ok(0));
+            }
+            match g.connection.stream_recv(this.stream_identifier, buffer) {
+                Ok((0, true)) => {
+                    this.read_eof.store(true, Ordering::Relaxed);
+                    drop(g);
+                    this.notify.notify_waiters();
+                    return Poll::Ready(Ok(0));
+                }
+                Ok((n, fin)) => {
+                    if fin {
+                        this.read_eof.store(true, Ordering::Relaxed);
+                    }
+                    drop(g);
+                    this.notify.notify_waiters();
+                    return Poll::Ready(Ok(n));
+                }
+                Err(quiche::Error::Done) => {}
+                Err(quiche::Error::InvalidStreamState(_)) => {}
+                Err(e) => return Poll::Ready(Err(stream_error(e))),
+            }
+            g.read_wakers
+                .insert(this.stream_identifier, cx.waker().clone());
+            // Re-check after registration to avoid a lost wakeup.
+            match g.connection.stream_recv(this.stream_identifier, buffer) {
+                Ok((0, true)) => {
+                    g.read_wakers.remove(&this.stream_identifier);
+                    this.read_eof.store(true, Ordering::Relaxed);
+                    drop(g);
+                    this.notify.notify_waiters();
+                    return Poll::Ready(Ok(0));
+                }
+                Ok((n, fin)) => {
+                    g.read_wakers.remove(&this.stream_identifier);
+                    if fin {
+                        this.read_eof.store(true, Ordering::Relaxed);
+                    }
+                    drop(g);
+                    this.notify.notify_waiters();
+                    return Poll::Ready(Ok(n));
+                }
+                Err(quiche::Error::Done) => {}
+                Err(quiche::Error::InvalidStreamState(_)) => {}
+                Err(e) => {
+                    g.read_wakers.remove(&this.stream_identifier);
+                    return Poll::Ready(Err(stream_error(e)));
+                }
+            }
+            drop(g);
+            Poll::Pending
+        }
+    }
+}
+
+impl AsyncWrite for QuicStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        {
+            let mut g = this.inner.lock().unwrap();
+            if g.closed {
+                return Poll::Ready(Err(closed_error()));
+            }
+            match g
+                .connection
+                .stream_send(this.stream_identifier, buffer, false)
+            {
+                Ok(n) => {
+                    drop(g);
+                    this.notify.notify_waiters();
+                    return Poll::Ready(Ok(n));
+                }
+                Err(quiche::Error::Done) => {}
+                Err(quiche::Error::InvalidStreamState(_)) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "stream is not open",
+                    )));
+                }
+                Err(e) => return Poll::Ready(Err(stream_error(e))),
+            }
+            // Register interest in flow-control capacity for this stream.
+            let _ = g
+                .connection
+                .stream_writable(this.stream_identifier, buffer.len());
+            g.write_wakers
+                .insert(this.stream_identifier, cx.waker().clone());
+            drop(g);
+            Poll::Pending
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.finish();
+        Poll::Ready(Ok(()))
+    }
+}

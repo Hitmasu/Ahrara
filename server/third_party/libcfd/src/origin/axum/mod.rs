@@ -1,0 +1,266 @@
+//! An [`HttpOrigin`] adapter that serves HTTP requests through an
+//! [`axum::Router`].
+//!
+//! Only the HTTP path is bridged. Axum's websocket support cannot be
+//! adapted to libcfd's [`StreamOrigin<WebSocketResponder>`](crate::StreamOrigin):
+//! `WebSocketUpgrade::on_upgrade` hands the upgraded connection to a closure that axum drives, so the raw
+//! byte stream is never exposed to the caller, and axum's `WebSocket` type
+//! is message-framed rather than a raw stream. Bridging it would require
+//! reimplementing RFC 6455 framing on top of the message API. Raw TCP
+//! proxying is likewise outside axum's HTTP-only model, so
+//! [`StreamOrigin<TcpResponder>`](crate::StreamOrigin) has no axum adapter.
+
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use axum::body::{Body as AxumBody, BodyDataStream};
+use bytes::Bytes;
+use futures_util::Stream;
+use futures_util::io::AsyncRead;
+
+use crate::error::{Error, Result};
+use crate::origin::{Body, HttpOrigin, HttpResponder, Request, Response};
+
+/// Serves HTTP requests through an axum [`Router`](axum::Router).
+///
+/// The router is cloned per request (axum `Router` is cheaply cloneable).
+/// The `axum-origin` feature gates this adapter so default builds stay
+/// dependency-lean.
+pub struct AxumOrigin {
+    router: axum::Router,
+}
+
+impl AxumOrigin {
+    /// Wraps a router so it can serve as an `HttpOrigin`.
+    pub fn new(router: axum::Router) -> Self {
+        Self { router }
+    }
+
+    /// The wrapped router.
+    pub fn router(&self) -> &axum::Router {
+        &self.router
+    }
+}
+
+impl HttpOrigin for AxumOrigin {
+    fn handle(&self, request: Request, respond: HttpResponder) {
+        let router = self.router.clone();
+        tokio::spawn(async move {
+            match serve_router(router, request).await {
+                Ok(response) => respond.send(response),
+                Err(e) => respond.fail(e.to_string()),
+            }
+        });
+    }
+}
+
+/// Serves one request through the router and converts the axum response
+/// into a libcfd response. Runs on the spawned task from
+/// [`HttpOrigin::handle`](crate::HttpOrigin::handle).
+async fn serve_router(mut router: axum::Router, request: Request) -> Result<Response> {
+    let Request {
+        method,
+        uri,
+        mut headers,
+        body,
+    } = request;
+    if let Some(size) = body.size_hint() {
+        headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_str(&size.to_string())
+                .map_err(|e| Error::origin_handler(format!("bad content length: {e}")))?,
+        );
+    }
+    let mut axum_request = http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(AxumBody::from_stream(BodyReadStream::new(body)))
+        .map_err(|e| Error::origin_handler(format!("failed to build axum request: {e}")))?;
+    *axum_request.headers_mut() = headers;
+
+    // Router::call is infallible; axum converts handler errors into responses.
+    let axum_response = tower::Service::call(&mut router, axum_request)
+        .await
+        .map_err(|e| Error::origin_handler(format!("axum router failed: {e}")))?;
+
+    let (parts, body) = axum_response.into_parts();
+    let body = Body::from_reader(AxumBodyReader::new(body.into_data_stream()));
+    Ok(Response::new(parts.status, parts.headers, body))
+}
+
+/// Streams a libcfd [`Body`] as `Result<Bytes, _>` chunks for axum.
+struct BodyReadStream {
+    body: Option<Body>,
+    buffer: [u8; 512],
+    length: usize,
+}
+
+impl BodyReadStream {
+    fn new(body: Body) -> Self {
+        Self {
+            body: Some(body),
+            buffer: [0u8; 512],
+            length: 0,
+        }
+    }
+}
+
+impl Stream for BodyReadStream {
+    type Item = std::result::Result<Bytes, axum::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.length == 0 {
+            let Self {
+                body,
+                buffer,
+                length,
+            } = self.as_mut().get_mut();
+            let body = body.as_mut().expect("polled after stream end");
+            match Pin::new(body).poll_read(cx, buffer) {
+                Poll::Ready(Ok(0)) => return Poll::Ready(None),
+                Poll::Ready(Ok(n)) => *length = n,
+                Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(axum::Error::new(e)))),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        let chunk = Bytes::copy_from_slice(&self.buffer[..self.length]);
+        self.length = 0;
+        Poll::Ready(Some(Ok(chunk)))
+    }
+}
+
+/// Reads an axum response body stream as a libcfd [`Body`].
+struct AxumBodyReader {
+    stream: Pin<Box<BodyDataStream>>,
+    chunk: Option<Bytes>,
+    position: usize,
+    eof: bool,
+}
+
+impl AxumBodyReader {
+    fn new(stream: BodyDataStream) -> Self {
+        Self {
+            stream: Box::pin(stream),
+            chunk: None,
+            position: 0,
+            eof: false,
+        }
+    }
+}
+
+impl AsyncRead for AxumBodyReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        loop {
+            if self.eof {
+                return Poll::Ready(Ok(0));
+            }
+            if let Some(chunk) = self.chunk.take() {
+                if self.position < chunk.len() {
+                    let n = std::cmp::min(chunk.len() - self.position, buffer.len());
+                    buffer[..n].copy_from_slice(&chunk[self.position..self.position + n]);
+                    self.position += n;
+                    if self.position < chunk.len() {
+                        self.chunk = Some(chunk);
+                    }
+                    return Poll::Ready(Ok(n));
+                }
+                self.position = 0;
+            }
+            match self.stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.position = 0;
+                    self.chunk = Some(chunk);
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Err(std::io::Error::other(e)));
+                }
+                Poll::Ready(None) => {
+                    self.eof = true;
+                    return Poll::Ready(Ok(0));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::origin::wait_outcome;
+
+    #[tokio::test]
+    async fn consecutive_response_chunks_are_not_skipped() {
+        let chunks = futures_util::stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"abcd")),
+            Ok(Bytes::from_static(b"efghijk")),
+        ]);
+        let axum_body = AxumBody::from_stream(chunks);
+        let mut body = Body::from_reader(AxumBodyReader::new(axum_body.into_data_stream()));
+        assert_eq!(body.collect().await.unwrap(), b"abcdefghijk");
+    }
+
+    async fn await_response(origin: &AxumOrigin, request: Request) -> Response {
+        let (respond, receiver) = HttpResponder::channel();
+        origin.handle(request, respond);
+        match wait_outcome(receiver).await {
+            Ok(response) => response,
+            Err(e) => panic!("origin failed: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn axum_router_serves_through_the_adapter() {
+        use axum::Router;
+        use axum::routing::{get, post};
+
+        let app = Router::new()
+            .route("/hello", get(|| async { "hello from axum" }))
+            .route(
+                "/echo",
+                post(|body: String| async move { format!("echo:{body}") }),
+            );
+
+        let origin = AxumOrigin::new(app);
+
+        let request = Request::new(
+            http::Method::GET,
+            "http://example.com/hello".parse().unwrap(),
+            http::HeaderMap::new(),
+            Body::empty(),
+        );
+        let mut response = await_response(&origin, request).await;
+        assert_eq!(response.status, http::StatusCode::OK);
+        assert_eq!(response.body.collect().await.unwrap(), b"hello from axum");
+
+        let request = Request::new(
+            http::Method::POST,
+            "http://example.com/echo".parse().unwrap(),
+            http::HeaderMap::new(),
+            Body::from_bytes(b"payload".to_vec()),
+        );
+        let mut response = await_response(&origin, request).await;
+        assert_eq!(response.status, http::StatusCode::OK);
+        assert_eq!(response.body.collect().await.unwrap(), b"echo:payload");
+    }
+
+    #[tokio::test]
+    async fn unknown_route_returns_404() {
+        use axum::Router;
+        use axum::routing::get;
+
+        let origin = AxumOrigin::new(Router::new().route("/", get(|| async {})));
+        let request = Request::new(
+            http::Method::GET,
+            "http://example.com/missing".parse().unwrap(),
+            http::HeaderMap::new(),
+            Body::empty(),
+        );
+        let response = await_response(&origin, request).await;
+        assert_eq!(response.status, http::StatusCode::NOT_FOUND);
+    }
+}

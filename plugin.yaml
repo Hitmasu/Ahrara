@@ -1,0 +1,6 @@
+name: ahrara
+version: 0.1.0
+description: Install and manage local disposable email with Ahrara.
+author: Ahrara
+provides_skills:
+  - ahrara

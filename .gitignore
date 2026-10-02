@@ -1,7 +1,8 @@
 .dev/
 dist/
 target/
-**/target/
+__pycache__/
+*.py[cod]
 *.db
 *.db-shm
 *.db-wal
@@ -12,3 +13,4 @@ target/
 *.token
 .env
 .env.*
+interfaces.toml

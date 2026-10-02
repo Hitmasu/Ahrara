@@ -1,0 +1,12 @@
+{
+  "name": "ahrara",
+  "version": "0.1.0",
+  "description": "Install and run local disposable email for AI agents.",
+  "author": {
+    "name": "Ahrara"
+  },
+  "homepage": "https://ahrara.dev",
+  "repository": "https://github.com/Hitmasu/Ahrara",
+  "license": "MIT",
+  "skills": "./skills/"
+}

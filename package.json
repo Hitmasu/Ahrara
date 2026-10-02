@@ -1,0 +1,20 @@
+{
+  "name": "ahrara-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Install and run local disposable email for AI agents.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./.opencode/plugins/ahrara.mjs",
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "node --test tests/plugin.test.mjs"
+  }
+}

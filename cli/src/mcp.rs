@@ -1,13 +1,28 @@
-use crate::{
-    core::{Core, Ownership},
-    storage::Filters,
-};
+use crate::{core::Core, storage::Filters};
 use anyhow::{Context, Result, bail};
-use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
+use axum::{
+    Extension, Router,
+    body::{Body, to_bytes},
+    extract::{Request, State},
+    http::{Method, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+};
+use futures_util::StreamExt;
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler,
+    model::*,
+    service::RequestContext,
+    transport::streamable_http_server::{
+        SessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        session::local::{LocalSessionManager, SessionConfig},
+    },
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -134,11 +149,11 @@ impl Mcp {
             }
             "ahrara_delete_email" => {
                 let a: Id = args(input)?;
-                json!({"deleted":c.storage.delete(Some(a.id)).await?})
+                json!({"deleted":c.delete_emails(Some(a.id)).await?})
             }
             "ahrara_clear_inbox" => {
                 args::<Empty>(input)?;
-                json!({"deleted":c.storage.delete(None).await?})
+                json!({"deleted":c.delete_emails(None).await?})
             }
             "ahrara_create_address" => {
                 let a: CreateAddress = args(input)?;
@@ -192,7 +207,7 @@ impl ServerHandler for Mcp {
                 ),
                 tool::<Empty>(
                     "ahrara_stop",
-                    "Disconnect this MCP listener; preserve all local data.",
+                    "Disconnect the shared Identity listener used by CLI, Web, API and all MCP clients; preserve all local data.",
                     false,
                     false,
                 ),
@@ -234,7 +249,7 @@ impl ServerHandler for Mcp {
                 ),
                 tool::<SaveAttachment>(
                     "ahrara_save_attachment",
-                    "Save attachment locally to a file or existing directory. Never overwrite existing paths.",
+                    "Save attachment on the computer running Ahrara, not on the remote MCP client. Never overwrite existing paths.",
                     false,
                     false,
                 ),
@@ -252,7 +267,7 @@ impl ServerHandler for Mcp {
                 ),
                 tool::<CreateAddress>(
                     "ahrara_create_address",
-                    "Create an enabled alias entirely in local SQLite; no server request.",
+                    "Create an enabled alias locally, using the configured custom domain by default. address is public; forwarding_address is its delivery destination and routing_address is the internal alias. No server request.",
                     false,
                     false,
                 ),
@@ -381,15 +396,155 @@ impl ServerHandler for Mcp {
     }
 }
 
-pub async fn serve(core: Arc<Core>) -> Result<()> {
-    if let Some(owner) = Ownership::current(&core.config)? {
-        bail!("listener_owned: ahrara {} (PID {})", owner.mode, owner.pid)
+pub async fn serve(core: Arc<Core>, managed: bool) -> Result<()> {
+    if !core.web.settings().mcp_enabled {
+        bail!("MCP is disabled for this profile; enable it from the Web settings or / menu")
     }
-    let service = Mcp { core: core.clone() }
-        .serve(rmcp::transport::stdio())
-        .await?;
-    let result = service.waiting().await;
-    core.stop().await;
-    result?;
-    Ok(())
+    crate::api::serve_mode(core, if managed { "mcp-managed" } else { "mcp" }).await
+}
+
+pub fn router(core: Arc<Core>, shutdown: CancellationToken) -> Router {
+    let sessions = Arc::new(LocalSessionManager {
+        session_config: SessionConfig {
+            keep_alive: Some(Duration::from_secs(15 * 60)),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let service = StreamableHttpService::new(
+        {
+            let core = core.clone();
+            move || Ok(Mcp { core: core.clone() })
+        },
+        sessions.clone(),
+        StreamableHttpServerConfig::default(),
+    );
+    let cleanup = sessions.clone();
+    let cancel = shutdown.clone();
+    let active_core = core.clone();
+    let mut events = core.events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {},
+                event = events.recv() => {
+                    if !matches!(event, Ok(e) if e.kind == "mcp_state_changed")
+                        || active_core.web.settings().mcp_enabled { continue; }
+                }
+            }
+            let handles: Vec<_> = cleanup
+                .sessions
+                .write()
+                .await
+                .drain()
+                .map(|(_, h)| h)
+                .collect();
+            for handle in handles {
+                let _ = handle.close().await;
+            }
+            if cancel.is_cancelled() {
+                break;
+            }
+        }
+    });
+    Router::new()
+        .route_service("/mcp", service)
+        .route_layer(middleware::from_fn_with_state(core.clone(), guard))
+        .layer(Extension(sessions))
+        .layer(Extension(shutdown))
+        .with_state(core)
+}
+
+async fn guard(State(core): State<Arc<Core>>, mut request: Request, next: Next) -> Response {
+    if !core.web.settings().mcp_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if !crate::web::local_request_allowed(&core, &request) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let authorization = if core.mcp_auth_required() {
+        let Some(authorization) = crate::api::authenticate(&core, request.headers()).await else {
+            return crate::api::unauthorized();
+        };
+        Some(authorization)
+    } else {
+        None
+    };
+    if request
+        .headers()
+        .get("mcp-protocol-version")
+        .is_some_and(|v| v != "2025-03-26")
+    {
+        return (StatusCode::BAD_REQUEST, "Unsupported MCP protocol version").into_response();
+    }
+    if let Some(id) = request.headers().get("mcp-session-id") {
+        let Ok(id) = id.to_str() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let sessions = request
+            .extensions()
+            .get::<Arc<LocalSessionManager>>()
+            .unwrap();
+        if !sessions
+            .has_session(&id.to_owned().into())
+            .await
+            .unwrap_or(false)
+        {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    } else if matches!(*request.method(), Method::GET | Method::DELETE) {
+        return (StatusCode::BAD_REQUEST, "MCP session ID required").into_response();
+    }
+    let shutdown = request
+        .extensions()
+        .get::<CancellationToken>()
+        .unwrap()
+        .clone();
+    // The SDK reads the raw body, so Axum's extractor limit alone is insufficient.
+    request.headers_mut().remove(header::AUTHORIZATION);
+    let (parts, body) = request.into_parts();
+    let bytes = match tokio::time::timeout(Duration::from_secs(15), to_bytes(body, 64 * 1024)).await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
+    };
+    let response = next
+        .run(Request::from_parts(parts, Body::from(bytes)))
+        .await;
+    let (mut parts, body) = response.into_parts();
+    parts.headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    parts.headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    let mut chunks = body.into_data_stream();
+    let stream = async_stream::stream! {
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = heartbeat.tick() => {
+                    if !session_active(&core, authorization.as_ref()).await { break; }
+                },
+                chunk = chunks.next() => {
+                    let Some(chunk) = chunk else { break; };
+                    if !session_active(&core, authorization.as_ref()).await { break; }
+                    yield chunk;
+                }
+            }
+        }
+    };
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+async fn session_active(core: &Core, authorization: Option<&crate::api::Authorization>) -> bool {
+    core.web.settings().mcp_enabled
+        && match authorization {
+            Some(authorization) => crate::api::still_authorized(core, authorization).await,
+            None => !core.mcp_auth_required(),
+        }
 }

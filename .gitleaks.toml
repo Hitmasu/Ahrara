@@ -1,10 +1,16 @@
 [extend]
 useDefault = true
 
-# Public, static localhost TLS fixture shipped by go-smtp v0.25.0.
-# This file is test-only and is never compiled into the server binary.
+# Public SQLite extension macros and FTS5 row identifiers. Match both the
+# upstream files and exact source expressions; preserve generated source hashes.
 [[rules]]
-id = "private-key"
+id = "generic-api-key"
 [[rules.allowlists]]
-description = "Upstream go-smtp localhost TLS test fixture"
-paths = ['''(^|/)server/third_party/go-smtp/client_test\.go$''']
+description = "Upstream SQLite API macros and FTS5 row identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)cli/third_party/libsqlite3-sys/(sqlite3|sqlcipher)/sqlite3(ext\.h|\.c)$''']
+regexes = [
+  '''^sqlite3_api->(column_bytes16|soft_heap_limit64|hard_heap_limit64)\s*$''',
+  '''^iKey==FTS5_AVERAGES_ROWID\s*$''',
+]

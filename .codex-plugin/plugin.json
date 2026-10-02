@@ -1,0 +1,23 @@
+{
+  "name": "ahrara",
+  "version": "0.1.0",
+  "description": "Install and run local disposable email for AI agents.",
+  "author": {
+    "name": "Ahrara"
+  },
+  "homepage": "https://ahrara.dev",
+  "repository": "https://github.com/Hitmasu/Ahrara",
+  "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./plugin/codex-mcp.json",
+  "interface": {
+    "displayName": "Ahrara",
+    "shortDescription": "Disposable email for your agent",
+    "developerName": "Ahrara",
+    "category": "Developer Tools",
+    "logo": "./site/assets/ahrara-logo.webp",
+    "defaultPrompt": [
+      "Create a temporary email address and wait for a message."
+    ]
+  }
+}

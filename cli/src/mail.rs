@@ -22,6 +22,7 @@ pub struct ParsedEmail {
     pub metadata: crate::storage::Email,
     pub cc: String,
     pub date: String,
+    pub forwarded_to: Option<String>,
     pub text_body: String,
     pub text_body_truncated: bool,
     pub html_available: bool,
@@ -101,6 +102,7 @@ pub fn parse(metadata: crate::storage::Email, raw: &[u8], max_body: usize) -> Re
         metadata,
         cc: String::new(),
         date: String::new(),
+        forwarded_to: None,
         text_body: String::new(),
         text_body_truncated: false,
         html_available: false,
@@ -122,6 +124,20 @@ pub fn parse(metadata: crate::storage::Email, raw: &[u8], max_body: usize) -> Re
         &parsed.headers.get_first_value("Date").unwrap_or_default(),
         4096,
     );
+    // Presentation metadata only. Do not claim forwarding to a different inbox
+    // just because an untrusted MIME header names it.
+    let forwarded = parsed.headers.get_all_values("X-Forwarded-To");
+    if !forwarded.is_empty()
+        && forwarded.iter().all(|value| {
+            mailparse::addrparse(value)
+                .ok()
+                .and_then(|list| list.extract_single_info())
+                .and_then(|a| crate::auth::decode_address(&a.addr).ok())
+                .is_some_and(|(_, _, recipient)| recipient == result.metadata.recipient)
+        })
+    {
+        result.forwarded_to = Some(result.metadata.recipient.clone());
+    }
     for part in parsed.parts() {
         if is_attachment(part) {
             continue;
@@ -165,6 +181,18 @@ pub fn attachment(raw: &[u8], id: &str) -> Result<(Attachment, Vec<u8>)> {
     Ok((attachment_metadata(index, part)?, part.get_body_raw()?))
 }
 
+pub use crate::email_html::HtmlEmail;
+
+pub fn html_body(raw: &[u8], allow_remote: bool) -> Result<HtmlEmail> {
+    let parsed = mailparse::parse_mail(raw)?;
+    let part = parsed
+        .parts()
+        .find(|p| !is_attachment(p) && p.ctype.mimetype == "text/html")
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    let html = part.get_body()?;
+    crate::email_html::render(&html, &parsed, allow_remote)
+}
+
 pub fn save_attachment(metadata: &Attachment, bytes: &[u8], destination: &Path) -> Result<PathBuf> {
     let target = if destination.is_dir() {
         destination.join(safe_filename(&metadata.filename))
@@ -189,6 +217,18 @@ pub fn save_attachment(metadata: &Attachment, bytes: &[u8], destination: &Path) 
         return Err(e.into());
     }
     Ok(target)
+}
+
+/// Format a timestamp for display in the machine's timezone; keep invalid headers readable.
+pub fn local_date(value: &str, format: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .or_else(|_| chrono::DateTime::parse_from_rfc2822(value))
+        .map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format(format)
+                .to_string()
+        })
+        .unwrap_or_else(|_| value.to_owned())
 }
 
 pub fn terminal_safe(value: &str) -> String {
