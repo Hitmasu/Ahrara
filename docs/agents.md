@@ -42,7 +42,7 @@ Ask the agent: â€œCreate an Ahrara address and wait for my verification email.â€
 Existing compatible installations are reused. Otherwise, the launcher downloads
 the platform's binary and verifies the signed release manifest and checksum.
 The first launch needs internet access. If the host's startup timeout is too
-short, have the agent run `node <plugin-directory>/plugin/ahrara.mjs --install`
+short, have the agent run `node <plugin-directory>/src/plugin/ahrara.mjs --install`
 and reconnect MCP.
 
 ## Other hosts
@@ -87,7 +87,7 @@ For a host with a generic stdio configuration, use:
   "mcpServers": {
     "ahrara": {
       "command": "node",
-      "args": ["/absolute/path/to/Ahrara/plugin/ahrara.mjs"]
+      "args": ["/absolute/path/to/Ahrara/src/plugin/ahrara.mjs"]
     }
   }
 }

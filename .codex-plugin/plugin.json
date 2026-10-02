@@ -9,13 +9,13 @@
   "repository": "https://github.com/Hitmasu/Ahrara",
   "license": "MIT",
   "skills": "./skills/",
-  "mcpServers": "./plugin/codex-mcp.json",
+  "mcpServers": "./src/plugin/codex-mcp.json",
   "interface": {
     "displayName": "Ahrara",
     "shortDescription": "Disposable email for your agent",
     "developerName": "Ahrara",
     "category": "Developer Tools",
-    "logo": "./site/assets/ahrara-logo.webp",
+    "logo": "./src/site/assets/ahrara-logo.webp",
     "defaultPrompt": [
       "Create a temporary email address and wait for a message."
     ]

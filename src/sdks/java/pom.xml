@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.ahrara</groupId>
+  <artifactId>ahrara</artifactId>
+  <version>0.1.0</version>
+  <name>Ahrara</name>
+  <description>Disposable inboxes backed by the embedded Ahrara Rust core</description>
+  <url>https://github.com/Hitmasu/Ahrara</url>
+  <licenses><license><name>MIT License</name><url>https://opensource.org/license/mit</url></license></licenses>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>net.java.dev.jna</groupId><artifactId>jna</artifactId><version>5.19.1</version></dependency>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.22.3</version></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>6.1.3</version><scope>test</scope></dependency>
+    <dependency><groupId>org.seleniumhq.selenium</groupId><artifactId>selenium-java</artifactId><version>4.50.0</version><scope>test</scope></dependency>
+    <dependency><groupId>org.eclipse.angus</groupId><artifactId>angus-mail</artifactId><version>2.0.5</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.6.0</version></plugin>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId><artifactId>maven-antrun-plugin</artifactId><version>3.1.0</version>
+      <executions><execution><id>require-native-assets</id><phase>prepare-package</phase><goals><goal>run</goal></goals>
+        <configuration><target>
+          <resourcecount property="ahrara.native.count">
+            <fileset dir="${project.basedir}/src/main/resources/native" erroronmissingdir="false"
+                     includes="**/libahrara_native.so,**/libahrara_native.dylib,**/ahrara_native.dll" />
+          </resourcecount>
+          <fail message="Stage compiled Ahrara native assets in src/main/resources/native before packaging.">
+            <condition><equals arg1="${ahrara.native.count}" arg2="0" /></condition>
+          </fail>
+        </target></configuration>
+      </execution></executions>
+    </plugin>
+  </plugins></build>
+</project>

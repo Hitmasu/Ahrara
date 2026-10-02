@@ -53,9 +53,9 @@ def generate(args):
     version = args.version
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
         raise ValueError("release version must be stable SemVer, without a v prefix")
-    crate = Path(__file__).resolve().parent.parent / "cli" / "Cargo.toml"
+    crate = Path(__file__).resolve().parent.parent / "src" / "cli" / "Cargo.toml"
     if version != tomllib.loads(crate.read_text())["package"]["version"]:
-        raise ValueError("release version must match cli/Cargo.toml")
+        raise ValueError("release version must match src/cli/Cargo.toml")
     # The DER prefix identifies an Ed25519 public key, followed by its 32 raw bytes.
     public_der = openssl("pkey", "-in", args.key, "-pubout", "-outform", "DER")
     prefix = bytes.fromhex("302a300506032b6570032100")
@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--public-key", required=True, help="64 hex characters embedded as AHRARA_UPDATE_PUBLIC_KEY")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--homebrew-output", type=Path, help="also generate Formula/ahrara.rb from the same binary checksums")
-    parser.add_argument("--plugin-key-output", type=Path, help="also generate plugin/release-key.json for review and commit")
+    parser.add_argument("--plugin-key-output", type=Path, help="also generate src/plugin/release-key.json for review and commit")
     parser.add_argument("--previous", type=Path, help="previous signed manifest, preserving channel availability")
     parser.add_argument("--available", action="append", default=[], help="already-published channel=platform; repeat as needed")
     parser.add_argument("--valid-days", type=int, default=30)

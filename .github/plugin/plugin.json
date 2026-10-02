@@ -9,5 +9,5 @@
   "repository": "https://github.com/Hitmasu/Ahrara",
   "license": "MIT",
   "skills": "skills/",
-  "mcpServers": "./plugin/claude-mcp.json"
+  "mcpServers": "./src/plugin/claude-mcp.json"
 }

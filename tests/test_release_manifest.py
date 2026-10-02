@@ -25,7 +25,7 @@ class ReleaseManifestTest(unittest.TestCase):
             assets.mkdir()
             for target in release.TARGETS:
                 (assets / (f"ahrara-{target}" + (".exe" if target.startswith("windows-") else ""))).write_bytes(target.encode())
-            version = release.tomllib.loads((Path(__file__).parent.parent / "cli/Cargo.toml").read_text())["package"]["version"]
+            version = release.tomllib.loads((Path(__file__).parent.parent / "src/cli/Cargo.toml").read_text())["package"]["version"]
             args = SimpleNamespace(version=version, key=key, public_key=public, valid_days=30,
                                    previous=None, assets=assets, available=[], output=work / "stable.json",
                                    homebrew_output=work / "Formula" / "ahrara.rb",

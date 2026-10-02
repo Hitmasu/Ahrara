@@ -8,5 +8,5 @@
   "homepage": "https://ahrara.dev",
   "repository": "https://github.com/Hitmasu/Ahrara",
   "license": "MIT",
-  "mcpServers": "./plugin/claude-mcp.json"
+  "mcpServers": "./src/plugin/claude-mcp.json"
 }

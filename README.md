@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/assets/ahrara-logo.webp" width="160" height="160" alt="Ahrara macaw logo">
+  <img src="src/site/assets/ahrara-logo.webp" width="160" height="160" alt="Ahrara macaw logo">
 </p>
 
 <h1 align="center">Ahrara</h1>
@@ -154,6 +154,16 @@ or together. See [MCP options](docs/usage.md#https-and-authentication) for setup
 and the [MCP guide](docs/usage.md#mcp) for non-interactive use, profiles, attachment
 destinations, and shared receiver controls.
 
+## 🧩 SDKs
+
+Create an inbox from .NET, JavaScript/TypeScript, Python, Go, Java, Rust, or k6.
+Use its address in your application, wait for a verification email, extract a
+code or link, and inspect messages or attachments from your tests.
+
+SDKs connect directly to the relay and keep their own inbox. See the
+[SDK guide](docs/sdks.md) to choose a language, receive your first message, and
+decide whether to use a temporary inbox or preserve it between runs.
+
 ## 🏗️ Architecture
 
 ```mermaid
@@ -184,7 +194,7 @@ flowchart TB
    Terminal, Web, and MCP, then sends an ACK. Only then does the relay confirm
    SMTP delivery.
 
-See the [server documentation](server/README.md) for deployment details.
+See the [server documentation](src/server/README.md) for deployment details.
 
 ## 🔐 Security
 
@@ -235,5 +245,5 @@ in English.
 ## 📄 License
 
 [MIT](LICENSE). Vendored dependencies and icons retain their licenses:
-[client](cli/third_party/README.md), [server](server/third_party/README.md),
-and [icons](site/assets/icons/README.md).
+[shared dependencies](src/third_party/README.md), [server](src/server/third_party/README.md),
+and [icons](src/site/assets/icons/README.md).

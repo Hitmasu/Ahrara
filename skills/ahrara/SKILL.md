@@ -12,7 +12,7 @@ Use existing `ahrara_*` MCP tools when available.
 
 ## Installation and startup
 
-The plugin launcher is `plugin/ahrara.mjs` at the Ahrara repository/plugin root.
+The plugin launcher is `src/plugin/ahrara.mjs` at the Ahrara repository/plugin root.
 Resolve its absolute path from this skill's location, not the user's working
 directory. If only this skill or a rule was installed, clone
 `https://github.com/Hitmasu/Ahrara.git` into a persistent user-owned directory

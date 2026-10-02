@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ahrara"
+version = "0.1.0"
+description = "Disposable email inboxes powered by the shared Ahrara Rust core"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "robotframework>=7", "build>=1", "black>=25", "mypy>=1"]
+
+[tool.setuptools]
+packages = ["ahrara"]
+
+[tool.setuptools.package-data]
+ahrara = ["native/*", "py.typed"]

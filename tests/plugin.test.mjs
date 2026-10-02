@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import { checkBinary, install, platform, release } from '../plugin/ahrara.mjs';
+import { checkBinary, install, platform, release } from '../src/plugin/ahrara.mjs';
 import opencode from '../.opencode/plugins/ahrara.mjs';
 
 function fixture(version = '0.1.0', expires = Math.floor(Date.now() / 1000) + 3600) {
@@ -79,7 +79,7 @@ test('failed verification never publishes an executable or installation index', 
 
 test('host manifests point at packaged resources and OpenCode preserves existing settings', async () => {
   const root = fileURLToPath(new URL('../', import.meta.url));
-  const version = (await fs.readFile(path.join(root, 'cli/Cargo.toml'), 'utf8')).match(/^version = "([^"]+)"/m)[1];
+  const version = (await fs.readFile(path.join(root, 'src/cli/Cargo.toml'), 'utf8')).match(/^version = "([^"]+)"/m)[1];
   assert.equal((await fs.readFile(path.join(root, 'plugin.yaml'), 'utf8')).match(/^version: (.+)$/m)[1], version);
   for (const name of ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json', '.devin-plugin/plugin.json', '.qoder-plugin/plugin.json', 'plugin.json', 'gemini-extension.json', 'package.json']) {
     const data = JSON.parse(await fs.readFile(path.join(root, name)));
@@ -88,7 +88,7 @@ test('host manifests point at packaged resources and OpenCode preserves existing
       if (typeof data[field] === 'string') await fs.access(path.resolve(root, data[field]));
     }
   }
-  for (const name of ['plugin/claude-mcp.json', 'plugin/codex-mcp.json', 'gemini-extension.json']) {
+  for (const name of ['src/plugin/claude-mcp.json', 'src/plugin/codex-mcp.json', 'gemini-extension.json']) {
     const { mcpServers } = JSON.parse(await fs.readFile(path.join(root, name)));
     const server = mcpServers.ahrara;
     assert.equal(server.command, 'node');
@@ -115,7 +115,7 @@ test('launcher speaks real MCP and releases its server after EOF', { skip: !proc
   await new Promise((resolve) => socket.close(resolve));
   const config = path.join(directory, 'config.toml');
   await fs.writeFile(config, `server_url = "wss://localhost:1"\nidentity_path = "identity.key"\ndatabase_path = "inbox.db"\napi_token_path = "api.token"\napi_bind = "127.0.0.1:${port}"\ncheck_for_updates = false\n`);
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../plugin/ahrara.mjs', import.meta.url)), '--config', config], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/plugin/ahrara.mjs', import.meta.url)), '--config', config], {
     env: { ...process.env, AHRARA_BINARY: process.env.AHRARA_TEST_BINARY },
     stdio: ['pipe', 'pipe', 'pipe'], signal: AbortSignal.timeout(20_000),
   });

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ahrara": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/src/plugin/ahrara.mjs"
+      ]
+    }
+  }
+}

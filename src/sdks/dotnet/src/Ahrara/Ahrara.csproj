@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Ahrara</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Disposable inboxes backed by the embedded Ahrara Rust core.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/Hitmasu/Ahrara</RepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <NativeLibraryAsset Include="../../runtimes/*/native/*ahrara_native*" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+  <Target Name="RequireNativeAssetsForPackaging" BeforeTargets="GenerateNuspec">
+    <Error Condition="'@(NativeLibraryAsset)' == ''" Text="Stage compiled Ahrara native assets in src/sdks/dotnet/runtimes/&lt;rid&gt;/native before packing." />
+  </Target>
+</Project>

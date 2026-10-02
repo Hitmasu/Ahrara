@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Stable version matching cli/Cargo.toml (without v)
+        description: Stable version matching src/cli/Cargo.toml (without v)
         required: true
       initial_release:
         description: First publication only (there is no previous signed manifest)
@@ -44,7 +44,7 @@ jobs:
           import base64, json, os, re, tomllib
           from pathlib import Path
           assert re.fullmatch(r'[0-9a-fA-F]{64}', os.environ['AHRARA_UPDATE_PUBLIC_KEY']), 'Configure the public release key first'
-          assert os.environ['RELEASE_VERSION'] == tomllib.loads(Path('cli/Cargo.toml').read_text())['package']['version'], 'Version mismatch'
+          assert os.environ['RELEASE_VERSION'] == tomllib.loads(Path('src/cli/Cargo.toml').read_text())['package']['version'], 'Version mismatch'
           pin = os.environ['AHRARA_SERVER_PUBLIC_KEY']
           assert re.fullmatch(r'ahrara_server_v1_[A-Za-z0-9_-]{43}', pin), 'Configure the verified public relay transport key first'
           raw = base64.urlsafe_b64decode(pin.removeprefix('ahrara_server_v1_') + '=')
@@ -107,13 +107,13 @@ jobs:
           for entry in "${availability[@]}"; do args+=(--available "$entry"); done
           python3 scripts/release-manifest.py --version "$RELEASE_VERSION" --assets dist \
             --key "$key_file" --public-key "$AHRARA_UPDATE_PUBLIC_KEY" \
-            --output site/releases/stable.json --homebrew-output Formula/ahrara.rb \
-            --plugin-key-output plugin/release-key.json "${args[@]}"
+            --output src/site/releases/stable.json --homebrew-output Formula/ahrara.rb \
+            --plugin-key-output src/plugin/release-key.json "${args[@]}"
       - name: Prepare plugin verification key for review and commit
         uses: actions/upload-artifact@v4
         with:
           name: ahrara-plugin-key
-          path: plugin/release-key.json
+          path: src/plugin/release-key.json
           if-no-files-found: error
       - name: Prepare formula for review and commit to this repository
         uses: actions/upload-artifact@v4
@@ -133,10 +133,10 @@ jobs:
           fi
           gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" \
             --title "Ahrara $RELEASE_VERSION" --generate-notes \
-            dist/ahrara-* site/releases/stable.json Formula/ahrara.rb
+            dist/ahrara-* src/site/releases/stable.json Formula/ahrara.rb
       - name: Prepare static site for its existing hosting pipeline
         uses: actions/upload-artifact@v4
         with:
           name: ahrara-static-site
-          path: site/
+          path: src/site/
           if-no-files-found: error

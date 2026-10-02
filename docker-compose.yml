@@ -2,7 +2,7 @@ services:
   server:
     build:
       context: .
-      dockerfile: server/Dockerfile
+      dockerfile: src/server/Dockerfile
     user: "${AHRARA_UID:-1000}:${AHRARA_GID:-1000}"
     read_only: true
     cap_drop: [ALL]

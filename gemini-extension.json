@@ -7,7 +7,7 @@
     "ahrara": {
       "command": "node",
       "args": [
-        "${extensionPath}/plugin/ahrara.mjs"
+        "${extensionPath}/src/plugin/ahrara.mjs"
       ],
       "cwd": "${extensionPath}",
       "timeout": 330000

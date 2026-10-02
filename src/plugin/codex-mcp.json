@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ahrara": {
+      "command": "node",
+      "args": [
+        "src/plugin/ahrara.mjs"
+      ],
+      "cwd": ".",
+      "startup_timeout_sec": 180,
+      "tool_timeout_sec": 330
+    }
+  }
+}

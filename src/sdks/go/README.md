@@ -1,0 +1,167 @@
+# Ahrara for Go
+
+Create an email address from a Go application or test, receive messages, and
+extract verification codes or links. Import
+`github.com/Hitmasu/Ahrara/src/sdks/go`; Go 1.23+ and cgo are required.
+The SDK connects directly to the relay without a running Ahrara CLI.
+
+```go
+inbox, err := ahrara.CreateInbox(ctx, ahrara.Options{})
+if err != nil { return err }
+defer inbox.Close()
+
+// Trigger the application under test with inbox.Address.
+email, err := inbox.WaitForEmail(ctx, ahrara.Filter{Subject: "Verify"})
+```
+
+There is no receive timeout. A background context waits until mail arrives,
+the inbox closes, or an error occurs. A caller-owned context can cancel the
+operation or apply an explicit deadline. Canceling a wait leaves its inbox open.
+The core buffers messages arriving before the first wait. Matches are consumed
+once; unmatched messages remain available. `Filter.Subject` and `Filter.From`
+match Unicode case-insensitive header substrings. Close the inbox with `defer`
+or `t.Cleanup`.
+
+## Filtering and extracting values
+
+`Options.Filter` is the inbox admission filter: rejected messages are discarded
+before local storage. A receive's `Filter` runs after admission and leaves its
+nonmatching messages available for another call. Every populated condition must
+match. Filters support `From`, `Subject`, `To`, `CC`, `Text`, `Headers`,
+`Recipient`, `EnvelopeSender`, `MessageID` and `HasAttachments`. Header/text
+conditions match substrings; envelope fields and Message-ID match the complete
+value. Matching ignores case. `Text` searches the full decoded body.
+
+```go
+match, err := inbox.WaitForRegexMatch(ctx,
+    `(?P<code>[0-9]{6}) is your verification code`,
+    ahrara.RegexOptions{Filter: ahrara.Filter{Subject: "Verify"}},
+)
+if err != nil { return err }
+for _, group := range match.Groups {
+    if group.Name != nil && *group.Name == "code" && group.Value != nil {
+        code := *group.Value // "123456"
+        _ = code
+    }
+}
+```
+
+Regex syntax is shared across SDKs: named/numbered captures and Unicode are
+supported; backreferences and look-around are not. Group zero is the entire
+match; optional unmatched groups have a nil `Value`. `RegexOptions.Source`
+selects `RegexText` (default), `RegexHTML`, `RegexSubject` or `RegexRaw`.
+`IgnoreCase`, `MultiLine` and `DotMatchesNewLine` control matching. Body searches
+use complete decoded content and exclude attachment bodies. Raw matching replaces
+invalid UTF-8 with U+FFFD; `RawEmail` preserves the exact original bytes.
+
+`WaitForXPath(ctx, "//a/@href", filter)` returns the first value from HTML.
+The core repairs ordinary HTML before evaluating XPath 1.0. `//a` needs no
+namespace; SVG/MathML/XLink use `svg`, `math` and `xlink`. Node values are returned
+in document order; strings/numbers/true use XPath string conversion. Empty
+strings, empty node sets and false leave the message available.
+
+Plural methods are lazy iterators across **all matching emails** during one
+context deadline, including time spent in the consumer:
+
+```go
+period, cancel := context.WithTimeout(ctx, 10*time.Second)
+defer cancel()
+for match, err := range inbox.WaitForRegexMatches(period, `[0-9]{6}`, ahrara.RegexOptions{}) {
+    if err != nil { return err } // Includes context.DeadlineExceeded at period end.
+    use(match.Value)
+}
+// WaitForXPathValues has the same lifetime and yields string values.
+```
+
+Each selected email is consumed once; breaking iteration discards any remaining
+results from that email and leaves subsequent emails available. Queries never
+start background work or prefetch another email. Expressions must contain
+1..4096 UTF-8 bytes. Per-email output is limited to 10,000 results and 16 MiB
+(including capture storage); XPath HTML is limited to 100,000 nodes and 256
+levels. Exceeding a limit returns an error and leaves that email unconsumed.
+XPath expressions additionally allow at most 32 nested groups and 256 syntax
+tokens; quoted literal contents do not count toward those complexity limits.
+
+## Sequential message processing
+
+`Emails` is an `iter.Seq2[*Email, error]`. It has no prefetch buffer or background
+goroutine. Breaking iteration leaves the next message available and does not
+close the inbox:
+
+```go
+for email, err := range inbox.Emails(ctx, ahrara.Filter{}) {
+    if err != nil { return err }
+    if err := process(email); err != nil { return err }
+    if finished { break }
+}
+```
+
+`ForEachEmail` calls its callback sequentially and returns the first receive,
+context, or callback error unchanged. A deadline applies to the complete loop:
+
+```go
+processing, cancel := context.WithTimeout(ctx, time.Minute) // Optional total limit.
+defer cancel()
+err := inbox.ForEachEmail(processing, ahrara.Filter{}, process)
+```
+
+Callbacks must return cooperatively; capture the same context if callback work
+needs cancellation. Methods are safe for concurrent callers, while receive
+operations serialize on each inbox. The caller retains ownership of `Close`.
+
+## Persistence and recovery
+
+Pass an absolute `Options.ProfilePath` to keep the identity, inbox address,
+encrypted history and consumed-message state across close and reopen. Without
+it, the core owns an encrypted temporary profile and removes it after close.
+
+`inbox.ExportCredentials()` returns `*Credentials` with `Address` and
+`RecoveryKey`. Reopen with `Options{Credentials: credentials}` or supply
+`RecoveryKey` and optional `Address` directly. These two import forms are mutually
+exclusive. Credentials restore the identity/address, with fresh local history;
+they do not copy an existing profile or create an offline queue at the relay.
+
+WSS close waits up to five seconds for the relay to disconnect, then drops the
+socket. Immediate identity reuse is verified with a healthy relay; after a
+network failure, the identity can remain occupied until the relay cleans up.
+SSE teardown remains asynchronous.
+
+Recovery keys are secrets. `fmt` string and Go-syntax formatting of `Credentials`
+and `Options` are redacted. Explicit JSON serialization includes the key for
+backup/import and must be stored securely, never logged or committed.
+
+## Stored messages and attachments
+
+| Method | Result |
+| --- | --- |
+| `ListEmails(ListOptions)` | `EmailPage` with metadata and optional `NextCursor`; default limit 20, maximum 100. |
+| `GetEmail(id)` | Full decoded `Email`, including attachment metadata. |
+| `DeleteEmail(id)` | Number of messages deleted from this inbox. |
+| `ClearEmails()` | Number of inbox messages removed. |
+| `GetAttachment(id, attachmentID)` | Metadata and exact decoded bytes in `AttachmentData.Content`. |
+| `SaveAttachment(id, attachmentID, destination)` | Saved absolute path; existing files are never overwritten. |
+| `RawEmail(id)` | Original RFC 5322 message bytes. |
+| `GetHTML(id, allowRemote)` | Sanitized HTML and remote-resource count; pass false to block remote resources. |
+
+List and get include previously consumed messages without changing receive
+state. Pagination passes a page's `NextCursor` as the next `ListOptions.AfterID`.
+The attachment ID comes from `Email.Attachments`. Save accepts an absolute file
+path or an existing directory, where the core chooses a sanitized filename.
+
+`Email.TextBody` is capped at 256 KiB; `TextBodyTruncated` reports truncation.
+Use `RawEmail` for original bytes and `GetHTML` for the HTML part. Native failures
+are `*ahrara.Error` with a stable `Code`. Closed inbox operations return
+`ahrara.ErrClosed`; waits and streams return standard context errors.
+
+## Connection settings
+
+For a private relay, use `ServerURL`, `ServerPublicKey`, `TLSCAPath`, and
+`ConnectTimeoutMS`. Source builds without an embedded relay key also require
+`ServerPublicKey`. See the [connection guide](../../../docs/sdks.md#connection-settings).
+
+## Development
+
+For source builds and native package preparation, see
+[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+`make sdk-go-test` against a development relay, or `make sdk-test` for the
+complete matrix with an isolated relay. All builds and tests run in Docker.

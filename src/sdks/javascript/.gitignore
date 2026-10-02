@@ -1,0 +1,7 @@
+node_modules/
+native/
+test-results/
+playwright-report/
+cypress/screenshots/
+cypress/videos/
+*.tgz

@@ -1,7 +1,7 @@
 # User guide
 
 [Overview](../README.md) · [Development setup](../CONTRIBUTING.md#build-and-run) ·
-[Server setup](../server/README.md)
+[Server setup](../src/server/README.md)
 
 ## Configuration
 
@@ -214,7 +214,7 @@ Disabling that destination stops the whole catch-all. Local address changes do
 not change provider rules. The `To` header is display metadata, not routing proof.
 
 Operators using trusted forwarding should read the
-[server configuration](../server/README.md#configuration).
+[server configuration](../src/server/README.md#configuration).
 
 ## Updates
 

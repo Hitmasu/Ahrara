@@ -7,7 +7,7 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
 
 ## Prerequisites
 
-- Set the version in `cli/Cargo.toml`, `cli/Cargo.lock`, `plugin.yaml`, and the
+- Set the version in `src/cli/Cargo.toml`, `src/cli/Cargo.lock`, `plugin.yaml`, and the
   plugin JSON manifests. The workflow checks that manifest versions agree.
 - Configure repository variable `AHRARA_UPDATE_PUBLIC_KEY` with the Ed25519
   public key as 64 hexadecimal characters and secret `AHRARA_RELEASE_SIGNING_KEY`
@@ -16,7 +16,7 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
   verified `ahrara_server_v1_...` public pin. Release binaries embed it and connect
   to `wss://ahrara.dev` automatically. The Tunnel must route `ahrara.dev` to the
   relay, whose WebSocket endpoint is `/`.
-- Commit `plugin/release-key.json` with `ed25519` set to the same public value as
+- Commit `src/plugin/release-key.json` with `ed25519` set to the same public value as
   `AHRARA_UPDATE_PUBLIC_KEY` before distributing the plugin. Its checked-in null
   value deliberately prevents downloads until a release key is provisioned.
 - Run the relevant [checks](../CONTRIBUTING.md#checks), including `make update-test`,
@@ -34,7 +34,7 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
    Serve `/releases/stable.json` with a cache lifetime of at most one hour.
 4. Review and commit the generated `Formula/ahrara.rb` from the
    `ahrara-homebrew-formula` artifact or release asset. Review the public key in
-   `ahrara-plugin-key` and commit it as `plugin/release-key.json`. The workflow
+   `ahrara-plugin-key` and commit it as `src/plugin/release-key.json`. The workflow
    does not deploy the site or commit these files.
 5. Test Homebrew on the supported macOS/Linux platforms:
 
@@ -67,9 +67,9 @@ python3 scripts/release-manifest.py \
   --key /secure/release-signing.pem \
   --public-key '<64-character-public-key-hex>' \
   --previous /path/to/previous-stable.json \
-  --output site/releases/stable.json \
+  --output src/site/releases/stable.json \
   --homebrew-output Formula/ahrara.rb \
-  --plugin-key-output plugin/release-key.json
+  --plugin-key-output src/plugin/release-key.json
 ```
 
 Replace placeholders with the matching release values, then republish the static
@@ -89,7 +89,7 @@ Packages place an `ahrara.install.json` receipt beside the real executable
 
 The supported receipt methods are `brew`, `npm`, `pip`, `sh`, `powershell`,
 `manual`, and `plugin`. Plugin installations update through
-`node plugin/ahrara.mjs --update`. Direct installations register through
+`node src/plugin/ahrara.mjs --update`. Direct installations register through
 `ahrara update --register`.
 The updater does not replace package-owned or unregistered binaries.
 
@@ -97,4 +97,4 @@ Keep private signing keys out of source, artifacts, and logs. Verification-key
 rotation requires a migration release signed by the current key; a compromised
 key requires an out-of-band reinstall. The contract is checked in
 [release-manifest.py](../scripts/release-manifest.py) and the
-[Rust updater](../cli/src/update.rs).
+[Rust updater](../src/cli/src/update.rs).
