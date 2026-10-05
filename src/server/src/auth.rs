@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn shared_protocol_vector() {
         let vector: serde_json::Value =
-            serde_json::from_str(include_str!("../../../protocol/vectors.json")).unwrap();
+            serde_json::from_str(include_str!("../../../tests/protocol-vectors.json")).unwrap();
         let public: [u8; 32] = hex::decode(vector["public_key"].as_str().unwrap())
             .unwrap()
             .try_into()

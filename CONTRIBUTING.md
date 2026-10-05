@@ -153,11 +153,10 @@ packages, binaries, profiles, and logs belong in ignored directories.
 | `src/cli/` | CLI, Web, MCP, and HTTP API built on the shared core |
 | `src/server/` | Rust SMTP receiver and authenticated relay |
 | `src/third_party/` | Shared vendored mail parser |
-| `protocol/vectors.json` | Shared protocol test vectors |
 | `docs/` | User and release guides |
 | `scripts/` | Release tooling |
 | `src/plugin/`, `skills/` | Shared agent launcher and installation skill |
-| `tests/` | Release and plugin tests |
+| `tests/` | Release, plugin and site tests, and the protocol vectors shared by the relay and client |
 | `src/site/` | Static landing page and documentation; no frontend build required |
 | `Formula/` | Homebrew formula |
 

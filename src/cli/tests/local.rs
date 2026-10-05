@@ -194,7 +194,7 @@ fn identity_recovery_and_shared_go_rust_vectors() {
     assert!(one.public_key() == two.public_key());
     assert!(one.route() == two.route());
     let fixture: Value =
-        serde_json::from_str(include_str!("../../../protocol/vectors.json")).unwrap();
+        serde_json::from_str(include_str!("../../../tests/protocol-vectors.json")).unwrap();
     let public: [u8; 32] = hex::decode(fixture["public_key"].as_str().unwrap())
         .unwrap()
         .try_into()
