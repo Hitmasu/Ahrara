@@ -96,12 +96,22 @@ including recovery of ordinary malformed HTML.
 
 Filter conditions combine with AND. Sender, subject, To/Cc, text, and header
 values are case-insensitive substrings. Recipient, envelope sender, and Message-ID
-are exact case-insensitive matches. Header names are case-insensitive and any
+match the whole value, ignoring case. Header names are case-insensitive and any
 repeated value can match. Operation filters retain nonmatching mail; use
 `options.withFilter(filter)` to discard rejected incoming messages **before local
 storage**. Global and operation conditions combine. Invalid queries or filters
 raise `AhraraException` without consuming messages. Queries and ordinary email
-waits share the same receiver lock.
+waits share the same receiver lock, so concurrent waits are queued and run one at
+a time.
+
+Use `EmailFilter.builder().regex(true).subject("^(Verification|Confirm email)$").build()`
+to interpret all string conditions as case-insensitive Rust regex patterns.
+Recipient, envelope sender, and Message-ID patterns must match the whole value;
+other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
+case sensitivity; `RegexQuery` is case-sensitive unless `ignoreCase` is true.
+Header names and the `subject`/`from` wait arguments stay literal. Invalid
+patterns fail before consuming mail; omitting `.regex(true)` keeps literal
+matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 ## Persistent profiles and identity import
 
@@ -137,7 +147,7 @@ var page = inbox.listEmails(0, 20, "Verification", null);
 for (var summary : page.emails()) {
     var email = inbox.getEmail(summary.id());
     for (var attachment : email.attachments()) {
-        byte[] content = inbox.downloadAttachment(email.id(), attachment.attachmentId()).content();
+        byte[] content = inbox.getAttachment(email.id(), attachment.attachmentId()).content();
         Path saved = inbox.saveAttachment(email.id(), attachment.attachmentId(),
             Path.of("downloads").toAbsolutePath());
     }

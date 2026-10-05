@@ -86,8 +86,7 @@ fn forwarding_end_to_end() {
     let list = p.run(&[
         "inbox",
         "list",
-        "--address",
-        public["address"].as_str().unwrap(),
+        &format!("--address={}", public["address"].as_str().unwrap()),
     ]);
 
     assert_eq!(list.as_array().unwrap().len(), 1);
@@ -154,6 +153,87 @@ fn forwarding_end_to_end() {
         assert!(created["address"].as_str().unwrap().ends_with("@ab.com"));
         assert_eq!(created["forwarding_address"], target);
     });
+}
+
+#[test]
+#[ignore = "requires make dev-certs; launches an isolated ingress"]
+fn email_routing_end_to_end() {
+    let sink = "relay@ingest.ahrara.dev";
+    for verification in [false, true] {
+        let mut p = TestProfile::new();
+        let port = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let smtp_port = port();
+        let wss_port = port();
+        p.config.server_url = format!("wss://localhost:{wss_port}");
+        p.config.smtp_dev_address = format!("localhost:{smtp_port}");
+        std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
+        let destination = p.run(&["address", "create"]);
+        let target = destination["address"].as_str().unwrap();
+        let server_dir = tempfile::tempdir().unwrap();
+        let _server = Process(
+            Command::new(p.ingress_binary())
+                .env("AHRARA_SMTP_BIND", format!("127.0.0.1:{smtp_port}"))
+                .env("AHRARA_HTTPS_BIND", format!("127.0.0.1:{wss_port}"))
+                .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
+                .env("AHRARA_TLS_KEY", &p.config.api_tls_key_path)
+                .env(
+                    "AHRARA_TRANSPORT_KEY_FILE",
+                    p.root.join(".dev/certs/transport.key"),
+                )
+                .env("AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS", "127.0.0.1/32")
+                .env("AHRARA_EMAIL_ROUTING_ADDRESS", sink)
+                .env(
+                    "AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT",
+                    if verification { target } else { "" },
+                )
+                .current_dir(server_dir.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let _listener = p.spawn("listen");
+        p.ready();
+        std::fs::write(
+            &p.eml,
+            "Subject: Verify your destination\r\n\r\nSynthetic verification email.\r\n",
+        )
+        .unwrap();
+        assert_eq!(p.send(sink, None, 0).is_ok(), verification);
+        std::fs::write(
+            &p.eml,
+            format!("X-Forwarded-To: {sink}\r\nX-Forwarded-For: {target} {sink}\r\nTo: unrelated@example.test\r\n\r\nNative forwarding with a different visible recipient.\r\n"),
+        )
+        .unwrap();
+        assert!(p.send(sink, None, 0).is_ok());
+        assert!(
+            p.send(target, None, 0).is_err(),
+            "only the configured sink may accept trusted forwards"
+        );
+        assert!(p.send("other@ingest.ahrara.dev", None, 0).is_err());
+        assert_eq!(
+            p.run(&["status"])["emails_count"],
+            if verification { 2 } else { 1 }
+        );
+        let list = p.run(&["inbox", "list"]);
+        assert_eq!(list[0]["recipient"], target);
+        if !verification {
+            std::fs::write(
+                &p.eml,
+                format!("X-Forwarded-To: {sink}\r\nX-Forwarded-For: {target} {sink}\r\nX-Forwarded-For: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@ahrara.dev {sink}\r\n\r\nAmbiguous forwarding.\r\n"),
+            )
+            .unwrap();
+            assert!(p.send(sink, None, 0).is_err());
+            assert_eq!(p.run(&["status"])["emails_count"], 1);
+        }
+        assert_eq!(std::fs::read_dir(server_dir.path()).unwrap().count(), 0);
+    }
 }
 
 struct TestProfile {
@@ -771,13 +851,23 @@ fn mcp_end_to_end() {
                 .len(),
             1
         );
-        c.tool(
+        let saved = c.tool(
             "ahrara_save_attachment",
             json!({
                 "email_id": id,
                 "attachment_id": "1",
-                "destination": p._dir.path().join("saved.txt")
+                "filename": "saved.txt"
             }),
+        );
+
+        assert_eq!(
+            std::path::Path::new(saved["path"].as_str().unwrap()),
+            p._dir
+                .path()
+                .join("attachments")
+                .canonicalize()
+                .unwrap()
+                .join("saved.txt")
         );
         c.request("resources/list", json!({}));
         c.request("resources/templates/list", json!({}));

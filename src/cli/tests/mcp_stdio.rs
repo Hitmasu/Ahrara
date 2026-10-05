@@ -123,7 +123,8 @@ async fn agents_share_one_receiver_and_closing_one_keeps_the_other_alive() {
     .unwrap();
 
     assert!(cfg.identity_path.exists() && cfg.database_path.exists());
-    assert!(!cfg.api_token_path.exists());
+    // MCP requires a bearer token by default; the bridge uses the created token.
+    assert!(cfg.api_token_path.exists());
 }
 
 #[tokio::test]

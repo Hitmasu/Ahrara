@@ -548,6 +548,36 @@ async fn web_password_sessions_lan_and_persisted_acknowledgement() {
     assert!(!core.web.allow_login(ip));
 }
 
+#[test]
+fn login_throttling_groups_ipv6_networks_and_evicts_instead_of_refusing() {
+    let (_dir, core) = profile();
+
+    for host in 0..256 {
+        assert!(
+            core.web
+                .allow_login(std::net::Ipv4Addr::from(0x0a00_0000 + host).into())
+        );
+    }
+
+    assert!(
+        core.web.allow_login("192.168.1.10".parse().unwrap()),
+        "a full table must not lock out new clients"
+    );
+
+    for host in 1..=4 {
+        assert!(
+            core.web
+                .allow_login(format!("fd00::{host}").parse().unwrap())
+        );
+    }
+
+    assert!(
+        !core.web.allow_login("fd00::ffff".parse().unwrap()),
+        "addresses in one IPv6 /64 share a limit"
+    );
+    assert!(core.web.allow_login("fd00:0:0:1::1".parse().unwrap()));
+}
+
 #[tokio::test]
 async fn web_metadata_pagination_email_html_attachment_and_delete() {
     let (_dir, core) = profile();
@@ -828,7 +858,7 @@ fn mcp_initialize() -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn mcp_defaults_to_http_without_certificates_or_token() {
+async fn mcp_defaults_to_http_without_certificates_and_requires_a_token() {
     let dir = tempfile::tempdir().unwrap();
     let address = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -853,7 +883,8 @@ async fn mcp_defaults_to_http_without_certificates_or_token() {
     let base = format!("http://{address}");
 
     assert_eq!(core.web_url(), base);
-    assert!(!core.config.api_token_path.exists());
+    // The bearer token is required even on loopback and is created on startup.
+    let token = Zeroizing::new(std::fs::read_to_string(&core.config.api_token_path).unwrap());
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -883,8 +914,18 @@ async fn mcp_defaults_to_http_without_certificates_or_token() {
         );
     }
 
+    assert_eq!(
+        initialize()
+            .header(header::ORIGIN, &base)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
     let response = initialize()
         .header(header::ORIGIN, &base)
+        .bearer_auth(token.as_str())
         .send()
         .await
         .unwrap();
@@ -898,6 +939,7 @@ async fn mcp_defaults_to_http_without_certificates_or_token() {
             .post(format!("{base}/mcp"))
             .header(header::ACCEPT, "application/json, text/event-stream")
             .header("mcp-session-id", session.clone())
+            .bearer_auth(token.as_str())
             .json(&payload)
     };
 
@@ -921,9 +963,8 @@ async fn mcp_defaults_to_http_without_certificates_or_token() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.text().await.unwrap().contains("@ahrara.dev"));
-    assert!(!core.config.api_token_path.exists());
 
-    // Enabling REST on an already-running anonymous MCP server still requires a token.
+    // REST enabled on the running MCP server uses the same bearer token.
     core.update_interfaces("api", true, false, None)
         .await
         .unwrap();
@@ -935,8 +976,6 @@ async fn mcp_defaults_to_http_without_certificates_or_token() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let token = Zeroizing::new(std::fs::read_to_string(&core.config.api_token_path).unwrap());
-
     assert_eq!(
         client
             .get(format!("{base}/v1/addresses"))

@@ -7,10 +7,15 @@ from typing import Literal, NotRequired, TypedDict
 class EmailFilter(TypedDict, total=False):
     """ANDed fields; strings match case-insensitive substrings unless documented.
 
-    recipient, envelope_sender and message_id use exact case-insensitive matches.
-    Header names are case-insensitive; each requested value is a substring.
+    recipient, envelope_sender and message_id match the whole value, ignoring
+    case. Header names are case-insensitive; each requested value is a substring.
+    Set regex=True to interpret string values as case-insensitive Rust regex:
+    recipient, envelope_sender and message_id patterns are anchored to the whole
+    value; other patterns match anywhere. Header names remain literal; inline
+    flags such as (?-i) override case sensitivity.
     """
 
+    regex: bool
     sender: str
     subject: str
     to: str
@@ -27,6 +32,7 @@ class RegexOptions(TypedDict, total=False):
     """Shared Rust regex flags and per-wait email filtering; no local matching."""
 
     source: Literal["text", "html", "subject", "raw"]
+    # Defaults to False: query regex is case-sensitive, unlike filter regex.
     ignore_case: bool
     multi_line: bool
     dot_matches_new_line: bool

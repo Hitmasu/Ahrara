@@ -1,7 +1,9 @@
 # Contributing to Ahrara
 
-Use English for code, comments, documentation, and user-facing messages. Keep
-changes focused and follow the surrounding implementation.
+Use English for code, comments, documentation, and user-facing messages, except
+for the localized site pages: the Brazilian Portuguese and Spanish documentation
+in `src/site/docs/` and landing pages in `src/site/`. Keep changes focused and
+follow the surrounding implementation.
 
 Search [issues](https://github.com/Hitmasu/Ahrara/issues) and
 [pull requests](https://github.com/Hitmasu/Ahrara/pulls) before starting. Discuss
@@ -12,12 +14,26 @@ through [SECURITY.md](SECURITY.md).
 
 ## Build and run
 
-Fork and clone the repository, then follow the [local setup](README.md#-install).
+Fork and clone the repository, then [run it locally](#run-locally).
 Linux development requires Docker Engine with Compose and Make. Make runs the
 pinned Rust toolchain, certificate generation, and all tests in containers.
 The SDK matrix also downloads container images for each language and browser;
 no language SDK or browser installation on the host is needed. Run secret
 scanning with the Gitleaks container.
+
+### Run locally
+
+Generate the development certificates and profile, start the relay, then build
+and run the Linux development client against that profile:
+
+```sh
+make dev-certs
+docker compose up -d --build --wait server
+make cli
+dist/ahrara --config .dev/profile/config.toml
+```
+
+Pass the same `--config` to every other command for this profile.
 
 Build outputs go to `dist/`; certificates, profiles, and caches go to `.dev/`.
 Both directories are ignored by Git. The default development endpoints are:
@@ -34,15 +50,15 @@ Both directories are ignored by Git. The default development endpoints are:
 to these HTTPS endpoints. Do not use development certificates for public services.
 
 If port 8443 is busy, use `make dev-certs AHRARA_WSS_PORT=18443` and
-`AHRARA_WSS_PORT=18443 docker compose up -d --wait server`. Update `server_url` in
-any existing profile. Set `AHRARA_UID` and `AHRARA_GID` for Compose if the generated
-files belong to a user other than `1000:1000`.
+`AHRARA_WSS_PORT=18443 docker compose up -d --build --wait server`. Update
+`server_url` in any existing profile. Set `AHRARA_UID` and `AHRARA_GID` for Compose
+if the generated files belong to a user other than `1000:1000`.
 
 With the listener running, copy its address and send a sample message:
 
 ```sh
 curl --url smtp://localhost:2525 --ssl-reqd --cacert .dev/certs/ca.pem \
-  --mail-from sender@example.test --mail-rcpt '<address>@ahrara.dev' \
+  --mail-from sender@example.test --mail-rcpt '<address>' \
   --upload-file src/cli/tests/fixtures/message.eml
 ```
 
@@ -82,8 +98,9 @@ Run the checks relevant to your change before submitting a pull request:
 Integration tests need `make dev-certs` and the development relay. Stop the
 interactive client before running them. For bug fixes, reproduce the failure with
 a regression test when practical. Check documentation links and commands; preview
-site changes in a browser. Vendored dependency checks are documented in their
-respective `src/third_party/README.md` files.
+site changes in a browser. Vendored dependency checks are documented in
+[src/third_party/README.md](src/third_party/README.md) and
+[src/server/third_party/README.md](src/server/third_party/README.md).
 
 ### SDK development
 
@@ -141,7 +158,7 @@ packages, binaries, profiles, and logs belong in ignored directories.
 | `scripts/` | Release tooling |
 | `src/plugin/`, `skills/` | Shared agent launcher and installation skill |
 | `tests/` | Release and plugin tests |
-| `src/site/` | Static landing page; no frontend build required |
+| `src/site/` | Static landing page and documentation; no frontend build required |
 | `Formula/` | Homebrew formula |
 
 Keep implementation in `src/`, with each component's manifests, assets and tests
@@ -157,10 +174,59 @@ contents or introducing helpers solely to wrap lines.
 Preview the site with `python3 -m http.server 8080 --bind 127.0.0.1 --directory src/site`.
 Static hosting publishes the contents of `src/site/`.
 
+The landing page and the documentation each exist in English, Brazilian Portuguese
+and Spanish. The pages of each part share one stylesheet and one script:
+
+| Part | English | Brazilian Portuguese | Spanish | Shared |
+|---|---|---|---|---|
+| Landing page | `src/site/index.html` | `src/site/pt-br/index.html` | `src/site/es/index.html` | `src/site/styles.css`, `src/site/script.js` |
+| Documentation | `src/site/docs/index.html` | `src/site/docs/pt-br/index.html` | `src/site/docs/es/index.html` | `src/site/docs/styles.css`, `src/site/docs/script.js` |
+
+Each page is complete static HTML and stays readable without JavaScript. Localized
+pages mirror the English structure and element IDs, so the language menu (plain
+links) keeps the reader's place and deep links work in every language; they reach
+shared files and assets with `../`. The documentation is a single page per
+language: the URL hash selects which `<article class="page">` is shown. The docs
+script adds navigation, search, synchronized example tabs, the theme toggle and
+copy buttons, and maps IDs from the previous documentation to their new sections;
+update that map when you rename or remove an ID.
+
+The scripts contain no user-visible text. Each page declares its interface strings
+in a `<script type="application/json" id="ui-strings">` block: translate the
+values and keep the keys and placeholders such as `{page}` and `{count}`. Translate
+the rest of the HTML too, including `<title>`, meta descriptions, `aria-label`,
+`title`, `alt`, `data-label` and `data-title` attributes, and comments in code
+examples; keep commands, code and identifiers unchanged. Update all three versions
+when changing content, and keep examples aligned with `docs/` and the SDK guides.
+No build, backend, or external asset service is required.
+
+Each documentation language has its own `architecture.mmd`, the editable Mermaid
+source for its checked-in `architecture.svg`. After changing a diagram, render it
+with Mermaid CLI 12.0.0 (`mmdc -i architecture.mmd -o architecture.svg -b transparent`)
+and preview the result. The site serves the SVG directly, including without JavaScript; Mermaid
+is only needed when editing the diagram, not for hosting or browsing the docs.
+
+For the documentation browser smoke check, open the local site with Playwright CLI
+and run the existing script from the repository root:
+
+```sh
+playwright-cli open http://127.0.0.1:8080/docs/
+playwright-cli run-code --filename=tests/site.smoke.js
+```
+
+This checks the landing page's installers, language menu and links into the docs;
+every docs page, links from the previous documentation, synchronized tabs, the
+clipboard, search, the theme toggle, mobile navigation and the language menu. For
+each language present, it compares element IDs and interface keys with English,
+checks the `lang` attribute and shared files, and reads the page without
+JavaScript. The server must serve `src/site/` at its root. Browser outputs belong
+in ignored development directories.
+
 ## Pull requests
 
 Describe the problem, resulting behavior, and checks run, including validation
 limits. Update documentation when behavior changes. Do not commit generated files,
 real email, credentials, or personal profiles. Preserve upstream license notices
-and document vendored changes in the corresponding `src/third_party/README.md`.
+and document vendored changes in the corresponding `src/third_party/README.md`
+or `src/server/third_party/README.md`.
 Contributions are made under the [MIT License](LICENSE).

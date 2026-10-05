@@ -1,12 +1,3 @@
 **
-!src/
-!src/server/
-!src/server/**
-!src/core/
-!src/core/src/
-!src/core/src/protocol.rs
-!src/core/src/secure.rs
-!src/third_party/
-!src/third_party/mailparse/
-!src/third_party/mailparse/**
-**/target
+!src/server/NOTICE
+!src/server/third_party/libcfd/LICENSE

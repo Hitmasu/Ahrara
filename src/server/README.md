@@ -14,9 +14,14 @@ docker compose build server
 docker compose up -d --wait server
 ```
 
+`make dev-certs` builds the static server locally. The Dockerfile only packages
+`dist/ahrara-server`; it does not compile source. For production, build and save
+the image locally, then transfer it to the VPS and load it with `docker load`.
+The VPS needs only the runtime image, Compose configuration, and mounted secrets.
+
 This exposes SMTP on `127.0.0.1:2525` and WSS on `127.0.0.1:8443`. It is a local
 development setup; public delivery also requires DNS, MX records, SMTP ingress,
-and valid certificates. See [Contributing](../../CONTRIBUTING.md) for client setup.
+and valid certificates. See [Run locally](../../CONTRIBUTING.md#run-locally) for client setup.
 
 ## Configuration
 
@@ -27,13 +32,17 @@ and valid certificates. See [Contributing](../../CONTRIBUTING.md) for client set
 | `AHRARA_TLS_CERT` | `/certs/server.pem` | Server certificate |
 | `AHRARA_TLS_KEY` | `/certs/server-key.pem` | TLS private key |
 | `AHRARA_TLS_CA` | `/certs/ca.pem` | CA for the local HTTPS health check |
+| `AHRARA_HEALTHCHECK_SERVER_NAME` | `localhost` | Certificate name verified by the local health check |
 | `AHRARA_TRANSPORT_KEY_FILE` | `/certs/transport.key` | Noise private key |
 | `AHRARA_UNIX_SOCKET` | Unset | Optional HTTP/WebSocket Unix socket |
 | `AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS` | Empty | Trusted SMTP forwarding sources |
+| `AHRARA_EMAIL_ROUTING_ADDRESS` | Unset | Exact SMTP sink for native Email Routing |
+| `AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT` | Unset | Temporary Ahrara inbox for verifying the sink |
 
-The `healthcheck` command requests local HTTPS `/healthz` with CA validation;
-its certificate must cover `localhost`. `make dev-certs` creates the Noise key
-and adds the public pin to new client profiles. For other deployments:
+The `healthcheck` command checks the local HTTPS endpoint. With a public
+certificate, set `AHRARA_HEALTHCHECK_SERVER_NAME` to its hostname and mount a CA
+bundle at `AHRARA_TLS_CA`. `make dev-certs` creates the Noise key and adds the
+public pin to new client profiles. For other deployments:
 
 ```sh
 ahrara-server transport-keygen /secure/transport.key
@@ -42,33 +51,59 @@ ahrara-server transport-public-key /secure/transport.key
 
 Both commands print only the public pin. Distribute it independently to clients
 as `server_public_key`. Keep the private key read-only to the relay; rotating it
-requires updating client pins. Existing development profiles are preserved, so
-older ones may need the pin from `.dev/certs/transport-public.txt`.
+requires updating client pins.
 
-Direct SMTP routes by `RCPT TO`. Trusted forwarding instead uses one unambiguous
-`X-Forwarded-To` destination. Enable its CIDR allowlist only after restricting
-SMTP ingress to the provider and verifying its final forwarding header. Simulated
-tests do not validate a provider's live headers.
+Direct SMTP is routed by `RCPT TO`. Mail from trusted forwarding sources is
+routed by its forwarding headers; with `AHRARA_EMAIL_ROUTING_ADDRESS`, only mail
+forwarded to that sink is accepted. Bcc recipients are supported. Restrict SMTP
+ingress to the provider before enabling its CIDR allowlist.
+
+### Cloudflare Email Routing to a VPS
+
+Keep the MX records for `ahrara.dev` pointing to Cloudflare Email Routing.
+The forwarding destination uses a separate subdomain, for example:
+
+| Type | Name | Value | Options |
+|---|---|---|---|
+| A | `smtp` | Your VPS IPv4 address | DNS only |
+| MX | `ingest` | `smtp.ahrara.dev` | Priority 10 |
+
+1. Publish TCP port 25 on the VPS to the container's port 2525. Restrict incoming
+   SMTP to the [Email Routing outbound prefixes](https://developers.cloudflare.com/email-service/reference/postmaster/#outbound-prefixes).
+   Set those same prefixes in `AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS`.
+2. Mount a publicly trusted certificate and key for `smtp.ahrara.dev`, configure
+   renewal, and set `AHRARA_HEALTHCHECK_SERVER_NAME=smtp.ahrara.dev`. Reload the
+   container after renewal; certificates are loaded at startup.
+3. Set `AHRARA_EMAIL_ROUTING_ADDRESS=relay@ingest.ahrara.dev`. Trusted SMTP
+   peers may deliver only to this exact sink.
+4. To verify the destination, create a temporary Ahrara address and keep its
+   client connected. Set `AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT` to that
+   address and restart the relay. During this temporary setup mode, sink mail
+   is delivered to that operator inbox for destination verification and inspection
+   of the provider's forwarding headers.
+5. Add `relay@ingest.ahrara.dev` under Email Routing's destination addresses,
+   receive the verification email, and follow its confirmation link.
+6. Use the native catch-all action **Send to an email**, targeting that verified
+   destination. Remove `AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT` and restart
+   the relay to enable delivery to individual Ahrara inboxes. Validate with a real
+   forwarded message while its recipient's client is connected.
+
+Public SMTP reception and the client Tunnel are separate connections. No Worker
+is used, and the VPS needs neither application source nor a compiler.
 
 ### SMTP limits
 
 All values accept integers from 1 to 1024. The per-source cap cannot exceed the
-global session cap.
+global session cap, and trusted forwarding sources are exempt from it.
 
-| Variable | Default |
-|---|---:|
-| `AHRARA_SMTP_MAX_SESSIONS` | 256 |
-| `AHRARA_SMTP_MAX_SESSIONS_PER_SOURCE` | min(16, global cap) |
-| `AHRARA_SMTP_OFFER_TIMEOUT_SECONDS` | 5 |
-| `AHRARA_SMTP_ACK_TIMEOUT_SECONDS` | 30 |
-| `AHRARA_SMTP_TRANSACTION_TIMEOUT_SECONDS` | 300 |
-| `AHRARA_SMTP_COMMAND_TIMEOUT_SECONDS` | 120 |
-
-IPv4-mapped addresses share the IPv4 quota; IPv6 sources share a `/64` quota.
-Trusted forwarding sources bypass the per-source cap, but not the global cap.
-Three missing delivery ACKs in five minutes trigger a 60-second Identity cooldown.
-A successful ACK clears failures; client persistence NACKs do not count as missing
-ACKs. Cooldown tracking is bounded to 4,096 routes and evicts the oldest at capacity.
+| Variable | Default | Limits |
+|---|---:|---|
+| `AHRARA_SMTP_MAX_SESSIONS` | 256 | Simultaneous SMTP sessions |
+| `AHRARA_SMTP_MAX_SESSIONS_PER_SOURCE` | min(16, global cap) | Simultaneous sessions per sender |
+| `AHRARA_SMTP_OFFER_TIMEOUT_SECONDS` | 5 | Wait for the client to accept a recipient |
+| `AHRARA_SMTP_ACK_TIMEOUT_SECONDS` | 30 | Wait for the client to confirm it saved a message |
+| `AHRARA_SMTP_TRANSACTION_TIMEOUT_SECONDS` | 300 | Time a session has to deliver each message |
+| `AHRARA_SMTP_COMMAND_TIMEOUT_SECONDS` | 120 | Idle time between SMTP commands |
 
 ## Cloudflare Tunnel with WSS and Unix
 
@@ -86,34 +121,33 @@ Client → WSS → Cloudflare → encrypted Tunnel → cloudflared → Unix sock
 4. Clients connect to `wss://ahrara.dev`. Supply the verified
    `server_public_key` when building release binaries or configuring a custom client.
 
-WebSocket connections use the root path `/`. No path rule is needed in the Tunnel;
-the relay handles the WebSocket upgrade.
-
-Both containers share `.dev/run` and use `AHRARA_UID`/`AHRARA_GID` (default
-`1000:1000`). `make dev-certs` creates the directory with mode `0700`; the relay
-creates its socket with mode `0600`. The connector uses the pinned official Cloudflare image.
-SMTP ingress remains separate from this Tunnel.
-
-The relay refuses an existing socket path. After an unclean stop, confirm that
-the service has stopped and the socket is stale before removing it. Normal
-shutdown removes only the socket created by that process.
+The relay serves WebSocket on the root path `/`, so the Tunnel needs no path rule.
+Both containers share `.dev/run` and run as `AHRARA_UID`/`AHRARA_GID` (default
+`1000:1000`).
 
 ## Experimental integrated Tunnel
 
 The optional `tunnel` Cargo feature embeds the community `libcfd` connector:
 
 ```sh
-docker build --build-arg AHRARA_SERVER_FEATURES=tunnel \
+make cargo ARGS='build --locked --release --features tunnel --target x86_64-unknown-linux-musl --manifest-path /work/src/server/Cargo.toml'
+cp .dev/target/x86_64-unknown-linux-musl/release/ahrara-server dist/ahrara-server
+docker build --build-context ahrara-binary=./dist \
   -f src/server/Dockerfile -t ahrara-server:rust-tunnel .
 ```
+
+Use the target matching the VPS architecture; these commands target Linux x64.
 
 Mount a named-Tunnel token read-only and set `AHRARA_TUNNEL_TOKEN_FILE` to it.
 `AHRARA_TUNNEL_CONNECTIONS` accepts 1–4, defaulting to 4. Keep the TLS and SMTP
 configuration. The public hostname must already route to that Tunnel; do not
 start the separate `cloudflared` service for this deployment.
 
-This connector serves the relay's router directly over HTTP/2. It is experimental;
-local tests do not establish public Tunnel capacity or failover behavior. See
+The dashboard's origin service URL is ignored in this mode; clients still use
+`wss://ahrara.dev`.
+
+It is experimental; local tests do not establish public Tunnel capacity or
+failover behavior. See
 [vendored sources](third_party/README.md) for its patches and checks.
 
 ## Optional SSE

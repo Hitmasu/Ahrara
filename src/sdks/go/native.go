@@ -9,7 +9,17 @@ package ahrara
 #ifdef _WIN32
 #include <windows.h>
 static HMODULE library;
-#define LOAD(path) LoadLibraryExA(path, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR)
+// Go passes UTF-8; the ANSI LoadLibraryExA would misread non-ASCII paths.
+static HMODULE load_library(const char *path) {
+    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    wchar_t *wide = length ? malloc(length * sizeof(wchar_t)) : NULL;
+    HMODULE result = NULL;
+    if (wide && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, length))
+        result = LoadLibraryExW(wide, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    free(wide);
+    return result;
+}
+#define LOAD(path) load_library(path)
 #define SYMBOL(name) GetProcAddress(library, name)
 #else
 #include <dlfcn.h>

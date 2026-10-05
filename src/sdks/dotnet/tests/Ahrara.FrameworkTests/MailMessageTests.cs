@@ -75,6 +75,44 @@ public sealed class MailMessageTests
     }
 
     [Fact]
+    public async Task FieldsMailMessageRejectsDoNotLoseTheConsumedMessage()
+    {
+        await using var inbox = await Client.CreateInboxAsync(Relay.Options);
+        await Relay.SendRawAsync($"""
+            From: sdk@example.test
+            To: {inbox.Address}
+            Reply-To: Broken <broken@>
+            Subject: =?UTF-8?Q?Lenient=0D=0Amapping?=
+            X-Empty:
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="part"
+
+            --part
+            Content-Type: text/plain
+
+            lenient body
+            --part
+            Content-Type: invalid
+            Content-Disposition: attachment; filename="odd.bin"
+            Content-Transfer-Encoding: base64
+
+            AQID
+            --part--
+            """);
+
+        using var email = await inbox.WaitForEmailAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Lenient mapping", email.Subject);
+        Assert.Empty(email.ReplyToList);
+        Assert.Contains("broken@", email.Headers["Reply-To"]);
+        var attachment = Assert.Single(email.Attachments);
+
+        Assert.Equal("application/octet-stream", attachment.ContentType.MediaType);
+        Assert.Equal("odd.bin", attachment.Name);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await Relay.ReadBytesAsync(attachment.ContentStream));
+    }
+
+    [Fact]
     public async Task FullBodyIsNotLimitedByTheParsedEmailPreviewBudget()
     {
         await using var inbox = await Client.CreateInboxAsync(Relay.Options);

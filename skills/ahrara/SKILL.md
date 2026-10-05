@@ -27,7 +27,7 @@ For MCP-capable hosts, register a stdio server with command `node` and arguments
 `["<absolute-launcher-path>"]`, preserving existing MCP entries. The host starts
 the launcher and manages the session. Allow up to 180 seconds for the first
 download; if startup times out, finish `--install` and reconnect the MCP server.
-Pass `--config <absolute-profile-path>` after the launcher for a custom profile.
+Pass `--config <absolute-path-to-config.toml>` after the launcher for a custom profile.
 Restart/reload the host's MCP connection if newly installed tools are not visible.
 
 ## Email workflow
@@ -36,7 +36,9 @@ Restart/reload the host's MCP connection if newly installed tools are not visibl
 2. Create a new address for the task with `ahrara_create_address`.
 3. Trigger the requested email, then use `ahrara_wait_for_email` filtered by that
    address. Carry `after_id` forward to avoid reusing an old verification email.
-4. Read only relevant mail. Save attachments only to a user-requested destination.
+4. Read only relevant mail. Save attachments only when the user asks:
+   `ahrara_save_attachment` writes into the profile's `attachments` directory,
+   accepts an optional plain `filename`, never overwrites, and returns the path.
 
 Stdio sessions reuse the local server. The last session closes an agent-owned
 server; a manually started server stays running. Identity and inbox survive.

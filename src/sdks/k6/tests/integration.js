@@ -105,10 +105,10 @@ export default function () {
     check(noOverwrite, {
       "attachment save refuses overwrite": (value) => value,
     });
-    check(inbox.rawEmail(email.id), {
+    check(inbox.getRawEmail(email.id), {
       "raw MIME bytes available": (value) => value.byteLength > 4,
     });
-    check(inbox.getHTML(email.id, false), {
+    check(inbox.getHtml(email.id, false), {
       "HTML resources sanitized": (value) =>
         value.html.includes("Fixture HTML") &&
         value.remoteResources === 1 &&
@@ -198,6 +198,35 @@ export default function () {
         {
           "query filter leaves unrelated email available": (value) =>
             value.subject === "Query retained",
+        },
+      );
+      send("Query literal (1)", "777777 is your verification code", queried);
+      let anchored = false;
+      try {
+        queried.waitForEmail({
+          durationMs: 300,
+          filter: { regex: true, envelopeSender: "sender@example" },
+        });
+      } catch (error) {
+        anchored = String(error).includes("deadline exceeded");
+      }
+
+      check(anchored, {
+        "regex envelope sender must match the whole value": (value) => value,
+      });
+      check(
+        queried.waitForEmail({
+          subject: "literal (1)",
+          durationMs: 2000,
+          filter: {
+            regex: true,
+            envelopeSender: "sender@example\\.test",
+            text: "^7{6} is",
+          },
+        }),
+        {
+          "top-level subject stays literal with a regex filter": (value) =>
+            value.subject === "Query literal (1)",
         },
       );
       send(

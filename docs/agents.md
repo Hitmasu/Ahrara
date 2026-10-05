@@ -103,9 +103,10 @@ the server if agents started it; a manually started server stays running.
 Identity, addresses, and received mail persist. `ahrara_stop` explicitly stops
 shared reception for every interface, so it is not a session cleanup command.
 
-Local HTTP MCP remains available as described in the [user guide](usage.md#mcp).
-Stdio reuses the profile's HTTPS and authentication settings when enabled.
-No certificate or token is required with the local defaults.
+Local HTTP MCP remains available as described in the [user guide](usage.md#mcp);
+direct HTTP clients send the local API token, which is required by default.
+Stdio reuses the profile's HTTPS and authentication settings and sends that token
+automatically, so no token setup is needed for stdio.
 For local HTTPS with a private CA, include its certificate in `api_tls_cert_path`'s
 PEM bundle or configure `tls_ca_path`. Certificate and hostname checks remain enabled.
 

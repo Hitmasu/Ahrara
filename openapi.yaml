@@ -138,6 +138,12 @@ paths:
         required: false
         schema:
           type: string
+      - name: to
+        in: query
+        description: ASCII case-insensitive substring of the To header or SMTP recipient.
+        required: false
+        schema:
+          type: string
       - name: subject
         in: query
         required: false
@@ -195,6 +201,12 @@ paths:
           type: string
       - name: from
         in: query
+        required: false
+        schema:
+          type: string
+      - name: to
+        in: query
+        description: ASCII case-insensitive substring of the To header or SMTP recipient.
         required: false
         schema:
           type: string

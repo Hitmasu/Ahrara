@@ -154,12 +154,7 @@ pub async fn send(State(broker): State<Arc<Broker>>, mut request: Request) -> St
     let Ok(_upload) = broker.sse.1.try_acquire() else {
         return StatusCode::TOO_MANY_REQUESTS;
     };
-    let overhead = if broker.is_encrypted() {
-        crate::secure::TAG_LEN
-    } else {
-        0
-    };
-    DefaultBodyLimit::max(p::MAX_CONTROL + 6 + overhead).apply(&mut request);
+    DefaultBodyLimit::max(p::MAX_CONTROL + 6 + crate::secure::TAG_LEN).apply(&mut request);
     let body = tokio::select! {
         biased;
         _ = closed.cancelled() => return StatusCode::NOT_FOUND,
@@ -179,11 +174,6 @@ pub async fn send(State(broker): State<Arc<Broker>>, mut request: Request) -> St
         Message::Ping(Bytes::new())
     } else {
         // Secure records are authenticated and decoded by the broker after the Noise handshake.
-        if !broker.is_encrypted() && p::decode(&body).is_err() {
-            closed.cancel();
-            return StatusCode::BAD_REQUEST;
-        }
-
         Message::Binary(body)
     };
 
@@ -333,7 +323,7 @@ mod tests {
         mpsc::Receiver<Message>,
         CancellationToken,
     ) {
-        let broker = Broker::new();
+        let broker = Broker::encrypted([7; 32]);
         let (incoming, input) = mpsc::channel(1);
         let closed = CancellationToken::new();
         broker.sse.0.lock().unwrap().insert(
@@ -376,7 +366,8 @@ mod tests {
         let polls = Arc::new(AtomicUsize::new(0));
         let response = tokio::time::timeout(
             Duration::from_millis(100),
-            router(Broker::new()).oneshot(request(headers, pending_body(polls.clone()))),
+            router(Broker::encrypted([7; 32]))
+                .oneshot(request(headers, pending_body(polls.clone()))),
         )
         .await
         .expect("invalid request must be rejected before awaiting the pending body")
@@ -440,7 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn closing_get_cancels_its_pending_control_body() {
-        let broker = Broker::new();
+        let broker = Broker::encrypted([7; 32]);
         let response = open(State(broker.clone()), HeaderMap::new()).await;
         let mut headers = HeaderMap::new();
         headers.insert(SESSION_HEADER, response.headers()[SESSION_HEADER].clone());
@@ -546,7 +537,7 @@ mod tests {
         let app = Router::new()
             .route("/sse", get(open).post(send))
             .with_state(broker.clone());
-        let maximum_frame = p::encode(p::ACK, &vec![b'x'; p::MAX_CONTROL]).unwrap();
+        let maximum_frame = vec![b'x'; p::MAX_CONTROL + 6 + crate::secure::TAG_LEN];
         let response = app
             .clone()
             .oneshot(request(headers.clone(), Body::from(maximum_frame.clone())))
@@ -604,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_own_sessions_and_reject_origin() {
-        let broker = Broker::new();
+        let broker = Broker::encrypted([7; 32]);
         let response = open(State(broker.clone()), HeaderMap::new()).await;
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -637,27 +628,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_control_frame_cancels_session() {
-        let broker = Broker::new();
-        let response = open(State(broker.clone()), HeaderMap::new()).await;
-        let mut headers = HeaderMap::new();
-        headers.insert(SESSION_HEADER, response.headers()[SESSION_HEADER].clone());
-
-        assert_eq!(
-            send_control(broker.clone(), headers.clone(), Bytes::from_static(b"bad")).await,
-            StatusCode::BAD_REQUEST
-        );
-
-        assert_eq!(
-            send_control(broker, headers, Bytes::new()).await,
-            StatusCode::NOT_FOUND
-        );
-    }
-
-    #[tokio::test]
     async fn idle_response_emits_comments_without_authenticating_and_cleans_up() {
         use futures_util::StreamExt;
-        let broker = Broker::new();
+        let broker = Broker::encrypted([7; 32]);
         let response = open(State(broker.clone()), HeaderMap::new()).await;
         let mut headers = HeaderMap::new();
         headers.insert(SESSION_HEADER, response.headers()[SESSION_HEADER].clone());
@@ -670,29 +643,19 @@ mod tests {
 
         assert!(comment.starts_with(b":"));
         assert!(!comment.windows(5).any(|part| part == b"data:"));
-        // A keepalive never advances authentication: an ACK before HELLO still fails.
+        // A keepalive never advances authentication: a frame before the handshake closes it.
         let ack = p::json(p::ACK, &serde_json::json!({})).unwrap();
 
         assert_eq!(
             send_control(broker.clone(), headers.clone(), ack.into()).await,
             StatusCode::NO_CONTENT
         );
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+        while let Some(frame) = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
             .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let event = std::str::from_utf8(&frame).unwrap();
-        let data = event
-            .lines()
-            .find_map(|line| line.strip_prefix("data: "))
-            .unwrap();
-
-        assert_eq!(
-            p::decode(&URL_SAFE_NO_PAD.decode(data).unwrap()).unwrap().0,
-            p::FAILURE
-        );
-        drop(body);
+            .expect("a rejected handshake must end the GET response")
+        {
+            assert!(!frame.unwrap().windows(5).any(|part| part == b"data:"));
+        }
 
         assert!(broker.sse.0.lock().unwrap().is_empty());
         assert_eq!(

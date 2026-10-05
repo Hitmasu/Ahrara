@@ -184,6 +184,85 @@ func TestRegexQueriesApplyAdmissionThenCallFiltersAcrossEmails(t *testing.T) {
 	}
 }
 
+func TestRegexFiltersSearchTextFieldsAndAnchorExactFields(t *testing.T) {
+	settings := options(t)
+	settings.Filter = &ahrara.Filter{Regex: true, From: `^SENDER@EXAMPLE\.TEST$`, Headers: map[string]string{"X-Flow": "^accept$"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	inbox, err := ahrara.CreateInbox(ctx, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = inbox.Close() })
+
+	for _, message := range []struct{ subject, header, body string }{
+		{"Drop", "reject", "999999 is your verification code"},
+		{"Retain", "accept", "888888 is your verification code"},
+		{"Verification", "accept", "123456 is your verification code\n234567 is your verification code"},
+		{"Verification", "accept", "345678 is your verification code"},
+	} {
+		raw := fmt.Sprintf("From: sender@example.test\r\nTo: %s\r\nSubject: %s\r\nX-Flow: %s\r\n\r\n%s\r\n", inbox.Address, message.subject, message.header, message.body)
+		if err := sendRaw(inbox.Address, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	period, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer stop()
+	var codes []string
+	var terminal error
+
+	for match, err := range inbox.WaitForRegexMatches(period, `(?P<code>[0-9]{6}) is your verification code`, ahrara.RegexOptions{Filter: ahrara.Filter{Regex: true, Subject: "^verification$", Headers: map[string]string{"x-flow": "^ACCEPT$"}}}) {
+		if err != nil {
+			terminal = err
+			break
+		}
+		if len(match.Groups) != 2 || match.Groups[1].Name == nil || *match.Groups[1].Name != "code" || match.Groups[1].Value == nil {
+			t.Fatal("missing named capture")
+		}
+		if match.Groups[0].Value == nil || *match.Groups[0].Value != match.Value {
+			t.Fatal("missing entire match")
+		}
+
+		codes = append(codes, *match.Groups[1].Value)
+	}
+	if strings.Join(codes, ",") != "123456,234567,345678" || !errors.Is(terminal, context.DeadlineExceeded) {
+		t.Fatalf("unexpected extraction: %d codes, deadline=%v", len(codes), errors.Is(terminal, context.DeadlineExceeded))
+	}
+
+	page, err := inbox.ListEmails(ahrara.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Emails) != 3 {
+		t.Fatalf("admission must discard rejected mail, stored=%d", len(page.Emails))
+	}
+
+	_, err = inbox.WaitForEmail(ctx, ahrara.Filter{Regex: true, Subject: "[private"})
+	var invalid *ahrara.Error
+	if !errors.As(err, &invalid) || invalid.Code != "invalid_argument" {
+		t.Fatal("invalid filter must fail before consuming retained mail")
+	}
+
+	short, stopShort := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer stopShort()
+	if _, err := inbox.WaitForEmail(short, ahrara.Filter{Regex: true, EnvelopeSender: "sender@example"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("an envelope sender pattern must match the whole value", err)
+	}
+
+	retained, err := inbox.WaitForEmail(ctx, ahrara.Filter{Subject: "Retain", Text: "888888"})
+	if err != nil || retained.Subject != "Retain" {
+		t.Fatal("method filter consumed unrelated mail", err)
+	}
+
+	_, err = inbox.WaitForRegexMatch(ctx, "[", ahrara.RegexOptions{})
+	var native *ahrara.Error
+	if !errors.As(err, &native) || native.Code != "invalid_argument" {
+		t.Fatalf("invalid regex must fail before waiting: %v", err)
+	}
+}
+
 func TestXPathQueriesAndEarlyRegexExitLeaveNextEmailAvailable(t *testing.T) {
 	inbox := newInbox(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -56,7 +56,7 @@ class PersistenceTest {
       assertEquals(1, email.attachments().size());
       String attachmentId = email.attachments().get(0).attachmentId();
 
-      assertArrayEquals(expected, reopened.downloadAttachment(id, attachmentId).content());
+      assertArrayEquals(expected, reopened.getAttachment(id, attachmentId).content());
       Path saved = reopened.saveAttachment(id, attachmentId, directory);
 
       assertArrayEquals(expected, Files.readAllBytes(saved));

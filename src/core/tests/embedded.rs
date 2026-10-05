@@ -603,14 +603,16 @@ async fn mail_message_projection_preserves_history_and_receipt_state() {
         inbox.address()
     );
     deliver_raw(inbox.address(), &invalid).await;
-    let failure = inbox
+    let skipped = inbox
         .wait_for_mail_message(WaitOptions {
             timeout_ms: Some(2000),
             ..Default::default()
         })
-        .await;
+        .await
+        .unwrap();
 
-    assert!(matches!(failure, Err(ref error) if error.to_string().starts_with("invalid_message:")));
+    // A message that cannot be projected never matches, so it cannot block waits.
+    assert!(skipped.is_none());
     // Failed projection must not commit the receive cursor or erase the MIME.
     let legacy = inbox
         .wait_for_email(WaitOptions {
@@ -641,7 +643,8 @@ async fn admission_filters_drop_before_storage_and_queries_preserve_nonmatches()
     use std::collections::BTreeMap;
     let inbox = Inbox::create(InboxOptions {
         filter: Some(EmailFilter {
-            headers: BTreeMap::from([("X-Project".into(), "wanted".into())]),
+            regex: true,
+            headers: BTreeMap::from([("X-Project".into(), "^wan(?:ted)$".into())]),
             ..Default::default()
         }),
         ..options()
@@ -669,12 +672,29 @@ async fn admission_filters_drop_before_storage_and_queries_preserve_nonmatches()
     let wait = WaitOptions {
         timeout_ms: Some(3000),
         filter: Some(EmailFilter {
-            subject: Some("selected".into()),
-            sender: Some("SENDER".into()),
+            regex: true,
+            subject: Some("^selected$".into()),
+            sender: Some(r"^SENDER <sender@example\.test>$".into()),
             ..Default::default()
         }),
         ..Default::default()
     };
+    let error = inbox
+        .wait_for_email(WaitOptions {
+            filter: Some(EmailFilter {
+                regex: true,
+                subject: Some("[private".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .err()
+        .expect("invalid regex must fail before consuming mail");
+    assert_eq!(
+        error.to_string(),
+        "invalid_argument: invalid filter regular expression"
+    );
     let first = inbox
         .wait_for_regex_match("code=(?P<code>\\d+)", wait.clone())
         .await

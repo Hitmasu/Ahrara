@@ -1,12 +1,27 @@
 "use strict";
 
+// Every locale (index.html, pt-br/, es/) shares this file: interface text comes from the
+// page's #ui-strings JSON, and site files resolve from this script's URL.
+const ui = JSON.parse(document.getElementById("ui-strings").textContent);
+
 // Browsers block manifest requests from file://, while the page itself works offline.
 if (location.protocol !== "file:") {
   const manifest = document.createElement("link");
   manifest.rel = "manifest";
-  manifest.href = "site.webmanifest";
+  manifest.href = new URL("site.webmanifest", document.currentScript.src).href;
   document.head.append(manifest);
 }
+
+// Close the language menu like a native select.
+const languages = document.querySelector("details.languages");
+document.addEventListener("click", (event) => {
+  if (!languages.contains(event.target)) languages.open = false;
+});
+languages.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !languages.open) return;
+  languages.open = false;
+  languages.querySelector("summary").focus();
+});
 
 function copyFallback(text) {
   const field = document.createElement("textarea");
@@ -22,85 +37,206 @@ function copyFallback(text) {
   }
 }
 
-const tabs = [...document.querySelectorAll(".method-tab")];
-const panel = document.getElementById("install-panel");
-const code = document.getElementById("install-command");
-const button = panel.querySelector(".copy-button");
 const status = document.getElementById("copy-status");
-let reset;
 
-function resetCopy() {
-  clearTimeout(reset);
-  delete button.dataset.copied;
-  button.setAttribute("aria-label", "Copy command");
-  button.title = "Copy command";
-  status.textContent = "";
-}
+// Native selects cannot show icons in their options, so each one gets a listbox button.
+// The select stays the source of truth: choosing an item sets its value and fires "change".
+function enhanceSelect(select, icon) {
+  const label = document.querySelector(`label[for="${select.id}"]`).textContent;
+  const button = document.createElement("button");
+  const current = document.createElement("span");
+  const list = document.createElement("ul");
+  const items = [];
+  let active = 0;
+  button.type = "button";
+  button.className = "method-button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-label", label);
+  button.append(current);
+  list.className = "method-list";
+  list.id = `${select.id}-list`;
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", label);
+  list.tabIndex = -1;
+  list.hidden = true;
+  button.setAttribute("aria-controls", list.id);
 
-function selectMethod(selected) {
-  for (const tab of tabs) {
-    const active = tab === selected;
-    tab.setAttribute("aria-selected", String(active));
-    tab.tabIndex = active ? 0 : -1;
+  for (const node of select.children) {
+    const options = node.tagName === "OPTGROUP" ? [...node.children] : [node];
+    if (node.tagName === "OPTGROUP") {
+      const heading = document.createElement("li");
+      heading.className = "method-group";
+      heading.setAttribute("role", "presentation");
+      heading.textContent = node.label;
+      list.append(heading);
+    }
+    for (const option of options) {
+      const item = document.createElement("li");
+      const image = document.createElement("img");
+      item.id = `${select.id}-${option.value}`;
+      item.className = "method-option";
+      item.setAttribute("role", "option");
+      image.src = icon.src.replace(/[^/]+$/, option.dataset.icon);
+      image.alt = "";
+      image.width = image.height = 20;
+      if (option.dataset.iconClass) image.className = option.dataset.iconClass;
+      item.append(image, option.textContent);
+      item.addEventListener("click", () => choose(items.indexOf(item)));
+      item.addEventListener("mousemove", () => highlight(items.indexOf(item)));
+      list.append(item);
+      items.push(item);
+    }
   }
-  const command = selected.dataset.command;
-  code.textContent = command || "";
-  code.parentElement.hidden = !command;
-  button.hidden = !command;
-  panel.querySelector(".download").hidden = Boolean(command);
-  panel.setAttribute("aria-labelledby", selected.id);
-  resetCopy();
-  selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+
+  const options = [...select.options];
+
+  function highlight(index) {
+    active = (index + items.length) % items.length;
+    items.forEach((item, position) => item.classList.toggle("is-active", position === active));
+    list.setAttribute("aria-activedescendant", items[active].id);
+    items[active].scrollIntoView({ block: "nearest" });
+  }
+
+  function sync() {
+    current.textContent = select.selectedOptions[0].textContent;
+    items.forEach((item, position) => item.setAttribute("aria-selected", String(options[position].selected)));
+  }
+
+  function open() {
+    list.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    highlight(select.selectedIndex);
+    list.focus({ preventScroll: true });
+  }
+
+  function close(focus = true) {
+    if (list.hidden) return;
+    list.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    if (focus) button.focus({ preventScroll: true });
+  }
+
+  function choose(index) {
+    if (select.selectedIndex !== index) {
+      select.selectedIndex = index;
+      select.dispatchEvent(new Event("change"));
+    }
+    close();
+  }
+
+  button.addEventListener("click", () => (list.hidden ? open() : close()));
+  button.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+      event.preventDefault();
+      open();
+    }
+  });
+  list.addEventListener("keydown", (event) => {
+    const moves = { ArrowDown: active + 1, ArrowUp: active - 1, Home: 0, End: items.length - 1, PageDown: active + 8, PageUp: active - 8 };
+    if (event.key in moves) highlight(Math.max(0, Math.min(items.length - 1, moves[event.key])));
+    else if (event.key === "Enter" || event.key === " ") choose(active);
+    else if (event.key === "Escape") close();
+    else if (event.key === "Tab") return close(false);
+    else if (event.key.length === 1) {
+      // Jump to the next item starting with the typed letter.
+      const letter = event.key.toLowerCase();
+      const next = items.findIndex((item, position) => position > active && item.textContent.toLowerCase().startsWith(letter));
+      const first = items.findIndex((item) => item.textContent.toLowerCase().startsWith(letter));
+      if (next >= 0 || first >= 0) highlight(next >= 0 ? next : first);
+    } else return;
+    event.preventDefault();
+  });
+  document.addEventListener("click", (event) => {
+    if (!button.contains(event.target) && !list.contains(event.target)) close(false);
+  });
+
+  select.addEventListener("change", sync);
+  select.classList.add("visually-hidden");
+  select.tabIndex = -1;
+  select.setAttribute("aria-hidden", "true");
+  select.after(button, list);
+  sync();
 }
 
-for (const [index, tab] of tabs.entries()) {
-  tab.addEventListener("click", () => selectMethod(tab));
-  tab.addEventListener("keydown", (event) => {
-    let next;
-    if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = tabs.length - 1;
-    else return;
-    event.preventDefault();
-    tabs[next].focus({ preventScroll: true });
-    selectMethod(tabs[next]);
+// Each installer (CLI, AI agents, SDKs, test frameworks) owns a dropdown, a command
+// panel and a copy button; SDK and framework installers also switch their example.
+for (const installer of document.querySelectorAll(".installer")) {
+  const select = installer.querySelector(".method-select");
+  const icon = installer.querySelector(".method-icon");
+  const panel = installer.querySelector(".install-panel");
+  const code = panel.querySelector("code");
+  const button = panel.querySelector(".copy-button");
+  const prompt = panel.querySelector(".prompt");
+  const download = panel.querySelector(".download");
+  const hint = installer.querySelector(".install-hint");
+  const example = document.getElementById(installer.dataset.example);
+  let reset;
+
+  function resetCopy() {
+    clearTimeout(reset);
+    delete button.dataset.copied;
+    button.setAttribute("aria-label", ui.copyCommand);
+    button.title = ui.copyCommand;
+    status.textContent = "";
+  }
+
+  function selectMethod() {
+    const option = select.selectedOptions[0];
+    const command = option.dataset.command;
+    code.textContent = command || "";
+    prompt.textContent = option.dataset.prompt ?? "$";
+    hint.textContent = option.dataset.hint || "";
+    // Icons sit beside this page's assets, including on localized pages.
+    icon.src = icon.src.replace(/[^/]+$/, option.dataset.icon);
+    icon.className = `method-icon ${option.dataset.iconClass || ""}`.trim();
+    code.parentElement.hidden = !command;
+    button.hidden = !command;
+    if (download) download.hidden = Boolean(command);
+    for (const sample of example?.querySelectorAll("[data-for]") ?? []) sample.hidden = sample.dataset.for !== option.value;
+    resetCopy();
+  }
+
+  select.addEventListener("change", selectMethod);
+  enhanceSelect(select, icon);
+  // Browsers may restore a previous choice on reload; show its command and example.
+  selectMethod();
+
+  button.addEventListener("click", async () => {
+    const command = code.textContent;
+    resetCopy();
+    let copied = false;
+    try {
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch {
+        copyFallback(command);
+      }
+      copied = true;
+    } catch {
+      // Report clipboard failure locally; the command remains selectable.
+    }
+    // A pending clipboard request must not mark a different method as copied.
+    if (command !== code.textContent || button.hidden) return;
+    if (copied) {
+      button.dataset.copied = "";
+      button.setAttribute("aria-label", ui.commandCopied);
+      button.title = ui.copiedTitle;
+      status.textContent = ui.copiedStatus;
+    } else {
+      button.setAttribute("aria-label", ui.copyFailed);
+      button.title = ui.copyUnavailable;
+      status.textContent = button.title;
+    }
+    button.focus({ preventScroll: true });
+    reset = setTimeout(resetCopy, 1500);
   });
 }
-
-button.addEventListener("click", async () => {
-  const command = code.textContent;
-  resetCopy();
-  let copied = false;
-  try {
-    try {
-      await navigator.clipboard.writeText(command);
-    } catch {
-      copyFallback(command);
-    }
-    copied = true;
-  } catch {
-    // Report clipboard failure locally; the command remains selectable.
-  }
-  // A pending clipboard request must not mark a different method as copied.
-  if (command !== code.textContent || button.hidden) return;
-  if (copied) {
-    button.dataset.copied = "";
-    button.setAttribute("aria-label", "Command copied");
-    button.title = "Copied!";
-    status.textContent = "Command copied to clipboard.";
-  } else {
-    button.setAttribute("aria-label", "Copy failed. Select the command to copy manually.");
-    button.title = "Copy unavailable. Select the command to copy manually.";
-    status.textContent = button.title;
-  }
-  button.focus({ preventScroll: true });
-  reset = setTimeout(resetCopy, 1500);
-});
 
 const terminal = document.querySelector(".terminal-preview");
 const terminalCommand = terminal.querySelector(".terminal-prompt code");
 const terminalStatus = terminal.querySelector("dd.terminal-connected");
+const connected = terminalStatus.textContent;
 const emailRows = [...terminal.querySelectorAll("tbody tr")];
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const terminalTimers = [];
@@ -117,7 +253,7 @@ function showTerminal() {
   terminalTimers.forEach(clearTimeout);
   terminalObserver?.disconnect();
   terminalCommand.textContent = "ahrara";
-  terminalStatus.textContent = "[+] Connected";
+  terminalStatus.textContent = connected;
   terminal.dataset.stage = "done";
   // Keep the newest email first, including when motion is disabled mid-demo.
   for (const [index, row] of emailRows.entries()) {
@@ -137,11 +273,11 @@ function animateTerminal() {
   }
   later(1100, () => {
     terminal.dataset.stage = "connecting";
-    terminalStatus.textContent = "[~] Connecting…";
+    terminalStatus.textContent = ui.connecting;
   });
   later(1700, () => {
     terminal.dataset.stage = "receiving";
-    terminalStatus.textContent = "[+] Connected";
+    terminalStatus.textContent = connected;
   });
   // An older email arrives first; the next one is inserted above it.
   for (const [index, row] of [...emailRows].reverse().entries()) {

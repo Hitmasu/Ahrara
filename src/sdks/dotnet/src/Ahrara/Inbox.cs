@@ -12,6 +12,7 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
     private readonly InboxHandle _handle;
     private readonly SemaphoreSlim _wait = new(1, 1);
     private readonly MailMessageMapper _messages = new();
+    private int _disposed;
 
     internal Inbox(ulong handle, string address)
     {
@@ -29,7 +30,7 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
     public InboxCredentials ExportCredentials()
     {
         ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
-        var result = Native.Call(new { op = "export_credentials", handle = _handle.Id });
+        var result = Call(new { op = "export_credentials", handle = _handle.Id });
         return new InboxCredentials(
             result.GetProperty("address").GetString()!,
             result.GetProperty("recovery_key").GetString()!);
@@ -101,7 +102,7 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
                     ? Math.Min(100, Math.Ceiling(duration.TotalMilliseconds))
                     : 100;
                 var result = await Task.Run(
-                    () => Native.Call(request((uint)Math.Max(1, slice))), CancellationToken.None)
+                    () => Call(request((uint)Math.Max(1, slice))), CancellationToken.None)
                     .ConfigureAwait(false);
                 if (result.GetProperty("status").GetString() == "matched")
                 {
@@ -488,19 +489,41 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
     private Task<JsonElement> CallAsync(object request, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
-        return Task.Run(() => Native.Call(request), cancellationToken);
+        return Task.Run(() => Call(request), cancellationToken);
+    }
+
+    // A call racing disposal reports the documented disposal error, not the native one.
+    private JsonElement Call(object request)
+    {
+        try
+        {
+            return Native.Call(request);
+        }
+        catch (AhraraException error) when (error.Code == "inbox_closed" && _handle.IsClosed)
+        {
+            throw new ObjectDisposedException(GetType().FullName);
+        }
     }
 
     /// <summary>Disconnects the inbox, interrupts waits, and releases its native resources. Repeated calls are safe.</summary>
-    public void Dispose() => _handle.Dispose();
+    /// <remarks>Native shutdown can wait several seconds for the relay; prefer <see cref="DisposeAsync"/> in asynchronous code.</remarks>
+    /// <exception cref="AhraraException">Native cleanup fails.</exception>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        // Waits observe disposal at once; the handle finalizer no longer closes it.
+        _handle.SetHandleAsInvalid();
+        Native.Call(new { op = "close", handle = _handle.Id });
+    }
 
     /// <summary>Disconnects the inbox and releases its resources for use with <c>await using</c>.</summary>
-    /// <returns>A completed task after native shutdown.</returns>
-    public ValueTask DisposeAsync()
-    {
-        Dispose();
-        return ValueTask.CompletedTask;
-    }
+    /// <returns>A task completing after native shutdown, which runs without blocking the caller.</returns>
+    /// <exception cref="AhraraException">Native cleanup fails.</exception>
+    public ValueTask DisposeAsync() => new(Task.Run(Dispose));
 
     private static void ValidateDuration(TimeSpan? duration, string name)
     {

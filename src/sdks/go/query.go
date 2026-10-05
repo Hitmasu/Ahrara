@@ -26,7 +26,8 @@ const (
 type RegexOptions struct {
 	// Source defaults to RegexText.
 	Source RegexSource `json:"source,omitempty"`
-	// IgnoreCase enables Unicode case-insensitive matching.
+	// IgnoreCase enables Unicode case-insensitive matching. Unlike Filter.Regex
+	// patterns, queries are case-sensitive by default.
 	IgnoreCase bool `json:"ignore_case,omitempty"`
 	// MultiLine lets ^ and $ match each line.
 	MultiLine bool `json:"multi_line,omitempty"`

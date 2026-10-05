@@ -31,18 +31,37 @@ impl From<anyhow::Error> for ApiError {
     }
 }
 
+/// Missing rows and core `*_not_found:` errors identify absent resources.
+pub(crate) fn not_found(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<rusqlite::Error>()
+        .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows))
+        || error
+            .to_string()
+            .split_once(':')
+            .is_some_and(|(code, _)| code.ends_with("_not_found"))
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let missing = self
-            .0
-            .downcast_ref::<rusqlite::Error>()
-            .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows));
-        let (status, code) = if missing {
-            (StatusCode::NOT_FOUND, "not_found")
-        } else if self.0.to_string().starts_with("listener_") {
-            (StatusCode::CONFLICT, "listener_unavailable")
+        let text = self.0.to_string();
+        let (status, code, message) = if not_found(&self.0) {
+            (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Resource not found".into(),
+            )
+        } else if text.starts_with("listener_") || text.starts_with("connection_failed:") {
+            (StatusCode::CONFLICT, "listener_unavailable", text)
+        } else if text.starts_with("invalid_argument:") {
+            (StatusCode::BAD_REQUEST, "invalid_argument", text)
         } else {
-            (StatusCode::BAD_REQUEST, "request_failed")
+            // Storage, filesystem and parser details stay in the local process.
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Internal error".into(),
+            )
         };
 
         (
@@ -50,11 +69,7 @@ impl IntoResponse for ApiError {
             Json(json!({
                 "error": {
                     "code": code,
-                    "message": if missing {
-                        "Resource not found".into()
-                    } else {
-                        self.0.to_string()
-                    }
+                    "message": message
                 }
             })),
         )
@@ -166,6 +181,8 @@ pub struct Pagination {
 pub struct EmailQuery {
     pub address: Option<String>,
     pub from: Option<String>,
+    /// ASCII case-insensitive substring of the To header or SMTP recipient.
+    pub to: Option<String>,
     pub subject: Option<String>,
     pub after_id: Option<i64>,
     pub limit: Option<u32>,
@@ -176,10 +193,10 @@ impl From<EmailQuery> for Filters {
         Self {
             address: q.address,
             from_contains: q.from,
+            to_contains: q.to,
             subject_contains: q.subject,
             after_id: q.after_id,
             limit: q.limit,
-            ..Default::default()
         }
     }
 }
@@ -191,6 +208,8 @@ pub struct WaitQuery {
     pub timeout: Option<u64>,
     pub address: Option<String>,
     pub from: Option<String>,
+    /// ASCII case-insensitive substring of the To header or SMTP recipient.
+    pub to: Option<String>,
     pub subject: Option<String>,
     pub after_id: Option<i64>,
 }
@@ -370,9 +389,10 @@ async fn wait(
     let filters = Filters {
         address: q.address,
         from_contains: q.from,
+        to_contains: q.to,
         subject_contains: q.subject,
         after_id: q.after_id,
-        ..Default::default()
+        limit: None,
     };
     let result = core.wait_email(filters, q.timeout.unwrap_or(60)).await?;
     if !still_authorized(&core, &auth).await {
@@ -564,7 +584,7 @@ async fn events(
 #[openapi(
     info(
         title = "Ahrara local API",
-        version = "0.1.0",
+        version = env!("CARGO_PKG_VERSION"),
         description = "Loopback API with optional HTTPS. Server stores neither aliases nor email. All inbox data is local SQLite."
     ),
     paths(
@@ -836,4 +856,56 @@ pub(crate) async fn serve_mode(core: Arc<Core>, mode: &str) -> Result<()> {
     server.stop().await;
     core.stop().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn response(error: anyhow::Error) -> (StatusCode, serde_json::Value) {
+        let response = ApiError(error).into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn errors_map_to_validation_not_found_conflict_or_internal() {
+        for (error, status, code) in [
+            (
+                anyhow::anyhow!("invalid_argument: invalid pagination"),
+                StatusCode::BAD_REQUEST,
+                "invalid_argument",
+            ),
+            (
+                rusqlite::Error::QueryReturnedNoRows.into(),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                anyhow::anyhow!("attachment_not_found: attachment does not exist"),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                anyhow::anyhow!("listener_not_started"),
+                StatusCode::CONFLICT,
+                "listener_unavailable",
+            ),
+            (
+                anyhow::anyhow!("disk I/O error at /private/profile"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+        ] {
+            let (actual, body) = response(error).await;
+
+            assert_eq!(actual, status);
+            assert_eq!(body["error"]["code"], code);
+            assert!(!body.to_string().contains("/private/profile"));
+        }
+    }
 }

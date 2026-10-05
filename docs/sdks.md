@@ -37,7 +37,8 @@ Ahrara extension.
 4. **Inspect or keep the message.** Receiving marks it as handled; it remains
    readable until deleted or its temporary profile is removed.
 5. **Close the inbox.** Use your language's disposal or cleanup mechanism when
-   the application or test is finished.
+   the application or test is finished. SDKs with garbage collection also close
+   an unreachable inbox, but only as a fallback.
 
 Keep the inbox connected while expecting mail. The relay has no offline queue;
 reopening an address does not recover messages sent while it was disconnected.
@@ -83,6 +84,10 @@ Cancelling a wait or leaving a stream keeps the inbox connected. Close the inbox
 to stop reception. Callback errors propagate; callbacks must cooperate with
 cancellation during their own work.
 
+Concurrent waits, streams, and extraction calls on one inbox are queued and run
+one at a time; a queued call still honours its own timeout and cancellation. Use
+separate inboxes for work that must receive in parallel.
+
 Receive and extraction calls share handled-message state. A message selected by
 one call is not delivered again by another, even if a callback fails. Use message
 IDs and the stored history when you need to retry processing.
@@ -90,9 +95,58 @@ IDs and the stored history when you need to retry processing.
 ## Filters and extraction
 
 Filter by sender, subject, To/Cc, body text, headers, SMTP envelope fields,
-Message-ID, or attachment presence. All supplied conditions must match. Text and
-header filters match substrings without case sensitivity; envelope fields and
-Message-ID match the complete value, ignoring case.
+Message-ID, or attachment presence. All supplied conditions must match. Field
+names follow each language's conventions, such as `envelopeSender`,
+`EnvelopeSender`, or `envelope_sender`; Go names `sender` `From`.
+
+| Field | Compares | Literal value | With `regex: true` |
+| --- | --- | --- | --- |
+| `sender` | Decoded From header, including display names | Case-insensitive substring | Matches anywhere |
+| `subject` | Decoded Subject header | Case-insensitive substring | Matches anywhere |
+| `to`, `cc` | Decoded To or Cc headers | Case-insensitive substring | Matches anywhere |
+| `text` | Full decoded plain-text body, excluding attachments | Case-insensitive substring | Matches anywhere |
+| `headers` | Values of each named header; any repeated value can match | Case-insensitive substring | Matches anywhere |
+| `recipient` | SMTP envelope recipient | Whole value, ignoring case | Must match the whole value |
+| `envelope_sender` | SMTP envelope sender | Whole value, ignoring case | Must match the whole value |
+| `message_id` | Message-ID header | Whole value, ignoring case | Must match the whole value |
+| `has_attachments` | Presence or absence of attachments | Boolean | Boolean |
+
+Header names are always literal and case-insensitive. The separate `subject` and
+`from` wait options, where an SDK offers them, remain literal substrings.
+
+Set `regex: true` on the filter to interpret every string condition, including
+header values, as a Rust regular expression. Patterns are strings rather than
+language-native regex objects. Header names remain literal and case-insensitive;
+the attachment flag remains boolean. All conditions still combine with AND.
+
+```js
+const email = await inbox.waitForEmail({
+  timeoutMs: 30_000,
+  filter: {
+    regex: true,
+    subject: '^(Verification|Confirm email)( [0-9]+)?$',
+    hasAttachments: false,
+  },
+});
+```
+
+Recipient, envelope sender, and Message-ID patterns are anchored to the whole
+value, so `sender@example` does not match `sender@example.test`. Other patterns
+search anywhere in the field; use `^` and `$` for a complete match. Filter
+matching ignores case by default; `(?-i)` overrides this for a pattern. Regex
+extraction queries are the opposite: case-sensitive unless their ignore-case
+option is set. Groups, alternation, character
+classes, repetition and inline flags such as `(?m)` and `(?s)` are supported;
+lookaround and backreferences are not. Escape metacharacters in literal values:
+`example\.com` matches a literal dot. This is regex syntax, not file globbing:
+`*` repeats the preceding expression; `.*` matches arbitrary text.
+
+Patterns are validated before opening a profile or starting a receive. Invalid
+or oversized expressions return `invalid_argument` without consuming mail.
+Filter values require 1–4096 UTF-8 bytes without NUL; at most 64 header conditions
+are allowed. Each SDK request, including all of its filter values, is limited to
+1 MiB of JSON. Omitting `regex` or setting it to `false` preserves literal
+matching.
 
 Where you apply a filter changes what happens to other mail:
 

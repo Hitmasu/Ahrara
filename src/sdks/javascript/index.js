@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAbsolute } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { inspect, promisify } from "node:util";
 import koffi from "koffi";
 
@@ -48,7 +49,7 @@ function deadlineFor(timeoutMs) {
 }
 
 function nativeFilter(filter) {
-  if (filter === undefined) return undefined;
+  if (filter == null) return undefined;
 
   const { envelopeSender, messageId, hasAttachments, ...fields } = filter;
   return {
@@ -71,7 +72,7 @@ function loadNative() {
         ? "libahrara_native.dylib"
         : "libahrara_native.so";
   const path =
-    process.env.AHRARA_NATIVE_LIBRARY ??
+    process.env.AHRARA_NATIVE_LIBRARY ||
     fileURLToPath(
       new URL(
         `./native/${process.platform}-${process.arch}/${name}`,
@@ -120,25 +121,31 @@ function loadNative() {
   return nativeCall;
 }
 
+// Releases inboxes collected without close(); explicit close remains the primary path.
+const unclosed = new FinalizationRegistry(({ call, handle }) =>
+  call({ op: "close", handle }).catch(() => {}),
+);
+
 /** Owns one relay subscription. Close explicitly; stopping a stream keeps it open. */
 export class Inbox {
   #handle;
   #call;
   #closing;
-  #waiting = false;
+  #queue = Promise.resolve();
 
   /** @internal Use createInbox(). */
   constructor(handle, address, call) {
     this.#handle = handle;
     this.address = address;
     this.#call = call;
+    unclosed.register(this, { call, handle }, this);
   }
 
   /**
    * Consume one matching email, including messages buffered before this call.
    * @param {import('./index.js').WaitOptions} [options] Omit timeoutMs to wait indefinitely.
    * @returns {Promise<import('./index.js').Email>} The next unconsumed matching email.
-   * @throws {AhraraError} `timeout`, `inbox_closed`, `wait_in_progress`, or a native error.
+   * @throws {AhraraError} `timeout`, `inbox_closed`, or a native error.
    * @throws {Error} AbortSignal.reason when cancelled; the inbox remains usable.
    */
   async waitForEmail({ subject, from, filter, ...options } = {}) {
@@ -153,27 +160,41 @@ export class Inbox {
 
   async #wait(op, values, { timeoutMs, signal } = {}) {
     const deadline = deadlineFor(timeoutMs);
-    if (this.#closing)
-      throw new AhraraError("inbox_closed", "The inbox is closed.");
-    if (this.#waiting)
-      throw new AhraraError(
-        "wait_in_progress",
-        "Only one wait per inbox may run at a time.",
-      );
-
-    this.#waiting = true;
+    // Waits take turns in call order; a queued wait still observes its
+    // deadline, signal, and close.
+    const previous = this.#queue;
+    let release;
+    const finished = new Promise((resolve) => (release = resolve));
+    this.#queue = previous.then(() => finished);
+    let queued = true;
+    previous.then(() => (queued = false));
     try {
-      do {
+      while (queued && performance.now() < deadline) {
         signal?.throwIfAborted();
-        const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
-        const result = await this.#call({
-          op,
-          handle: this.#handle,
-          timeout_ms: Math.min(100, remaining),
-          ...values,
-        });
-        if (result.status === "matched") return result;
-      } while (performance.now() < deadline);
+        const remaining = Math.ceil(deadline - performance.now());
+        await Promise.race([
+          previous,
+          delay(Math.min(100, remaining), undefined, { ref: false }),
+        ]);
+      }
+      if (!queued) {
+        do {
+          signal?.throwIfAborted();
+          if (this.#closing)
+            throw new AhraraError("inbox_closed", "The inbox is closed.");
+          const remaining = Math.max(
+            1,
+            Math.ceil(deadline - performance.now()),
+          );
+          const result = await this.#call({
+            op,
+            handle: this.#handle,
+            timeout_ms: Math.min(100, remaining),
+            ...values,
+          });
+          if (result.status === "matched") return result;
+        } while (performance.now() < deadline);
+      }
 
       signal?.throwIfAborted();
       throw new AhraraError(
@@ -181,7 +202,7 @@ export class Inbox {
         `No matching email arrived within ${timeoutMs} ms.`,
       );
     } finally {
-      this.#waiting = false;
+      release();
     }
   }
 
@@ -481,6 +502,7 @@ export class Inbox {
    * @throws {AhraraError} If native cleanup fails.
    */
   close() {
+    unclosed.unregister(this);
     this.#closing ??= this.#call({ op: "close", handle: this.#handle });
     return this.#closing.then(() => undefined);
   }

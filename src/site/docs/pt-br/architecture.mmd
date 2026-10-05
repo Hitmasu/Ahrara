@@ -1,0 +1,47 @@
+---
+config:
+  theme: base
+  look: classic
+  htmlLabels: false
+  fontFamily: Arial, sans-serif
+  themeVariables:
+    primaryColor: '#102439'
+    primaryTextColor: '#e1e9f5'
+    primaryBorderColor: '#40516a'
+    lineColor: '#73bde8'
+    secondaryColor: '#0b131e'
+    tertiaryColor: '#0b131e'
+    clusterBkg: '#0b131e'
+    clusterBorder: '#304159'
+    edgeLabelBackground: '#0b131e'
+    fontFamily: 'Arial, sans-serif'
+    fontSize: '14px'
+  flowchart:
+    curve: linear
+    nodeSpacing: 32
+    rankSpacing: 30
+    wrappingWidth: 240
+    padding: 14
+---
+flowchart TB
+  accTitle: Arquitetura de entrega do Ahrara
+  accDescr: O SMTP entrega os e-mails ao servidor Ahrara. O WSS conecta o servidor pelo Cloudflare Tunnel ao cliente Ahrara ou à aplicação com SDK. As mensagens aceitas são salvas em uma caixa criptografada na máquina do usuário.
+  Provider["Provedor de e-mail"]
+  subgraph Remote["Infraestrutura remota"]
+    Routing["Cloudflare Email Routing"]
+    Server["Servidor Ahrara<br/>Encaminhamento de e-mails"]
+    Tunnel["Cloudflare Tunnel"]
+    Routing -->|SMTP + STARTTLS| Server
+    Server <--> Tunnel
+  end
+  subgraph Local["Seu computador"]
+    Client["Cliente Ahrara<br/>Terminal · Web · API · MCP"]
+    SDK["Aplicação com SDK<br/>Automação de e-mails"]
+    Inbox[("Caixa local criptografada")]
+    SDKInbox[("Perfil do SDK<br/>SQLCipher")]
+    Client <-->|gravar / ler| Inbox
+    SDK <-->|gravar / ler| SDKInbox
+  end
+  Provider --> Routing
+  Tunnel <-->|WSS| Client
+  Tunnel <-->|WSS| SDK

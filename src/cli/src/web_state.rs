@@ -133,14 +133,23 @@ impl WebState {
     }
 
     pub fn allow_login(&self, ip: IpAddr) -> bool {
+        let ip = login_client(ip);
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
         attempts.retain(|_, (_, until)| *until + Duration::from_secs(300) > now);
         if attempts.get(&ip).is_some_and(|(_, until)| *until > now) {
             return false;
         }
-        if attempts.len() >= 256 && !attempts.contains_key(&ip) {
-            return false;
+        // Bounded state; evicting the earliest-expiring entry keeps the most
+        // throttled clients without locking out every new address.
+        if attempts.len() >= 256
+            && !attempts.contains_key(&ip)
+            && let Some(oldest) = attempts
+                .iter()
+                .min_by_key(|(_, (_, until))| *until)
+                .map(|(ip, _)| *ip)
+        {
+            attempts.remove(&oldest);
         }
 
         let (count, until) = attempts.entry(ip).or_insert((0, now));
@@ -156,7 +165,15 @@ impl WebState {
     }
 
     pub fn login_succeeded(&self, ip: IpAddr) {
-        self.attempts.lock().unwrap().remove(&ip);
+        self.attempts.lock().unwrap().remove(&login_client(ip));
+    }
+}
+
+// One IPv6 client usually controls a whole /64; IPv4-mapped peers stay IPv4.
+fn login_client(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(ip) => IpAddr::V6((u128::from(ip) & (u128::MAX << 64)).into()),
+        ip => ip,
     }
 }
 

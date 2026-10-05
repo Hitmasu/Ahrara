@@ -28,8 +28,16 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let dirs = ProjectDirs::from("dev", "Ahrara", "ahrara")
-            .expect("application directories unavailable");
+        Self::defaults(ProjectDirs::from("dev", "Ahrara", "ahrara").as_ref())
+    }
+}
+
+impl Config {
+    // Serde also uses these defaults for an explicit --config. Without a home
+    // directory, `load` resolves the relative paths beside that file instead.
+    fn defaults(dirs: Option<&ProjectDirs>) -> Self {
+        let data = dirs.map_or_else(PathBuf::new, |dirs| dirs.data_local_dir().to_owned());
+        let config = dirs.map_or_else(PathBuf::new, |dirs| dirs.config_dir().to_owned());
         Self {
             server_url: "wss://ahrara.dev".into(),
             server_public_key: option_env!("AHRARA_SERVER_PUBLIC_KEY")
@@ -38,20 +46,18 @@ impl Default for Config {
             smtp_dev_address: "localhost:2525".into(),
             domain: "ahrara.dev".into(),
             tls_ca_path: None,
-            database_path: dirs.data_local_dir().join("ahrara.db"),
-            identity_path: dirs.config_dir().join("identity.key"),
+            database_path: data.join("ahrara.db"),
+            identity_path: config.join("identity.key"),
             api_bind: "127.0.0.1:8787".into(),
             api_https: false,
-            api_tls_cert_path: dirs.config_dir().join("api.pem"),
-            api_tls_key_path: dirs.config_dir().join("api-key.pem"),
-            api_token_path: dirs.config_dir().join("api.token"),
-            mcp_auth: false,
+            api_tls_cert_path: config.join("api.pem"),
+            api_tls_key_path: config.join("api-key.pem"),
+            api_token_path: config.join("api.token"),
+            mcp_auth: true,
             check_for_updates: true,
         }
     }
-}
 
-impl Config {
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let default_path = ProjectDirs::from("dev", "Ahrara", "ahrara")
             .context("application directories unavailable")?
@@ -120,12 +126,25 @@ impl Config {
     }
 }
 
+/// Creates an owner-only directory. Existing directories, such as a caller's
+/// chosen profile location, keep their permissions.
 pub fn private_dir(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path)?;
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
     }
     #[cfg(windows)]
     private_windows_acl(path)?;
@@ -205,4 +224,35 @@ fn private_windows_acl(path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_hardens_only_directories_it_creates() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("shared");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&existing).unwrap();
+        let created = existing.join("profile");
+        private_dir(&created).unwrap();
+
+        assert_eq!(mode(&existing), 0o755);
+        assert_eq!(mode(&created), 0o700);
+    }
+
+    #[test]
+    fn defaults_without_application_directories_stay_relative_to_the_config() {
+        let config = Config::defaults(None);
+
+        assert_eq!(config.database_path, Path::new("ahrara.db"));
+        assert_eq!(config.identity_path, Path::new("identity.key"));
+        assert_eq!(config.api_token_path, Path::new("api.token"));
+    }
 }

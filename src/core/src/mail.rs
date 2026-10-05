@@ -266,7 +266,7 @@ fn attachment_metadata(index: usize, part: &ParsedMail<'_>) -> Result<Attachment
 
 pub fn parse(metadata: crate::storage::Email, raw: &[u8], max_body: usize) -> Result<ParsedEmail> {
     if max_body == 0 || max_body > 256 * 1024 {
-        bail!("max_body_bytes must be 1..262144")
+        bail!("invalid_argument: max_body_bytes must be 1..262144")
     }
 
     let mut result = ParsedEmail {
@@ -346,26 +346,34 @@ pub fn attachment(raw: &[u8], id: &str) -> Result<(Attachment, Vec<u8>)> {
         .parse::<usize>()
         .ok()
         .filter(|n| *n > 0)
-        .context("invalid attachment id")?
+        .context("invalid_argument: invalid attachment id")?
         - 1;
-    let parsed = mailparse::parse_mail(raw)?;
+    let parsed = mailparse::parse_mail(raw)
+        .map_err(|_| anyhow::anyhow!("invalid_message: invalid MIME message"))?;
     let parts = attachment_parts(&parsed);
     let part = parts
         .get(index)
-        .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        .context("attachment_not_found: attachment does not exist")?;
+    let invalid = || anyhow::anyhow!("invalid_message: invalid attachment encoding");
 
-    Ok((attachment_metadata(index, part)?, part.get_body_raw()?))
+    Ok((
+        attachment_metadata(index, part).map_err(|_| invalid())?,
+        part.get_body_raw().map_err(|_| invalid())?,
+    ))
 }
 
 pub use crate::email_html::HtmlEmail;
 
 pub fn html_body(raw: &[u8], allow_remote: bool) -> Result<HtmlEmail> {
-    let parsed = mailparse::parse_mail(raw)?;
+    let parsed = mailparse::parse_mail(raw)
+        .map_err(|_| anyhow::anyhow!("invalid_message: invalid MIME message"))?;
     let part = parsed
         .parts()
         .find(|p| !is_attachment(p) && p.ctype.mimetype == "text/html")
-        .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-    let html = part.get_body()?;
+        .context("html_not_found: email has no HTML body")?;
+    let html = part
+        .get_body()
+        .map_err(|_| anyhow::anyhow!("invalid_message: invalid body encoding"))?;
     crate::email_html::render(&html, &parsed, allow_remote)
 }
 
@@ -380,13 +388,24 @@ pub fn save_attachment(metadata: &Attachment, bytes: &[u8], destination: &Path) 
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let target = parent
-        .canonicalize()?
-        .join(target.file_name().context("invalid destination")?);
-    let mut f = OpenOptions::new()
+        .canonicalize()
+        .context("invalid_argument: attachment destination directory does not exist")?
+        .join(
+            target
+                .file_name()
+                .context("invalid_argument: invalid attachment destination")?,
+        );
+    let mut f = match OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&target)
-        .context("cannot create attachment; destination must not already exist")?;
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!("invalid_argument: attachment destination already exists")
+        }
+        Err(error) => return Err(anyhow::Error::from(error).context("cannot create attachment")),
+    };
     if let Err(e) = f.write_all(bytes).and_then(|_| f.sync_all()) {
         drop(f);
         let _ = std::fs::remove_file(&target);
@@ -580,6 +599,54 @@ mod message_tests {
         );
 
         assert_eq!(attachment(raw, "1").unwrap().0.content_type, "text/plain");
+    }
+
+    #[test]
+    fn missing_parts_and_existing_destinations_report_stable_error_codes() {
+        let code = |error: anyhow::Error| error.to_string().split(':').next().unwrap().to_owned();
+        let raw = b"Content-Type: text/plain\r\n\r\nNo HTML";
+        let mut malformed = String::from("Content-Type: multipart/mixed; boundary=m\r\n\r\n");
+
+        for _ in 0..256 {
+            malformed.push_str("--m\r\nContent-Type: text/plain\r\n\r\npart\r\n");
+        }
+
+        assert_eq!(
+            code(attachment(raw, "1").err().unwrap()),
+            "attachment_not_found"
+        );
+        assert_eq!(
+            code(attachment(raw, "first").err().unwrap()),
+            "invalid_argument"
+        );
+        assert_eq!(code(html_body(raw, false).err().unwrap()), "html_not_found");
+        assert_eq!(
+            code(html_body(malformed.as_bytes(), false).err().unwrap()),
+            "invalid_message"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let metadata = Attachment {
+            attachment_id: "1".into(),
+            filename: "file.txt".into(),
+            content_type: "text/plain".into(),
+            size: 5,
+            content_disposition: "attachment".into(),
+        };
+        save_attachment(&metadata, b"saved", directory.path()).unwrap();
+
+        for destination in [
+            directory.path().to_owned(),
+            directory.path().join("missing").join("file.txt"),
+        ] {
+            assert_eq!(
+                code(
+                    save_attachment(&metadata, b"other", &destination)
+                        .err()
+                        .unwrap()
+                ),
+                "invalid_argument"
+            );
+        }
     }
 
     #[test]

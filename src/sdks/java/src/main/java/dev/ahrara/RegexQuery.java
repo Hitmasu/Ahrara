@@ -8,7 +8,8 @@ import java.util.Objects;
  *
  * @param pattern regex expression
  * @param source text, html, subject, or raw
- * @param ignoreCase whether matching ignores case
+ * @param ignoreCase whether matching ignores case; unlike filter regex, queries are case-sensitive
+ *     by default
  * @param multiLine whether anchors match individual lines
  * @param dotMatchesNewLine whether a dot also matches newline characters
  */

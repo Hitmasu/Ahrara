@@ -86,18 +86,32 @@ test("closing cancels active waits and is idempotent", async () => {
   await assert.rejects(inbox.waitForEmail(), { code: "inbox_closed" });
 });
 
-test("rejects invalid timeouts and simultaneous waits", async () => {
+test("rejects invalid timeouts and queues simultaneous waits", async () => {
   const inbox = await createInbox(inboxOptions());
   try {
     await assert.rejects(
       inbox.waitForEmail({ timeoutMs: Infinity }),
       RangeError,
     );
-    const first = assert.rejects(inbox.waitForEmail({ timeoutMs: 100 }), {
+    await assert.rejects(inbox.waitForEmail({ timeoutMs: 100, filter: null }), {
       code: "timeout",
     });
-    await assert.rejects(inbox.waitForEmail(), { code: "wait_in_progress" });
-    await first;
+    const controller = new AbortController();
+    const blocking = inbox.waitForEmail({ signal: controller.signal });
+    await assert.rejects(inbox.waitForEmail({ timeoutMs: 100 }), {
+      code: "timeout",
+    });
+    const first = inbox.waitForEmail({ timeoutMs: 10_000 });
+    const second = inbox.waitForEmail({ timeoutMs: 10_000 });
+    controller.abort();
+    await assert.rejects(blocking, { name: "AbortError" });
+    await sendEmail(inbox.address, "Queued one");
+    await sendEmail(inbox.address, "Queued two");
+
+    assert.deepEqual(
+      (await Promise.all([first, second])).map((email) => email.subject),
+      ["Queued one", "Queued two"],
+    );
   } finally {
     await inbox.close();
   }
@@ -341,6 +355,62 @@ test("receipt filters drop rejected mail while method filters preserve it", asyn
       filter: {
         subject: "FIRST",
         text: "222",
+        to: inbox.address,
+        recipient: inbox.address.toUpperCase(),
+        envelopeSender: "SENDER@EXAMPLE.TEST",
+        hasAttachments: false,
+      },
+    });
+
+    assert.equal(first.subject, "Accepted first");
+    assert.equal(
+      (await inbox.waitForEmail({ timeoutMs: 1000 })).subject,
+      "Accepted later",
+    );
+    assert.equal((await inbox.listEmails()).emails.length, 2);
+  } finally {
+    await inbox.close();
+  }
+});
+
+test("regex filters search text fields and anchor exact fields", async () => {
+  const inbox = await createInbox({
+    ...inboxOptions(),
+    filter: {
+      regex: true,
+      sender: "^SENDER@EXAMPLE\\.TEST$",
+      subject: "^Accepted (first|later)$",
+      headers: { "X-Test-Flow": "^SIGNUP$" },
+    },
+  });
+  try {
+    await sendEmail(inbox.address, "Rejected", "Code 000", {
+      headers: { "X-Test-Flow": "Signup" },
+    });
+    await sendEmail(inbox.address, "Accepted later", "Code 111", {
+      headers: { "X-Test-Flow": "Signup" },
+    });
+    await sendEmail(inbox.address, "Accepted first", "Code 222", {
+      headers: { "X-Test-Flow": "Signup" },
+    });
+    await assert.rejects(
+      inbox.waitForEmail({ filter: { regex: true, subject: "[private" } }),
+      (error) =>
+        error.code === "invalid_argument" && !error.message.includes("private"),
+    );
+    await assert.rejects(
+      inbox.waitForEmail({
+        timeoutMs: 300,
+        filter: { regex: true, envelopeSender: "SENDER@EXAMPLE" },
+      }),
+      { code: "timeout" },
+    );
+    const first = await inbox.waitForEmail({
+      timeoutMs: 1000,
+      filter: {
+        regex: true,
+        subject: " FIRST$",
+        text: "^Code [0-9]{3}",
         to: inbox.address,
         recipient: inbox.address.toUpperCase(),
         envelopeSender: "SENDER@EXAMPLE.TEST",

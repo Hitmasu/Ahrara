@@ -102,10 +102,10 @@ pub struct Filters {
 impl Filters {
     pub fn validate(&self) -> Result<()> {
         if self.after_id.is_some_and(|n| n < 0) || self.limit.is_some_and(|n| n == 0 || n > 100) {
-            bail!("invalid pagination: limit 1..100, after_id >= 0")
+            bail!("invalid_argument: invalid pagination: limit 1..100, after_id >= 0")
         }
         if let Some(address) = &self.address {
-            address_token(address)?;
+            address_token(address).map_err(|error| anyhow::anyhow!("invalid_argument: {error}"))?;
         }
 
         Ok(())
@@ -711,7 +711,7 @@ impl Storage {
         mut generate: impl FnMut() -> [u8; 8] + Send + 'static,
     ) -> Result<Address> {
         if label.as_ref().is_some_and(|s| s.len() > 256) {
-            bail!("label must not exceed 256 UTF-8 bytes")
+            bail!("invalid_argument: label must not exceed 256 UTF-8 bytes")
         }
 
         self.call(move |c| {
@@ -720,7 +720,7 @@ impl Storage {
             if let Some(domain) = &custom {
                 let destination = find_address(&tx, &fingerprint, &domain.forwarding_address)?;
                 if !destination.enabled {
-                    bail!("custom domain forwarding destination is disabled")
+                    bail!("invalid_argument: custom domain forwarding destination is disabled")
                 }
             }
 
@@ -827,7 +827,7 @@ impl Storage {
         enabled_only: bool,
     ) -> Result<Vec<Address>> {
         if after < 0 || limit == 0 || limit > 100 {
-            bail!("invalid pagination")
+            bail!("invalid_argument: invalid pagination: limit 1..100, after_id >= 0")
         }
 
         self.call(move |c| {
@@ -1148,6 +1148,28 @@ mod encryption_tests {
             identity_path: dir.join("identity.key"),
             api_token_path: dir.join("api.token"),
             ..Config::default()
+        }
+    }
+
+    #[test]
+    fn invalid_email_filters_are_argument_errors() {
+        for filters in [
+            Filters {
+                limit: Some(0),
+                ..Default::default()
+            },
+            Filters {
+                after_id: Some(-1),
+                ..Default::default()
+            },
+            Filters {
+                address: Some("not-an-address".into()),
+                ..Default::default()
+            },
+        ] {
+            let error = filters.validate().unwrap_err().to_string();
+
+            assert!(error.starts_with("invalid_argument:"), "{error}");
         }
     }
 

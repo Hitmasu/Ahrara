@@ -141,6 +141,7 @@ web-e2e: server
 .PHONY: forwarding-e2e
 forwarding-e2e: server
 	$(CARGO) test --locked --test e2e forwarding_end_to_end -- --ignored --nocapture
+	$(CARGO) test --locked --test e2e email_routing_end_to_end -- --ignored --nocapture
 
 e2e-static: cli server
 	AHRARA_TEST_BINARY=/work/dist/ahrara-linux-$(ARCH) $(CARGO) test --locked --test e2e -- --ignored --test-threads=1
@@ -254,9 +255,8 @@ sdk-javascript-test: sdk-native
 	  echo 'Build the native core first, or set AHRARA_NATIVE_LIBRARY to an absolute library path.' >&2
 	  exit 1
 	fi
-	docker run --rm --network host --shm-size=1g \
+	docker run --rm --network host --shm-size=1g --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
 	  -v "$$project_root:/repo" -v "$$native_library:/native/libahrara_native.so:ro" \
-	  -v ahrara-sdk-node:/repo/src/sdks/javascript/node_modules \
 	  -w /repo/src/sdks/javascript \
 	  -e AHRARA_NATIVE_LIBRARY=/native/libahrara_native.so \
 	  -e CYPRESS_CACHE_FOLDER=/repo/.dev/cypress \
@@ -287,12 +287,14 @@ sdk-python-test: sdk-native
 	  echo 'Build the native core first, or set AHRARA_NATIVE_LIBRARY to an absolute library path.' >&2
 	  exit 1
 	fi
-	docker run --rm --network host \
+	docker run --rm --network host --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
 	  -v "$$project_root:/repo" -v "$$native_library:/native/libahrara_native.so:ro" \
 	  -w /repo/src/sdks/python -e AHRARA_NATIVE_LIBRARY=/native/libahrara_native.so \
 	  -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SERVER_PUBLIC_KEY \
 	  -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA \
 	  python:3.13-slim bash -ec '
+	    python -m venv /tmp/venv
+	    . /tmp/venv/bin/activate
 	    pip install --quiet pytest robotframework build black mypy
 	    black --check ahrara tests
 	    mypy --strict --explicit-package-bases ahrara
@@ -307,7 +309,7 @@ sdk-python-test: sdk-native
 	  '
 
 sdk-go-package: sdk-native
-	docker run --rm -i -v "$$PWD:/work" -v "$$SDK_NATIVE_LIBRARY:/ahrara-native/library:ro" -w /work ahrara-builder:$$SDK_DOCKER_ARCH sh -s -- /ahrara-native/library "$${SDK_OS:-linux}" "$${SDK_ARCH:-amd64}" <<'AHRARA_PACKAGE'
+	docker run --rm -i --user "$$(id -u):$$(id -g)" -v "$$PWD:/work" -v "$$SDK_NATIVE_LIBRARY:/ahrara-native/library:ro" -w /work ahrara-builder:$$SDK_DOCKER_ARCH sh -s -- /ahrara-native/library "$${SDK_OS:-linux}" "$${SDK_ARCH:-amd64}" <<'AHRARA_PACKAGE'
 	set -eu
 
 	# Run inside the Docker build image. No Rust compiler is needed by SDK consumers.
@@ -331,7 +333,7 @@ sdk-go-package: sdk-native
 	AHRARA_PACKAGE
 
 sdk-go-test: sdk-go-package
-	docker run --rm --network host -i -v "$$PWD:/work" -w /work -v ahrara-sdk-go-modules:/go -v ahrara-sdk-go-build:/root/.cache/go-build -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
+	docker run --rm --network host -i -v "$$PWD:/work" -w /work --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e GOPATH=/work/.dev/go -e GOCACHE=/work/.dev/go-build -e GOFLAGS=-modcacherw -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
 	set -eu
 
 	# Docker-only entrypoint, invoked from the repository root.
@@ -353,7 +355,7 @@ sdk-go-test: sdk-go-package
 	AHRARA_GO
 
 sdk-k6-test: sdk-go-package
-	docker run --rm --network host -i -v "$$PWD:/work" -w /work -v ahrara-sdk-go-modules:/go -v ahrara-sdk-go-build:/root/.cache/go-build -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
+	docker run --rm --network host -i -v "$$PWD:/work" -w /work --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e GOPATH=/work/.dev/go -e GOCACHE=/work/.dev/go-build -e GOFLAGS=-modcacherw -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
 	set -eu
 
 	# Run inside the Go Docker development image from the repository root.

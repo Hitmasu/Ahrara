@@ -30,8 +30,10 @@ using var email = await inbox.WaitForEmailAsync(
 
 A finite single wait throws `TimeoutException` when it expires. Cancellation
 throws `OperationCanceledException` without disconnecting the inbox. Reception
-errors propagate as `AhraraException`, with a machine-readable `Code`. Disposal
-interrupts waits and releases resources.
+errors propagate as `AhraraException`, with a machine-readable `Code`. Concurrent
+waits on one inbox are queued and run one at a time. Disposal interrupts waits,
+which then throw `ObjectDisposedException`, and releases resources; native cleanup
+failures throw `AhraraException`.
 
 The caller owns every returned `MailMessage`, including its attachments and
 alternate views. Dispose each message after use. Its content is held in managed
@@ -123,8 +125,18 @@ HTML parsing and XPath engine, so it also accepts ordinary, imperfect HTML.
 
 All `EmailFilter` conditions combine with AND. Sender, subject, To/Cc, text, and
 header values use case-insensitive substrings. Recipient, envelope sender, and
-Message-ID use exact case-insensitive comparison. `Headers` keys match header
+Message-ID match the whole value, ignoring case. `Headers` keys match header
 names case-insensitively; any repeated value may satisfy a condition.
+Set `new EmailFilter { Regex = true, Subject = @"^(Verification|Confirm email)$" }`
+to interpret all string conditions as case-insensitive Rust regex patterns,
+including header values. Recipient, envelope sender, and Message-ID patterns must
+match the whole value; other patterns match anywhere, so use `^` / `$` for a full
+match. Use `(?-i)` for case sensitivity; `RegexQuery` is case-sensitive unless
+`IgnoreCase` is set. Header names and the `subject`/`from` wait parameters stay
+literal. Patterns use the shared Rust engine, not
+`System.Text.RegularExpressions.Regex`. Omitting `Regex` preserves literal
+matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+
 An operation filter retains nonmatching stored mail. Set `InboxOptions.Filter`
 to discard nonmatching incoming mail **before local storage**; this global filter
 also combines with each operation filter. Invalid expressions and filter values

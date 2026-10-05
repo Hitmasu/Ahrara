@@ -72,7 +72,7 @@ void completeApi;
 async function searchApi(options: InboxOptions): Promise<void> {
   await using inbox = await createInbox({
     ...options,
-    filter: { sender: "sender", headers: { "X-Test": "flow" } },
+    filter: { regex: true, sender: "^sender", headers: { "X-Test": "^flow$" } },
   });
   const match = await inbox.waitForRegexMatch("(?<code>[0-9]+)", {
     filter: { hasAttachments: false },

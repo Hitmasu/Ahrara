@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: src/server/Dockerfile
+      additional_contexts:
+        ahrara-binary: ./dist
     user: "${AHRARA_UID:-1000}:${AHRARA_GID:-1000}"
     read_only: true
     cap_drop: [ALL]

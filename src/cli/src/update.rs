@@ -304,7 +304,9 @@ impl Updater {
                 .https_only(true)
                 .redirect(reqwest::redirect::Policy::limited(5))
                 .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(120))
+                // Binaries may be large on slow links: fail only stalled reads.
+                // The manifest request keeps its own total timeout.
+                .read_timeout(Duration::from_secs(30))
                 .user_agent("Ahrara-Updater")
                 .build()?,
             url: https_url(MANIFEST_URL)?,

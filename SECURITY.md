@@ -24,12 +24,15 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   Import requires the matching Recovery Key, an offline destination, and explicit
   `--replace` to overwrite an existing inbox. Identity replacement is refused
   while an inbox exists.
-- Local MCP uses HTTP without authentication by default. Host and Origin checks
-  restrict browser access; any local process can use the inbox through MCP.
-  Enable `--https` and `--mcp-auth` independently when needed. The API always
-  requires a bearer token, and Web has a separate optional password.
-  LAN mode requires HTTPS and MCP authentication. Keep the service on loopback
-  or a trusted private LAN.
+- Local MCP uses HTTP and requires the local API bearer token by default, even on
+  loopback; the stdio bridge reads the token from the profile. Setting
+  `mcp_auth = false` lets any local process use the inbox through MCP. Host and
+  Origin checks restrict browser access. Enable `--https` when needed. The HTTP
+  API is disabled by default and always requires the bearer token; Web has a
+  separate optional password. LAN mode requires HTTPS and MCP authentication.
+  Keep the service on loopback or a trusted private LAN.
+- MCP saves attachments only into the `attachments` directory next to the
+  profile database, never overwriting existing files.
 - Email is untrusted input, including when passed to an AI agent.
 
 See the [user guide](docs/usage.md) for configuration and backups.

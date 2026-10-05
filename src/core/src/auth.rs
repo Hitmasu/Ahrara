@@ -149,17 +149,6 @@ impl Identity {
             ))
             .to_bytes())
     }
-
-    pub fn sign(&self, challenge: &[u8]) -> Result<[u8; 64]> {
-        if challenge.len() != 32 {
-            bail!("invalid authentication challenge")
-        }
-
-        let mut bytes = b"ahrara-auth-v1\0".to_vec();
-        bytes.extend(self.public_key());
-        bytes.extend(challenge);
-        Ok(self.key.sign(&bytes).to_bytes())
-    }
 }
 
 pub fn derive_route(public: &[u8; 32]) -> [u8; 16] {

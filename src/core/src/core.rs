@@ -83,6 +83,51 @@ mod sdk_lifetime_tests {
             );
         });
     }
+
+    #[tokio::test]
+    async fn failed_listener_ends_waits_with_its_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_owned();
+        let core = Core::open_temporary(
+            Config {
+                database_path: path.join("inbox.db"),
+                identity_path: path.join("identity.key"),
+                ..Config::default()
+            },
+            directory,
+        )
+        .unwrap();
+        *core.running.lock().await = Some(Running {
+            cancel: CancellationToken::new(),
+            task: tokio::spawn(async {}),
+        });
+        core.set_state("connecting", None).await;
+        let waiting = tokio::spawn({
+            let core = core.clone();
+            async move {
+                core.wait_email_metadata_for(Filters::default(), None, false)
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        core.set_state("failed", Some("identity_in_use".into()))
+            .await;
+        let error = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("a failed listener must end an untimed wait")
+            .unwrap()
+            .err()
+            .unwrap();
+
+        assert_eq!(error.to_string(), "connection_failed: identity_in_use");
+        let error = core
+            .wait_email_metadata_for(Filters::default(), Some(Duration::from_secs(1)), false)
+            .await
+            .err()
+            .expect("a timed wait must report the failure instead of a timeout");
+
+        assert_eq!(error.to_string(), "connection_failed: identity_in_use");
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -216,7 +261,7 @@ pub struct Core {
     pub events: broadcast::Sender<Event>,
     pub state: watch::Sender<ConnectionState>,
     pub start_cursor: AtomicI64,
-    pub(crate) inbox_filter: OnceLock<crate::EmailFilter>,
+    pub(crate) inbox_filter: OnceLock<Arc<crate::filter::CompiledEmailFilter>>,
     running: Mutex<Option<Running>>,
 }
 
@@ -472,26 +517,15 @@ impl Core {
 
     pub async fn wait_email(&self, filters: Filters, timeout: u64) -> Result<WaitResult> {
         if !(1..=300).contains(&timeout) {
-            bail!("timeout must be 1..300 seconds")
+            bail!("invalid_argument: timeout must be 1..300 seconds")
         }
 
-        self.wait_email_for(filters, Some(Duration::from_secs(timeout)), 2048, false)
-            .await
-    }
-
-    pub(crate) async fn wait_email_for(
-        &self,
-        filters: Filters,
-        timeout: Option<Duration>,
-        max_body: usize,
-        unconsumed_only: bool,
-    ) -> Result<WaitResult> {
         match self
-            .wait_email_metadata_for(filters, timeout, unconsumed_only)
+            .wait_email_metadata_for(filters, Some(Duration::from_secs(timeout)), false)
             .await?
         {
             Some(email) => Ok(WaitResult::Matched {
-                email: Box::new(self.get_email(email.id, max_body).await?),
+                email: Box::new(self.get_email(email.id, 2048).await?),
             }),
             None => Ok(WaitResult::Timeout),
         }
@@ -508,7 +542,7 @@ impl Core {
             && crate::auth::decode_address(&self.storage.routing_filter(address.clone()).await?)?.0
                 != self.identity.route()
         {
-            bail!("address belongs to another Identity")
+            bail!("invalid_argument: address belongs to another Identity")
         }
         if self.running.lock().await.is_none() {
             bail!("listener_not_started")
@@ -536,8 +570,15 @@ impl Core {
             {
                 return Ok(Some(email));
             }
-            if self.state.borrow().state == "stopped" {
-                bail!("listener_stopped")
+            let state = self.state.borrow().clone();
+            match state.state.as_str() {
+                "stopped" => bail!("listener_stopped"),
+                // Authentication failures and an occupied identity never reconnect.
+                "failed" => bail!(
+                    "connection_failed: {}",
+                    state.last_error.unwrap_or_else(|| "receiver failed".into())
+                ),
+                _ => {}
             }
 
             tokio::select! {

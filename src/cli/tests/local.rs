@@ -225,7 +225,6 @@ fn identity_recovery_and_shared_go_rust_vectors() {
         route
     );
     assert!(Identity::import("not-a-recovery-key", &config(b.path())).is_err());
-    assert!(one.sign(&[0; 31]).is_err());
 }
 
 #[tokio::test]
@@ -571,7 +570,9 @@ fn ownership_identifies_process_and_releases_after_drop() {
 #[test]
 fn token_is_independent_restricted_and_rotatable() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = config(dir.path());
+    // Created by Ahrara; existing caller-owned directories keep their mode.
+    let profile = dir.path().join("profile");
+    let cfg = config(&profile);
     let (identity, _) = Identity::load_or_create(&cfg).unwrap();
     auth::generate_token(&cfg, false).unwrap();
     let before = std::fs::read_to_string(&cfg.api_token_path).unwrap();
@@ -595,7 +596,7 @@ fn token_is_independent_restricted_and_rotatable() {
         }
 
         assert_eq!(
-            std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(&profile).unwrap().permissions().mode() & 0o777,
             0o700
         );
     }

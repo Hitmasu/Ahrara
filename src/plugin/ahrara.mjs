@@ -98,8 +98,13 @@ export function download(value, limit, redirects = 0) {
         reject(error);
       }
     });
-    const deadline = setTimeout(() => request.destroy(new Error('Release download timed out.')), 120_000);
-    request.on('close', () => clearTimeout(deadline));
+    // Binaries may be large on slow links: fail stalled sockets, and keep a
+    // total deadline only for the small manifest.
+    request.setTimeout(30_000, () => request.destroy(new Error('Release download stalled.')));
+    if (limit <= manifestLimit) {
+      const deadline = setTimeout(() => request.destroy(new Error('Release download timed out.')), 120_000);
+      request.on('close', () => clearTimeout(deadline));
+    }
     request.on('error', reject);
   });
 }

@@ -179,3 +179,35 @@ fn wrong_key_and_active_owner_preserve_existing_inbox() {
     success(&invoke(&file, &["auth", "set", "--stdin"], Some(&recovery)));
     success(&invoke(&file, &["status"], None));
 }
+
+#[test]
+fn auth_import_reads_the_recovery_key_only_from_bounded_stdin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (source, _) = profile(&tmp.path().join("source"));
+    let recovery = Identity::load_or_create(&source).unwrap().0.export();
+    let (cfg, file) = profile(&tmp.path().join("target"));
+
+    assert!(
+        !invoke(&file, &["auth", "import", &recovery, "--yes"], None)
+            .status
+            .success(),
+        "command-line arguments are visible to other local processes"
+    );
+    assert!(!cfg.identity_path.exists());
+    assert!(
+        !invoke(&file, &["auth", "import", "--yes"], Some(&"x".repeat(5000)))
+            .status
+            .success()
+    );
+    assert!(!cfg.identity_path.exists());
+    let imported = success(&invoke(
+        &file,
+        &["auth", "import", "--stdin", "--yes"],
+        Some(&recovery),
+    ));
+
+    assert_eq!(
+        imported["identity_fingerprint"],
+        Identity::load(&source).unwrap().fingerprint()
+    );
+}

@@ -3,7 +3,7 @@ use crate::{
     auth::{self, Identity},
     config::{Config, private_dir},
     core::Core,
-    filter::EmailFilter,
+    filter::{CompiledEmailFilter, EmailFilter},
     mail::{Attachment, HtmlEmail, ParsedEmail},
     query::{CompiledQuery, Query, QueryMatches, RegexMatch},
     storage::Filters,
@@ -30,7 +30,8 @@ pub struct InboxOptions {
     pub server_url: String,
     /// Verified public relay key; never obtained from the connection itself.
     pub server_public_key: Option<String>,
-    /// Additional trusted CA for a private relay. System/public roots remain enabled.
+    /// Additional trusted CA for a private relay, added to the bundled Mozilla
+    /// (webpki) roots. Operating-system certificate stores are not used.
     pub tls_ca_path: Option<PathBuf>,
     /// Connection setup limit in milliseconds (1–300000), independent of receive timeouts.
     pub connect_timeout_ms: u64,
@@ -74,9 +75,9 @@ impl Default for InboxOptions {
 pub struct WaitOptions {
     /// Positive milliseconds, or `None` to wait indefinitely until closed/cancelled.
     pub timeout_ms: Option<u64>,
-    /// Case-insensitive subject substring; omitted means any subject.
+    /// ASCII case-insensitive subject substring; omitted means any subject.
     pub subject: Option<String>,
-    /// Case-insensitive sender substring; omitted means any sender.
+    /// ASCII case-insensitive sender substring; omitted means any sender.
     pub from: Option<String>,
     /// Additional predicates, applied after the inbox filter. Rejected messages
     /// remain available to subsequent calls with a different method filter.
@@ -122,6 +123,9 @@ type PendingReceive = (i64, tokio::task::JoinHandle<Result<Option<Received>>>);
 #[derive(Default)]
 struct ReceiveState {
     key: String,
+    // Compiled once per key; native SDKs repeat one receive in short slices.
+    filter: Option<Arc<CompiledEmailFilter>>,
+    query: Option<Arc<CompiledQuery>>,
     after_id: i64,
     pending: Option<PendingReceive>,
 }
@@ -136,7 +140,7 @@ enum Received {
 enum ReceiveKind {
     Email,
     MailMessage,
-    Query(Arc<CompiledQuery>),
+    Query(Query),
 }
 
 /// Owns an authenticated receiver and encrypted inbox. No daemon, UI or local
@@ -152,11 +156,12 @@ impl Inbox {
     /// Returns only after the authenticated receiver is ready. Receipt runs
     /// continuously, including before the first `wait_for_email` call.
     pub async fn create(options: InboxOptions) -> Result<Self> {
-        if let Some(filter) = &options.filter {
-            filter.validate()?;
-        }
-
-        let filter = options.filter.clone();
+        let filter = options
+            .filter
+            .as_ref()
+            .map(EmailFilter::compile)
+            .transpose()?
+            .map(Arc::new);
         if !(1..=300_000).contains(&options.connect_timeout_ms) {
             bail!("invalid_argument: connect_timeout_ms must be 1..300000")
         }
@@ -353,10 +358,6 @@ impl Inbox {
         cancel: Option<&CancellationToken>,
     ) -> Result<Option<Received>> {
         let deadline = receive_deadline(options.timeout_ms)?;
-        if let Some(filter) = &options.filter {
-            filter.validate()?;
-        }
-
         let key =
             serde_json::to_string(&(query_key, &options.subject, &options.from, &options.filter))?;
 
@@ -369,11 +370,16 @@ impl Inbox {
                 result = async {
                     let mut receive = self.receive.lock().await;
                     if receive.key != key {
+                        // Invalid predicates fail before any message is read.
+                        let filter = options.filter.as_ref().map(EmailFilter::compile).transpose()?.map(Arc::new);
+                        let query = match &kind { ReceiveKind::Query(query) => Some(Arc::new(CompiledQuery::compile(query.clone())?)), _ => None };
                         // Keep at most one parser per inbox, even if callers change
                         // predicates while a previous timed-out parse is running.
                         if let Some((_, job)) = receive.pending.as_mut() { let _ = job.await; }
                         receive.pending = None;
                         receive.key.clone_from(&key);
+                        receive.filter = filter;
+                        receive.query = query;
                         receive.after_id = 0;
                     }
                     let mut filters = Filters {
@@ -390,7 +396,8 @@ impl Inbox {
                         let id = email.id;
                         let (metadata, raw) = self.receiver.storage.email(id).await?;
                         let global_filter = self.receiver.inbox_filter.get().cloned();
-                        let filter = options.filter.clone();
+                        let filter = receive.filter.clone();
+                        let query = receive.query.clone();
                         let kind = kind.clone();
                         receive.pending = Some((id, tokio::task::spawn_blocking(move || {
                             for filter in [&global_filter, &filter].into_iter().flatten() {
@@ -399,7 +406,7 @@ impl Inbox {
                             match kind {
                                 ReceiveKind::Email => crate::mail::parse(metadata, &raw, 256 * 1024).map(|email| Some(Received::Email(Box::new(email)))),
                                 ReceiveKind::MailMessage => crate::mail::mail_message(metadata, &raw).map(|email| Some(Received::MailMessage(Box::new(email)))),
-                                ReceiveKind::Query(query) => query.evaluate(&metadata, &raw).map(|value| value.map(Received::Query)),
+                                ReceiveKind::Query(_) => query.context("query is compiled with its key")?.evaluate(&metadata, &raw).map(|value| value.map(Received::Query)),
                             }
                         })));
                         }
@@ -409,7 +416,9 @@ impl Inbox {
                         let id = *id;
                         let parsed = job.await;
                         receive.pending = None;
-                        if let Some(message) = parsed?? {
+                        // A malformed message cannot match. Skip it instead of
+                        // failing every later receive at the same cursor.
+                        if let Ok(Some(message)) = parsed? {
                             return Ok((receive, Some((id, message))));
                         }
                         receive.after_id = id;
@@ -444,7 +453,6 @@ impl Inbox {
         options: WaitOptions,
     ) -> Result<Option<QueryMatches>> {
         let key = serde_json::to_string(&query)?;
-        let query = Arc::new(CompiledQuery::compile(query)?);
         match self
             .receive(options, ReceiveKind::Query(query), &key, None)
             .await?
@@ -465,14 +473,12 @@ impl Inbox {
     ) -> impl Stream<Item = Result<QueryMatches>> + '_ {
         async_stream::try_stream! {
             let key = serde_json::to_string(&query)?;
-            let query = Arc::new(CompiledQuery::compile(query)?);
             let deadline = receive_deadline(options.timeout_ms)?;
             loop {
                 if deadline.is_some_and(|value| value <= tokio::time::Instant::now()) { break; }
                 let mut next = options.clone();
                 next.timeout_ms = deadline.map(|value| value.saturating_duration_since(tokio::time::Instant::now()).as_millis().max(1) as u64);
-                let query = Arc::clone(&query);
-                let found = self.receive(next, ReceiveKind::Query(query), &key, Some(&cancel)).await?;
+                let found = self.receive(next, ReceiveKind::Query(query.clone()), &key, Some(&cancel)).await?;
                 match found { Some(Received::Query(found)) => yield found, None => break,
                     _ => unreachable!("receive key identifies the result type") }
             }
@@ -721,15 +727,7 @@ impl Inbox {
         id: i64,
         attachment_id: String,
     ) -> Result<(Attachment, Vec<u8>)> {
-        let email = self.get_email(id).await?;
-        if !email
-            .attachments
-            .iter()
-            .any(|value| value.attachment_id == attachment_id)
-        {
-            bail!("attachment_not_found: attachment does not exist")
-        }
-
+        self.check_email(id).await?;
         self.receiver.attachment(id, attachment_id).await
     }
 
@@ -799,10 +797,13 @@ impl Inbox {
             return Ok(true);
         };
         let (metadata, raw) = self.receiver.storage.email(id).await?;
-        tokio::task::spawn_blocking(move || {
-            filter.matches(&raw, &metadata.recipient, &metadata.envelope_sender)
+        // Like admission, a malformed message cannot satisfy the inbox filter.
+        Ok(tokio::task::spawn_blocking(move || {
+            filter
+                .matches(&raw, &metadata.recipient, &metadata.envelope_sender)
+                .unwrap_or(false)
         })
-        .await?
+        .await?)
     }
 
     fn require_open(&self) -> Result<()> {
@@ -843,5 +844,124 @@ impl Drop for Inbox {
     fn drop(&mut self) {
         self.closed.cancel();
         self.receiver.request_stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn offline_inbox(filter: Option<EmailFilter>) -> Inbox {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_owned();
+        let receiver = Core::open_temporary(
+            Config {
+                server_url: "wss://127.0.0.1:1".into(),
+                server_public_key: Some(format!("ahrara_server_v1_{}", "A".repeat(43))),
+                database_path: path.join("inbox.db"),
+                identity_path: path.join("identity.key"),
+                ..Config::default()
+            },
+            directory,
+        )
+        .unwrap();
+        if let Some(filter) = filter {
+            assert!(
+                receiver
+                    .inbox_filter
+                    .set(Arc::new(filter.compile().unwrap()))
+                    .is_ok()
+            );
+        }
+
+        let address = receiver.create_address(None).await.unwrap().routing_address;
+        // The unreachable relay keeps reconnecting; stored mail remains receivable.
+        receiver.start("test", false).await.unwrap();
+        Inbox {
+            receiver,
+            address,
+            receive: Mutex::new(ReceiveState::default()),
+            closed: CancellationToken::new(),
+        }
+    }
+
+    async fn store(inbox: &Inbox, transfer: &str, raw: &str) -> i64 {
+        inbox
+            .receiver
+            .storage
+            .insert(
+                transfer.into(),
+                inbox.receiver.identity.fingerprint(),
+                vec![inbox.address.clone()],
+                "sender@example.test".into(),
+                raw.as_bytes().to_vec(),
+            )
+            .await
+            .unwrap()[0]
+            .id
+    }
+
+    fn malformed() -> String {
+        let mut raw =
+            String::from("Subject: malformed\r\nContent-Type: multipart/mixed; boundary=m\r\n\r\n");
+
+        for _ in 0..256 {
+            raw.push_str("--m\r\nContent-Type: text/plain\r\n\r\npart\r\n");
+        }
+
+        raw + "--m--\r\n"
+    }
+
+    #[tokio::test]
+    async fn malformed_messages_do_not_block_later_waits() {
+        let inbox = offline_inbox(None).await;
+        let wait = |timeout_ms, filter| WaitOptions {
+            timeout_ms: Some(timeout_ms),
+            filter,
+            ..Default::default()
+        };
+        store(&inbox, "broken", &malformed()).await;
+        let first = store(&inbox, "first", "Subject: first\r\n\r\nbody").await;
+        let message = inbox.wait_for_mail_message(wait(5000, None)).await.unwrap();
+
+        assert_eq!(message.unwrap().metadata.id, first);
+        let second = store(&inbox, "second", "Subject: valid\r\n\r\nbody").await;
+        let filter = EmailFilter {
+            subject: Some("valid".into()),
+            ..Default::default()
+        };
+        let email = inbox
+            .wait_for_email(wait(5000, Some(filter)))
+            .await
+            .unwrap();
+
+        assert_eq!(email.unwrap().metadata.id, second);
+        let found = inbox
+            .wait_for_regex_match("part|body", wait(200, None))
+            .await
+            .unwrap();
+
+        assert!(
+            found.is_none(),
+            "only the malformed message remains unconsumed"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_history_does_not_break_inbox_filter_reads() {
+        let inbox = offline_inbox(Some(EmailFilter {
+            subject: Some("valid".into()),
+            ..Default::default()
+        }))
+        .await;
+        let broken = store(&inbox, "broken", &malformed()).await;
+        let valid = store(&inbox, "valid", "Subject: valid\r\n\r\nbody").await;
+        let page = inbox.list_emails(Filters::default()).await.unwrap();
+
+        assert_eq!(page.emails.len(), 1);
+        assert_eq!(page.emails[0].id, valid);
+        let error = inbox.get_email(broken).await.err().unwrap().to_string();
+
+        assert!(error.starts_with("email_not_found:"), "{error}");
     }
 }

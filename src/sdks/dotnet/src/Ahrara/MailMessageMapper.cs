@@ -15,14 +15,23 @@ internal sealed class MailMessageMapper
         var message = new MailMessage();
         try
         {
+            // The native receive already consumed this email, so mapping must tolerate
+            // received values that MailMessage rejects. GetRawEmailAsync keeps them all.
             foreach (var header in value.GetProperty("headers").EnumerateArray())
             {
-                message.Headers.Add(
-                    header.GetProperty("name").GetString(),
-                    header.GetProperty("value").GetString());
+                try
+                {
+                    message.Headers.Add(
+                        header.GetProperty("name").GetString(),
+                        header.GetProperty("value").GetString());
+                }
+                catch (Exception error) when (error is ArgumentException or FormatException)
+                {
+                    // For example, MailMessage rejects empty header values.
+                }
             }
 
-            message.Subject = value.GetProperty("subject").GetString()!;
+            message.Subject = value.GetProperty("subject").GetString()!.ReplaceLineEndings(" ");
             message.SubjectEncoding = Encoding.UTF8;
             message.HeadersEncoding = Encoding.UTF8;
             message.BodyEncoding = Encoding.UTF8;
@@ -79,10 +88,14 @@ internal sealed class MailMessageMapper
         try
         {
             var filename = value.GetProperty("filename").GetString()!;
-            attachment = new Attachment(content, filename, value.GetProperty("content_type").GetString()!);
+            attachment = new Attachment(content, ContentTypeOrDefault(value.GetProperty("content_type").GetString()!))
+            {
+                Name = filename
+            };
             attachment.ContentDisposition!.FileName = filename;
             attachment.ContentDisposition.DispositionType = value.GetProperty("content_disposition").GetString()!;
-            if (value.GetProperty("content_id").GetString() is { Length: > 0 } contentId)
+            if (value.GetProperty("content_id").GetString() is { Length: > 0 } contentId
+                && contentId.IndexOfAny(['<', '>']) < 0)
             {
                 attachment.ContentId = contentId;
             }
@@ -104,6 +117,18 @@ internal sealed class MailMessageMapper
         }
     }
 
+    private static ContentType ContentTypeOrDefault(string value)
+    {
+        try
+        {
+            return new ContentType(value);
+        }
+        catch (Exception error) when (error is ArgumentException or FormatException)
+        {
+            return new ContentType(MediaTypeNames.Application.Octet);
+        }
+    }
+
     internal long GetEmailId(MailMessage message)
     {
         ArgumentNullException.ThrowIfNull(message);
@@ -116,7 +141,10 @@ internal sealed class MailMessageMapper
     {
         foreach (var address in addresses.EnumerateArray())
         {
-            return Address(address);
+            if (Address(address) is { } valid)
+            {
+                return valid;
+            }
         }
 
         return null;
@@ -126,12 +154,17 @@ internal sealed class MailMessageMapper
     {
         foreach (var address in addresses.EnumerateArray())
         {
-            target.Add(Address(address));
+            if (Address(address) is { } valid)
+            {
+                target.Add(valid);
+            }
         }
     }
 
-    private static MailAddress Address(JsonElement address) => new(
-        address.GetProperty("address").GetString()!,
+    // Mailboxes MailAddress rejects remain available in Headers.
+    private static MailAddress? Address(JsonElement address) => MailAddress.TryCreate(
+        address.GetProperty("address").GetString(),
         address.GetProperty("name").GetString(),
-        Encoding.UTF8);
+        Encoding.UTF8,
+        out var result) ? result : null;
 }

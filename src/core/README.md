@@ -44,6 +44,11 @@ stream termination leave the inbox available. Use `futures_util::pin_mut!` and
 
 `InboxOptions.filter` is an admission `EmailFilter`: rejected deliveries never
 enter storage. `WaitOptions.filter` adds conditions without consuming nonmatches.
+Set `EmailFilter.regex = true` to treat string conditions and header values as
+case-insensitive Rust regex patterns. `recipient`, `envelope_sender` and
+`message_id` must match the whole value; other fields search, so use `^` / `$`
+for full matches there. Use `(?-i)` for case sensitivity. The default remains
+literal matching. Invalid patterns are rejected before inbox setup or a receive.
 Use `wait_for_regex_match(pattern, options)` for one `RegexMatch` with named and
 numbered groups, or `wait_for_regex_matches(pattern, options, cancel)` for a lazy
 stream across emails. `wait_for_xpath` / `wait_for_xpath_values` extract strings
@@ -65,12 +70,20 @@ key requires `InboxOptions.server_public_key`; local test relays also require
 `server_url` and their trusted `tls_ca_path`. The SDK never trusts a key supplied
 by the connection itself and never reads a user's CLI profile.
 
-Use `ahrara-core = { path = "../ahrara/src/core" }` when consuming this checkout.
-Apply the repository's `mailparse` patch from
-[`third_party/`](../third_party/README.md) in your Cargo
-root too; Cargo ignores dependency-local patch sections. Until the patched
-dependency has a published release, the Rust SDK is distributed as source
-with this repository, not as an independently published crates.io package.
+Clone the repository beside your application and depend on this checkout with
+`ahrara-core = { path = "../Ahrara/src/core" }`. Apply the repository's
+`mailparse` patch from [`third_party/`](../third_party/README.md) in your
+application's root `Cargo.toml` too; Cargo ignores dependency-local patch
+sections:
+
+```toml
+[patch.crates-io]
+mailparse = { path = "../Ahrara/src/third_party/mailparse" }
+```
+
+Until the patched dependency has a published release, the Rust SDK is
+distributed as source with this repository, not as an independently published
+crates.io package.
 
 All builds and tests use Docker:
 

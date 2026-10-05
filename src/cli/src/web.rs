@@ -40,10 +40,7 @@ impl From<anyhow::Error> for WebError {
 
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
-        let missing = self
-            .0
-            .downcast_ref::<rusqlite::Error>()
-            .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows));
+        let missing = crate::api::not_found(&self.0);
 
         (
             if missing {

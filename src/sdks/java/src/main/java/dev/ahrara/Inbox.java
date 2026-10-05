@@ -209,7 +209,7 @@ public final class Inbox implements AutoCloseable {
         request.put("handle", state.handle);
         request.put(
             "timeout_ms", Math.max(1, Math.min(100, TimeUnit.NANOSECONDS.toMillis(remaining))));
-        var result = NativeCore.call(request);
+        var result = callNative(request);
         if (result.path("status").asText().equals("matched")) {
           return result;
         }
@@ -447,7 +447,7 @@ public final class Inbox implements AutoCloseable {
   }
 
   /**
-   * Downloads decoded attachment bytes.
+   * Returns decoded attachment bytes without writing a file.
    *
    * @param id email identifier
    * @param attachmentId identifier from the email's attachment metadata
@@ -455,7 +455,7 @@ public final class Inbox implements AutoCloseable {
    * @throws AhraraException if the email or attachment is missing or reading fails
    * @throws IllegalStateException if the inbox is closed
    */
-  public AttachmentDownload downloadAttachment(long id, String attachmentId) {
+  public AttachmentDownload getAttachment(long id, String attachmentId) {
     var value = call("attachment", Map.of("id", id, "attachment_id", attachmentId));
     return new AttachmentDownload(
         Attachment.fromNative(value.path("attachment")),
@@ -780,7 +780,20 @@ public final class Inbox implements AutoCloseable {
     var request = new LinkedHashMap<String, Object>(arguments);
     request.put("op", operation);
     request.put("handle", state.handle);
-    return NativeCore.call(request);
+    return callNative(request);
+  }
+
+  private JsonNode callNative(Map<String, Object> request) {
+    try {
+      return NativeCore.call(request);
+    } catch (AhraraException error) {
+      // A call racing close reports the documented closed-inbox error.
+      if (state.closed.get() && "inbox_closed".equals(error.code())) {
+        throw new IllegalStateException("The Ahrara inbox is closed.", error);
+      }
+
+      throw error;
+    }
   }
 
   private void requireOpen() {

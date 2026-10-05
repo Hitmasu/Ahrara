@@ -648,8 +648,8 @@ async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
 
                 d.started = true;
                 d.recipients = start.recipients;
-                // One allocation only while receiving; aliases share this buffer.
-                d.raw = Vec::with_capacity(MAX_EMAIL);
+                // Aliases share this buffer; reserve only the bounded declared size.
+                d.raw = Vec::with_capacity(start.declared_size.unwrap_or(0) as usize);
             }
             CHUNK => delivery
                 .as_mut()

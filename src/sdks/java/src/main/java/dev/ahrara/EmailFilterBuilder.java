@@ -14,9 +14,22 @@ public final class EmailFilterBuilder {
   private String text;
   private Boolean hasAttachments;
   private Map<String, String> headers;
+  private boolean regex;
 
   /** Creates an empty filter builder. */
   public EmailFilterBuilder() {}
+
+  /**
+   * Interprets string conditions as case-insensitive Rust regex. Header names stay literal;
+   * recipient, envelope sender and Message-ID patterns must match the whole value.
+   *
+   * @param value true for regex patterns, false for literal conditions
+   * @return this builder
+   */
+  public EmailFilterBuilder regex(boolean value) {
+    regex = value;
+    return this;
+  }
 
   /**
    * Sets case-insensitive sender substring.
@@ -63,7 +76,7 @@ public final class EmailFilterBuilder {
   }
 
   /**
-   * Sets exact smtp recipient.
+   * Sets the whole SMTP recipient, ignoring case; an anchored pattern when regex is enabled.
    *
    * @param value the condition, or null to omit
    * @return this builder
@@ -74,7 +87,7 @@ public final class EmailFilterBuilder {
   }
 
   /**
-   * Sets exact smtp sender.
+   * Sets the whole SMTP sender, ignoring case; an anchored pattern when regex is enabled.
    *
    * @param value the condition, or null to omit
    * @return this builder
@@ -85,7 +98,7 @@ public final class EmailFilterBuilder {
   }
 
   /**
-   * Sets exact message-id header.
+   * Sets the whole Message-ID header, ignoring case; an anchored pattern when regex is enabled.
    *
    * @param value the condition, or null to omit
    * @return this builder
@@ -142,6 +155,7 @@ public final class EmailFilterBuilder {
         messageId,
         text,
         hasAttachments,
-        headers);
+        headers,
+        regex);
   }
 }

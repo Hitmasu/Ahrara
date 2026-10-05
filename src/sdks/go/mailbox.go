@@ -103,9 +103,10 @@ type ListOptions struct {
 	AfterID int64
 	// Limit bounds the page size to 1..100; zero uses 20.
 	Limit uint32
-	// Subject is an optional subject-header substring filter.
+	// Subject is an optional ASCII case-insensitive subject substring.
 	Subject string
-	// From is an optional sender-header substring filter.
+	// From is an optional ASCII case-insensitive substring of the From header or
+	// envelope sender. Unlike Filter.From, it never uses regex or Unicode case folding.
 	From string
 }
 

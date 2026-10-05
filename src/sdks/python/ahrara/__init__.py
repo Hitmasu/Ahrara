@@ -11,6 +11,7 @@ import threading
 import time
 from types import TracebackType
 from typing import Any, Self, TypeVar, TypedDict, Unpack, cast
+import weakref
 
 from ._native import AhraraError as AhraraError, call as _call
 from .models import (
@@ -85,6 +86,11 @@ class Inbox:
         self._closing = threading.Event()
         self._close_lock = threading.Lock()
         self._wait_lock = threading.Lock()
+        # Releases an inbox collected without close(); explicit close stays primary.
+        self._finalizer = weakref.finalize(
+            self, _call, {"op": "close", "handle": handle}
+        )
+        self._finalizer.atexit = False
 
     def _request(self, op: str, **values: Any) -> dict[str, Any]:
         if self._closing.is_set():
@@ -115,7 +121,7 @@ class Inbox:
 
         Raises:
             TimeoutError: An explicit finite deadline expired.
-            AhraraError: Cancelled, closed, another wait is active, or native failure.
+            AhraraError: Cancelled, closed, or native failure.
             ValueError: The timeout is invalid.
         """
         result = self._wait(
@@ -137,10 +143,15 @@ class Inbox:
         **values: Any,
     ) -> dict[str, Any]:
         deadline = _deadline(timeout)
-        if not self._wait_lock.acquire(blocking=False):
-            raise AhraraError(
-                "wait_in_progress", "Only one wait per inbox may run at a time."
-            )
+        # Concurrent waits queue; a queued wait still observes cancel, close and deadline.
+        while not self._wait_lock.acquire(
+            timeout=min(0.1, max(0.0, deadline - time.monotonic()))
+        ):
+            _check_cancel(cancel)
+            if self._closing.is_set():
+                raise AhraraError("inbox_closed", "The inbox is closed.")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("No matching email arrived before the deadline.")
         try:
             while True:
                 _check_cancel(cancel)
@@ -476,6 +487,7 @@ class Inbox:
             if not self._closed:
                 _call({"op": "close", "handle": self._handle})
                 self._closed = True
+                self._finalizer.detach()
 
     def __enter__(self) -> Self:
         return self
@@ -506,6 +518,7 @@ class AsyncInbox:
     def __init__(self, inbox: Inbox) -> None:
         self._inbox = inbox
         self.address = inbox.address
+        self._wait_lock = asyncio.Lock()
 
     async def wait_for_email(
         self,
@@ -521,36 +534,60 @@ class AsyncInbox:
         raise AhraraError. A concurrently matched message may win the cancellation
         race; cancelled waits do not start another native receive.
         """
-        return await self._run_wait(
-            self._inbox.wait_for_email,
+        result = await self._wait(
+            "wait",
             timeout,
             subject=subject,
-            from_address=from_address,
             filter=filter,
+            **{"from": from_address},
         )
 
-    async def _run_wait(
-        self, operation: Callable[..., T], *args: Any, **options: Any
-    ) -> T:
-        cancel = threading.Event()
-        pending = asyncio.create_task(
-            asyncio.to_thread(
-                operation,
-                *args,
-                **options,
-                cancel=cancel,
-            )
-        )
+        return cast(Email, result["email"])
+
+    async def _wait(
+        self, op: str, timeout: float | None, **values: Any
+    ) -> dict[str, Any]:
+        deadline = _deadline(timeout)
         try:
-            return await asyncio.shield(pending)
-        except asyncio.CancelledError:
-            cancel.set()
-            try:
-                return await _finish_native(pending)
-            except Exception:
-                pass
+            # Concurrent waits queue in call order without holding executor threads.
+            async with asyncio.timeout(
+                None if math.isinf(deadline) else deadline - time.monotonic()
+            ):
+                await self._wait_lock.acquire()
+        except TimeoutError:
+            raise TimeoutError(
+                "No matching email arrived before the deadline."
+            ) from None
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                # Each worker call runs one bounded native slice, then frees its thread.
+                pending = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._inbox._request,
+                        op,
+                        timeout_ms=max(1, math.ceil(min(0.1, remaining) * 1000)),
+                        **values,
+                    )
+                )
+                try:
+                    result = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    # A message matched by the in-flight slice wins the cancellation race.
+                    try:
+                        result = await _finish_native(pending)
+                    except Exception:
+                        result = {}
+                    if result.get("status") == "matched":
+                        return result
 
-            raise
+                    raise
+                if result["status"] == "matched":
+                    return result
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("No matching email arrived before the deadline.")
+        finally:
+            self._wait_lock.release()
 
     async def wait_for_emails(
         self,
@@ -623,9 +660,14 @@ class AsyncInbox:
         cancellation keeps the inbox open; an already matched result may win.
         Invalid queries/native failures raise AhraraError; expiry raises TimeoutError.
         """
-        return await self._run_wait(
-            self._inbox.wait_for_regex_match, pattern, timeout, **options
+        result = await self._wait(
+            "search",
+            timeout,
+            query=_regex_query(pattern, False, options),
+            filter=options.get("filter"),
         )
+
+        return cast(RegexMatch, result["matches"][0])
 
     async def wait_for_regex_matches(
         self,
@@ -658,9 +700,14 @@ class AsyncInbox:
         Native errors/invalid expressions raise AhraraError; finite expiry raises
         TimeoutError. Task cancellation preserves the inbox and drains native work.
         """
-        return await self._run_wait(
-            self._inbox.wait_for_xpath, expression, timeout, filter=filter
+        result = await self._wait(
+            "search",
+            timeout,
+            query={"kind": "xpath", "expression": expression, "all": False},
+            filter=filter,
         )
+
+        return str(result["values"][0])
 
     async def wait_for_xpath_values(
         self,
@@ -698,8 +745,7 @@ class AsyncInbox:
             task = asyncio.current_task()
             cancellations = task.cancelling() if task is not None else 0
             try:
-                result = await self._run_wait(
-                    self._inbox._wait,
+                result = await self._wait(
                     "search",
                     None if math.isinf(remaining) else remaining,
                     query=query,

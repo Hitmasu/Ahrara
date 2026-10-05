@@ -20,8 +20,8 @@ try {
 
 Creation returns after authentication and subscription. Mail arriving before a
 wait is buffered. Each matching receive is consumed once, while storage retains
-the message until deleted. Create separate inboxes for parallel tests; only one
-wait may run on a given inbox at a time.
+the message until deleted. Create separate inboxes for parallel tests. Concurrent
+waits on one inbox are queued and run one at a time, in call order.
 
 ## Waits, streams, and callbacks
 
@@ -60,6 +60,15 @@ and `headers: { name: value }` use case-insensitive substring matching.
 `recipient`, `envelopeSender`, and `messageId` match exactly, ignoring case;
 `hasAttachments` selects presence or absence of attachments. Header names ignore
 case. A per-wait filter adds to the inbox's receipt filter.
+
+Set `filter: { regex: true, subject: '^(Verification|Confirm email)$' }` to
+interpret all string conditions as case-insensitive Rust regex patterns.
+`recipient`, `envelopeSender`, and `messageId` patterns must match the whole
+value; other patterns match anywhere, so use `^` / `$` for a full match. Use
+`(?-i)` for case sensitivity; regex queries below are case-sensitive unless
+`ignoreCase` is set. Header names and the top-level `subject`/`from` wait
+options stay literal. Invalid patterns fail before consuming mail; omitting
+`regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 ```js
 const match = await inbox.waitForRegexMatch('code=(?<code>[0-9]+)', {
@@ -135,8 +144,8 @@ consume receive state. Native errors retain their code in `AhraraError.code`.
 | `getRawEmail(id)` | Original RFC 822 bytes as Buffer |
 | `getHtml(id, { allowRemote: false })` | Sanitized `{ html, remote_resources }`; remote resources blocked by default |
 
-Email fields match the native schema, including `from`, `to`, `subject`,
-`text_body`, `attachments`, and `parse_error`. Extracted text is capped at
+Email fields use the native snake_case schema, including `from`, `to`, `subject`,
+`text_body`, `attachments`, and `parse_error`; the k6 extension uses camelCase. Extracted text is capped at
 256 KiB and reports `text_body_truncated`. HTML and attachments are fetched
 explicitly. Treat message content as untrusted data.
 

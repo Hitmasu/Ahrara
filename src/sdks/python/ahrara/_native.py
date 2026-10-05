@@ -29,9 +29,8 @@ def call(request: dict[str, Any]) -> dict[str, Any]:
             names = {"win32": "ahrara_native.dll", "darwin": "libahrara_native.dylib"}
             name = names.get(sys.platform, "libahrara_native.so")
             path = Path(
-                os.environ.get(
-                    "AHRARA_NATIVE_LIBRARY", Path(__file__).parent / "native" / name
-                )
+                os.environ.get("AHRARA_NATIVE_LIBRARY")
+                or Path(__file__).parent / "native" / name
             )
             if not path.is_absolute() or not path.is_file():
                 raise AhraraError(

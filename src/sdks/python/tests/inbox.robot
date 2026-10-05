@@ -47,3 +47,11 @@ Extract Captures And XPath Values
     Send Email    ${address}    Robot XPath    fallback    html=<a href="/verify">Verify</a>
     ${value}=    Ahrara.Wait For XPath    //a/@href    timeout=10
     Should Be Equal    ${value}    /verify
+
+Filter With A Regex Dictionary
+    ${address}=    Ahrara.Create Inbox
+    Send Email    ${address}    Robot filter skipped    Ignore me
+    Send Email    ${address}    Robot filter 42    Use me
+    &{filter}=    Create Dictionary    regex=${TRUE}    subject=^Robot filter [0-9]+$
+    ${email}=    Ahrara.Wait For Email    timeout=10    filter=${filter}
+    Should Be Equal    ${email}[subject]    Robot filter 42

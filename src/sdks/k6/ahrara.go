@@ -4,7 +4,6 @@ package ahrara
 import (
 	"context"
 	"errors"
-	"time"
 
 	sdk "github.com/Hitmasu/Ahrara/src/sdks/go"
 	"github.com/grafana/sobek"
@@ -74,21 +73,23 @@ type Options struct {
 	Filter *sdk.Filter `js:"filter"`
 }
 
-// ReceiveOptions selects matching messages. Receives have no timeout.
+// ReceiveOptions selects matching messages and an optional deadline.
 type ReceiveOptions struct {
-	// Subject matches a substring of the subject header.
+	// Subject matches a literal substring of the subject header, even with filter.regex.
 	Subject string `js:"subject"`
-	// From matches a substring of the sender header.
+	// From matches a literal substring of the sender header, even with filter.regex.
 	From string `js:"from"`
 	// Filter combines sender, subject, headers, body and envelope conditions.
 	Filter *sdk.Filter `js:"filter"`
+	// DurationMS bounds the wait; expiry throws. Zero waits until VU cancellation.
+	DurationMS int64 `js:"durationMs"`
 }
 
 // ForEachOptions selects messages and an optional deadline for the whole loop.
 type ForEachOptions struct {
-	// Subject matches a substring of the subject header.
+	// Subject matches a literal substring of the subject header, even with filter.regex.
 	Subject string `js:"subject"`
-	// From matches a substring of the sender header.
+	// From matches a literal substring of the sender header, even with filter.regex.
 	From string `js:"from"`
 	// Filter runs after admission and leaves nonmatches available.
 	Filter *sdk.Filter `js:"filter"`
@@ -146,15 +147,22 @@ func (m *Module) CreateInbox(options Options) (*Inbox, error) {
 	return inbox, nil
 }
 
-// WaitForEmail waits without a receive deadline until a message, VU cancellation,
-// Close, or an error. The synchronous call blocks only this virtual user.
+// WaitForEmail waits until a message, the optional DurationMS deadline, VU
+// cancellation, Close, or an error. The synchronous call blocks only this
+// virtual user.
 func (i *Inbox) WaitForEmail(options ReceiveOptions) (map[string]any, error) {
 	filter, err := receiveFilter(options.Subject, options.From, options.Filter)
 	if err != nil {
 		return nil, err
 	}
 
-	email, err := i.inner.WaitForEmail(i.ctx, filter)
+	ctx, cancel, err := queryContext(i.ctx, options.DurationMS)
+	if err != nil {
+		return nil, err
+	}
+
+	defer cancel()
+	email, err := i.inner.WaitForEmail(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -177,17 +185,13 @@ func (i *Inbox) ForEachEmail(callback sobek.Value, options ForEachOptions) (int6
 	if err != nil {
 		return 0, err
 	}
-	if options.DurationMS < 0 || options.DurationMS > int64((1<<63-1)/time.Millisecond) {
-		return 0, errors.New("durationMs must be a non-negative duration")
+
+	ctx, cancel, err := queryContext(i.ctx, options.DurationMS)
+	if err != nil {
+		return 0, err
 	}
 
-	ctx := i.ctx
-	if options.DurationMS != 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.DurationMS)*time.Millisecond)
-		defer cancel()
-	}
-
+	defer cancel()
 	var count int64
 
 	for {
@@ -270,8 +274,8 @@ func (i *Inbox) SaveAttachment(id int64, attachmentID, destination string) (stri
 	return i.inner.SaveAttachment(id, attachmentID, destination)
 }
 
-// RawEmail returns original RFC 5322 bytes as an ArrayBuffer.
-func (i *Inbox) RawEmail(id int64) (sobek.ArrayBuffer, error) {
+// GetRawEmail returns original RFC 5322 bytes as an ArrayBuffer.
+func (i *Inbox) GetRawEmail(id int64) (sobek.ArrayBuffer, error) {
 	content, err := i.inner.RawEmail(id)
 	if err != nil {
 		return sobek.ArrayBuffer{}, err
@@ -280,8 +284,9 @@ func (i *Inbox) RawEmail(id int64) (sobek.ArrayBuffer, error) {
 	return i.vu.Runtime().NewArrayBuffer(content), nil
 }
 
-// GetHTML returns sanitized HTML; remote content is blocked unless allowRemote is true.
-func (i *Inbox) GetHTML(id int64, allowRemote bool) (map[string]any, error) {
+// GetHtml returns sanitized HTML; remote content is blocked unless allowRemote is true.
+// The spelling exposes getHtml to JavaScript, matching the other SDKs.
+func (i *Inbox) GetHtml(id int64, allowRemote bool) (map[string]any, error) {
 	html, err := i.inner.GetHTML(id, allowRemote)
 	if err != nil {
 		return nil, err

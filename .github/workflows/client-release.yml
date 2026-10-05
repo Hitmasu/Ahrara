@@ -1,5 +1,8 @@
 name: Client release
 on:
+  # Every pushed version tag (vX.Y.Z) publishes a release; the tag must match src/cli/Cargo.toml.
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -28,8 +31,11 @@ jobs:
     env:
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
       AHRARA_SERVER_PUBLIC_KEY: ${{ vars.AHRARA_SERVER_PUBLIC_KEY }}
-      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
     steps:
+      - name: Resolve release version
+        shell: bash
+        run: echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -75,11 +81,14 @@ jobs:
     permissions:
       contents: write
     env:
-      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
       AVAILABLE: ${{ inputs.available }}
       INITIAL_RELEASE: ${{ inputs.initial_release }}
     steps:
+      - name: Resolve release version
+        shell: bash
+        run: echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -89,9 +98,14 @@ jobs:
       - name: Generate signed static manifest
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.AHRARA_RELEASE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          # Tag pushes have no inputs: only the first release lacks a previous signed manifest.
+          if [ -z "$INITIAL_RELEASE" ]; then
+            INITIAL_RELEASE=$([ "$(gh release list --limit 1 --json tagName --jq length)" = 0 ] && echo true || echo false)
+          fi
           umask 077
           key_file=$(mktemp)
           trap 'rm -f "$key_file"' EXIT

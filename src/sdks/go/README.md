@@ -32,6 +32,14 @@ match. Filters support `From`, `Subject`, `To`, `CC`, `Text`, `Headers`,
 conditions match substrings; envelope fields and Message-ID match the complete
 value. Matching ignores case. `Text` searches the full decoded body.
 
+Set `ahrara.Filter{Regex: true, Subject: "^(Verification|Confirm email)$"}` to
+interpret all string conditions as case-insensitive Rust regex patterns.
+`Recipient`, `EnvelopeSender`, and `MessageID` patterns must match the whole
+value; other patterns match anywhere, so use `^` / `$` for a full match. Use
+`(?-i)` for case sensitivity; `RegexOptions` queries are case-sensitive unless
+`IgnoreCase` is set. Header names stay literal. Invalid patterns fail before
+consuming mail; omitting `Regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+
 ```go
 match, err := inbox.WaitForRegexMatch(ctx,
     `(?P<code>[0-9]{6}) is your verification code`,
@@ -106,8 +114,9 @@ err := inbox.ForEachEmail(processing, ahrara.Filter{}, process)
 ```
 
 Callbacks must return cooperatively; capture the same context if callback work
-needs cancellation. Methods are safe for concurrent callers, while receive
-operations serialize on each inbox. The caller retains ownership of `Close`.
+needs cancellation. Methods are safe for concurrent callers, while concurrent
+receive operations queue and run one at a time on each inbox. Always `Close` the
+inbox when done.
 
 ## Persistence and recovery
 
@@ -145,6 +154,9 @@ backup/import and must be stored securely, never logged or committed.
 
 List and get include previously consumed messages without changing receive
 state. Pagination passes a page's `NextCursor` as the next `ListOptions.AfterID`.
+`ListOptions.Subject` and `ListOptions.From` are ASCII case-insensitive storage
+substrings (`From` also matches the envelope sender); unlike `Filter.From`, they
+never use regex.
 The attachment ID comes from `Email.Attachments`. Save accepts an absolute file
 path or an existing directory, where the core chooses a sanitized filename.
 

@@ -7,8 +7,11 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
 
 ## Prerequisites
 
-- Set the version in `src/cli/Cargo.toml`, `src/cli/Cargo.lock`, `plugin.yaml`, and the
-  plugin JSON manifests. The workflow checks that manifest versions agree.
+- Set the same version in `src/cli/Cargo.toml` and `src/cli/Cargo.lock`, `plugin.yaml`,
+  `plugin.json`, `package.json`, `gemini-extension.json`, `.claude-plugin/plugin.json`,
+  `.codex-plugin/plugin.json`, `.github/plugin/plugin.json`, `.devin-plugin/plugin.json`,
+  and `.qoder-plugin/plugin.json`. The workflow and `scripts/release-manifest.py`
+  reject a release whose version differs from `src/cli/Cargo.toml`.
 - Configure repository variable `AHRARA_UPDATE_PUBLIC_KEY` with the Ed25519
   public key as 64 hexadecimal characters and secret `AHRARA_RELEASE_SIGNING_KEY`
   with its private PEM. Use a dedicated release key, never a user Identity.
@@ -27,8 +30,11 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
 
 ## Publish
 
-1. Dispatch the workflow with the package version. Set `initial_release=true`
-   only for the first publication; later runs verify the previous signed manifest.
+1. Push a tag `vX.Y.Z` matching the package version (`git tag v0.1.0 && git push
+   origin v0.1.0`); every version tag publishes a release. A tag push treats the
+   run as the first publication only when the repository has no release yet; later
+   runs verify the previous signed manifest. You can still dispatch the workflow
+   manually with the version, `initial_release` and `available` inputs.
 2. Review the release and its six binaries. Existing releases are not overwritten.
 3. Deploy the `ahrara-static-site` artifact after the binaries are available.
    Serve `/releases/stable.json` with a cache lifetime of at most one hour.
@@ -52,8 +58,7 @@ of static-site deployment. Test first installation and a subsequent launch with
 the repository plugin before announcing it.
 
 The checked-in bootstrap formula stays disabled until generated release URLs and
-checksums replace it. Other package channels need their own implementation and
-publication before being advertised.
+checksums replace it.
 
 ## Refresh the manifest
 

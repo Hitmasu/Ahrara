@@ -126,13 +126,18 @@ async fn healthcheck() -> Result<()> {
         .with_root_certificates(roots)
         .with_no_client_auth();
     let port = address(&setting("AHRARA_HTTPS_BIND", ":8443"))?.port();
+    let name = setting("AHRARA_HEALTHCHECK_SERVER_NAME", "localhost");
+    let server_name = ServerName::try_from(name.clone())?;
     timeout(Duration::from_secs(3), async {
         let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
         let mut tls = TlsConnector::from(Arc::new(config))
-            .connect(ServerName::try_from("localhost")?, tcp)
+            .connect(server_name, tcp)
             .await?;
-        tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .await?;
+        tls.write_all(
+            format!("GET /healthz HTTP/1.1\r\nHost: {name}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await?;
         let mut response = String::new();
         tokio::io::BufReader::new(tls)
             .read_line(&mut response)
@@ -149,7 +154,7 @@ async fn smtp_listener(
     listener: TcpListener,
     broker: Arc<Broker>,
     tls: TlsAcceptor,
-    prefixes: Arc<Vec<ipnet::IpNet>>,
+    forwarding: Arc<routing::Config>,
 ) -> Result<()> {
     let mut sessions = JoinSet::new();
     loop {
@@ -157,8 +162,16 @@ async fn smtp_listener(
             _ = broker.stopped.cancelled() => break,
             _ = sessions.join_next(), if !sessions.is_empty() => {},
             accepted = listener.accept() => {
-                let (tcp, address) = accepted?;
-                let trusted = routing::trusted(address.ip(), &prefixes);
+                let (tcp, address) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        // Descriptor exhaustion is transient and must not stop the relay.
+                        event("smtp_accept_failed", json!({"error": error.to_string()}));
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
+                let trusted = forwarding.trusted(address.ip());
                 let Some(permit) = broker.admission.try_source(address.ip(), trusted) else {
                     // A rejected connection never creates a TLS task or waits for a slot.
                     let _ = tcp.try_write(b"421 4.3.2 Server busy, retry later\r\n");
@@ -166,11 +179,11 @@ async fn smtp_listener(
                 };
                 let broker = broker.clone();
                 let tls = tls.clone();
-                let prefixes = prefixes.clone();
+                let forwarding = forwarding.clone();
 
                 sessions.spawn(async move {
                     let _permit = permit;
-                    smtp::serve(tcp, broker, tls, prefixes).await;
+                    smtp::serve(tcp, broker, tls, forwarding).await;
                 });
             }
         }
@@ -220,9 +233,21 @@ impl Drop for UnixSocket {
 
 #[cfg(unix)]
 fn bind_unix(path: &str) -> Result<(tokio::net::UnixListener, UnixSocket)> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    // Refuse pre-existing paths, including stale sockets. Never unlink arbitrary files.
-    let listener = tokio::net::UnixListener::bind(path)?;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    // Never unlink arbitrary files or a live socket. A socket nobody accepts on is
+    // left behind by a crash or SIGKILL, so replace it instead of failing forever.
+    let listener = match tokio::net::UnixListener::bind(path) {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::AddrInUse
+                && std::fs::symlink_metadata(path)?.file_type().is_socket()
+                && std::os::unix::net::UnixStream::connect(path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused) =>
+        {
+            std::fs::remove_file(path)?;
+            tokio::net::UnixListener::bind(path)?
+        }
+        result => result.with_context(|| format!("cannot bind Unix socket {path}"))?,
+    };
     let metadata = std::fs::symlink_metadata(path)?;
     let socket = UnixSocket {
         path: path.into(),
@@ -260,13 +285,14 @@ async fn run() -> Result<()> {
     }
 
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let prefixes = Arc::new(routing::prefixes(&setting(
-        "AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS",
-        "",
-    ))?);
     if env::args().nth(1).as_deref() == Some("healthcheck") {
         return healthcheck().await;
     }
+    let forwarding = Arc::new(routing::Config::new(
+        &setting("AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS", ""),
+        &setting("AHRARA_EMAIL_ROUTING_ADDRESS", ""),
+        &setting("AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT", ""),
+    )?);
 
     #[cfg(feature = "tunnel")]
     let tunnel_configuration = tunnel::configuration()?;
@@ -373,7 +399,7 @@ async fn run() -> Result<()> {
         smtp_socket,
         broker.clone(),
         TlsAcceptor::from(tls),
-        prefixes,
+        forwarding,
     ));
     event(
         "server_started",
@@ -454,7 +480,7 @@ mod tests {
             listener,
             broker.clone(),
             TlsAcceptor::from(Arc::new(tls)),
-            Arc::new(Vec::new()),
+            Arc::new(routing::Config::new("", "", "").unwrap()),
         ));
         let mut first = connect(address, "127.0.0.2").await;
 
@@ -518,5 +544,29 @@ mod tests {
 
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unix_listener_replaces_only_stale_sockets() {
+        let path = std::env::temp_dir().join(format!(
+            "ahrara-stale-socket-test-{}-{}.sock",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let live = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        assert!(bind_unix(path.to_str().unwrap()).is_err());
+        assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
+        // Like a crashed relay: the socket file outlives its listener.
+        drop(live);
+
+        let (listener, socket) = bind_unix(path.to_str().unwrap()).unwrap();
+        let client = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let _accepted = listener.accept().await.unwrap();
+        drop(client);
+        drop(listener);
+        drop(socket);
+
+        assert!(!path.exists());
     }
 }

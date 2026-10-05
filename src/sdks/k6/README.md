@@ -23,8 +23,10 @@ export default function () {
 }
 ```
 
-Create inboxes during VU execution. A receive has no timeout: it waits for mail,
-VU cancellation, close, or an error. It blocks only the current virtual user.
+Create inboxes during VU execution. A receive has no timeout unless you pass
+`durationMs`, for example `inbox.waitForEmail({ subject: 'Verify', durationMs: 30000 })`;
+expiry throws. Otherwise it waits for mail, VU cancellation, close, or an error.
+It blocks only the current virtual user.
 The receiver stores mail that arrives before a wait, and each matched message
 is returned once. Subject and sender filters match substrings. Always close in
 `finally`; VU cancellation also requests native cleanup.
@@ -57,10 +59,18 @@ receive/query accepts its own `{ filter }`, applied after admission; these
 nonmatches remain available. All populated fields must match. Supported fields
 are `sender`, `subject`, `to`, `cc`, `text`, `headers`, `recipient`,
 `envelopeSender`, `messageId` and `hasAttachments`. Header/body checks are
-case-insensitive substrings; envelope fields and Message-ID are exact values,
+case-insensitive substrings; envelope fields and Message-ID match the whole value,
 ignoring case. `headers` maps a header name to a substring, including repeated
-headers. Legacy top-level `subject`/`from` cannot be combined with the same nested
-filter fields.
+headers. Top-level `subject`/`from` options are literal substrings, even when
+`filter.regex` is set, and cannot be combined with the same nested filter fields.
+
+Use `filter: { regex: true, subject: '^(Verification|Confirm email)$' }` to
+interpret all string conditions as case-insensitive Rust regex patterns.
+`recipient`, `envelopeSender` and `messageId` patterns must match the whole value;
+other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
+case sensitivity; regex queries are case-sensitive unless `ignoreCase` is set.
+Header names stay literal. Invalid patterns fail before consuming mail; omitting
+`regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 ```javascript
 const match = inbox.waitForRegexMatch(
@@ -138,11 +148,12 @@ verified production relay pin.
 | `deleteEmail(id)` / `clearEmails()` | Count of messages deleted from this inbox. |
 | `getAttachment(id, attachmentId)` | `{ attachment, content }`, with bytes in an `ArrayBuffer`. |
 | `saveAttachment(id, attachmentId, destination)` | Saved path; destination is an absolute filename or directory, with no overwrite. |
-| `rawEmail(id)` | Original RFC 5322 bytes in an `ArrayBuffer`. |
-| `getHTML(id, allowRemote)` | `{ html, remoteResources }`; false keeps remote resources blocked. |
+| `getRawEmail(id)` | Original RFC 5322 bytes in an `ArrayBuffer`. |
+| `getHtml(id, allowRemote)` | `{ html, remoteResources }`; false keeps remote resources blocked. |
 
-Email fields use camel case, including `textBody`, `textBodyTruncated`,
-`htmlAvailable`, `receivedAt`, `messageId`, `sizeBytes` and `attachments`.
+Email fields use camel case, unlike the Node.js SDK's snake_case fields,
+including `textBody`, `textBodyTruncated`, `htmlAvailable`, `receivedAt`,
+`messageId`, `sizeBytes` and `attachments`.
 Attachment fields are `id`, `filename`, `contentType`, `contentDisposition` and
 `size`. `textBodyTruncated` reports the core's 256 KiB plain-text decoding limit.
 

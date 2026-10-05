@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"regexp"
 	"time"
 
 	sdk "github.com/Hitmasu/Ahrara/src/sdks/go"
@@ -34,24 +35,34 @@ type XPathOptions struct {
 	DurationMS int64 `js:"durationMs"`
 }
 
+// receiveFilter adds top-level subject/from options, which stay literal
+// substrings as in the other SDKs even when filter.regex is set.
 func receiveFilter(subject, from string, filter *sdk.Filter) (sdk.Filter, error) {
 	var result sdk.Filter
 	if filter != nil {
 		result = *filter
+	}
+
+	literal := func(value string) string {
+		if result.Regex {
+			return regexp.QuoteMeta(value)
+		}
+
+		return value
 	}
 	if subject != "" {
 		if result.Subject != "" {
 			return result, errors.New("subject and filter.subject are mutually exclusive")
 		}
 
-		result.Subject = subject
+		result.Subject = literal(subject)
 	}
 	if from != "" {
 		if result.From != "" {
 			return result, errors.New("from and filter.sender are mutually exclusive")
 		}
 
-		result.From = from
+		result.From = literal(from)
 	}
 
 	return result, nil

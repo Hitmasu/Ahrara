@@ -94,6 +94,52 @@ class SearchTest {
   }
 
   @Test
+  void regexFiltersSearchTextFieldsAndAnchorExactFields() throws Exception {
+    var global =
+        EmailFilter.builder()
+            .regex(true)
+            .sender("^SDK@EXAMPLE\\.TEST$")
+            .subject("^accept (now|later)$")
+            .build();
+    try (var inbox = Ahrara.createInbox(Relay.options().withFilter(global))) {
+      Relay.send(inbox.address(), "discard", "never stored");
+      Relay.send(inbox.address(), "accept later", "retained");
+      Relay.send(
+          inbox.address(),
+          "accept now",
+          "code 123",
+          null,
+          new byte[] {1},
+          Map.of("X-Test-Case", "expected-value"));
+      var filter =
+          EmailFilter.builder()
+              .regex(true)
+              .subject(" now$")
+              .to(inbox.address())
+              .recipient(inbox.address())
+              .envelopeSender("sdk@example.test")
+              .text("^CODE [0-9]{3}")
+              .hasAttachments(true)
+              .headers(Map.of("x-test-case", "^EXPECTED-"))
+              .build();
+
+      assertThrows(
+          AhraraException.class,
+          () -> inbox.waitForEmail(
+              Duration.ofSeconds(1), EmailFilter.builder().regex(true).subject("[private").build()));
+      assertThrows(
+          TimeoutException.class,
+          () ->
+              inbox.waitForEmail(
+                  Duration.ofMillis(300),
+                  EmailFilter.builder().regex(true).envelopeSender("sdk@example").build()));
+      assertEquals("accept now", inbox.waitForEmail(Duration.ofSeconds(3), filter).subject());
+      assertEquals("accept later", inbox.waitForEmail(Duration.ofSeconds(3)).subject());
+      assertEquals(2, inbox.listEmails().emails().size());
+    }
+  }
+
+  @Test
   void optionsErrorsAndInterruptionKeepInboxUsable() throws Exception {
     try (var inbox = Ahrara.createInbox(Relay.options())) {
       Relay.send(inbox.address(), "Confirm 456", "body");

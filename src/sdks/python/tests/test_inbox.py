@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import gc
 import threading
 import time
 
@@ -61,6 +62,54 @@ def test_cancel_and_close(inbox):
 def test_invalid_timeout(inbox):
     with pytest.raises(ValueError):
         inbox.wait_for_email(float("nan"))
+
+
+def test_simultaneous_waits_are_queued(inbox):
+    blocking = threading.Event()
+    with ThreadPoolExecutor() as executor:
+        blocked = executor.submit(inbox.wait_for_email, cancel=blocking)
+        try:
+            time.sleep(0.05)
+            with pytest.raises(TimeoutError):
+                inbox.wait_for_email(0.1)
+            first = executor.submit(inbox.wait_for_email, 10)
+            second = executor.submit(inbox.wait_for_email, 10)
+        finally:
+            blocking.set()
+        with pytest.raises(AhraraError):
+            blocked.result()
+        send_email(inbox.address, "Queued one")
+        send_email(inbox.address, "Queued two")
+        subjects = {first.result()["subject"], second.result()["subject"]}
+        assert subjects == {"Queued one", "Queued two"}
+
+
+def test_async_waits_are_queued_without_holding_executor_threads():
+    async def run():
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=1)
+        )
+        async with await create_inbox_async(**inbox_options()) as inbox:
+            first = asyncio.create_task(inbox.wait_for_email(10))
+            await asyncio.sleep(0.05)
+            second = asyncio.create_task(inbox.wait_for_email(10))
+            await asyncio.sleep(0.05)
+            assert not first.done() and not second.done()
+            await asyncio.wait_for(asyncio.to_thread(lambda: None), 0.5)
+            await asyncio.to_thread(send_email, inbox.address, "Async queued one")
+            await asyncio.to_thread(send_email, inbox.address, "Async queued two")
+            assert (await first)["subject"] == "Async queued one"
+            assert (await second)["subject"] == "Async queued two"
+
+    asyncio.run(run())
+
+
+def test_unreferenced_inbox_is_closed_when_collected(tmp_path):
+    options = {**inbox_options(), "profile_path": tmp_path / "profile"}
+    create_inbox(**options)
+    gc.collect()
+    with create_inbox(**options) as reopened:
+        assert reopened.address
 
 
 def test_async_receive_and_cancellation():
@@ -205,15 +254,16 @@ def test_async_cancellation_preserves_a_message_already_consumed(monkeypatch):
 
     async def run():
         async with await create_inbox_async(**inbox_options()) as inbox:
-            original_wait = inbox._inbox.wait_for_email
+            original_request = inbox._inbox._request
 
             def delayed_return(*args, **kwargs):
-                email = original_wait(*args, **kwargs)
-                matched.set()
-                assert release.wait(5), "Test did not release a matched email"
-                return email
+                result = original_request(*args, **kwargs)
+                if result["status"] == "matched":
+                    matched.set()
+                    assert release.wait(5), "Test did not release a matched email"
+                return result
 
-            monkeypatch.setattr(inbox._inbox, "wait_for_email", delayed_return)
+            monkeypatch.setattr(inbox._inbox, "_request", delayed_return)
             waiting = asyncio.create_task(inbox.wait_for_email())
             try:
                 await asyncio.to_thread(
@@ -419,6 +469,56 @@ def test_receipt_filter_and_method_filter_have_separate_scope():
         assert len(inbox.list_emails()["emails"]) == 2
 
 
+def test_regex_filters_search_text_fields_and_anchor_exact_fields():
+    with create_inbox(
+        **inbox_options(),
+        filter={
+            "regex": True,
+            "sender": r"^SENDER@EXAMPLE\.TEST$",
+            "subject": r"^Accepted (first|later)$",
+            "headers": {"X-Test-Flow": "^SIGNUP$"},
+        }
+    ) as inbox:
+        send_email(
+            inbox.address, "Rejected", "Code 000", headers={"X-Test-Flow": "Signup"}
+        )
+        send_email(
+            inbox.address,
+            "Accepted later",
+            "Code 111",
+            headers={"X-Test-Flow": "Signup"},
+        )
+        send_email(
+            inbox.address,
+            "Accepted first",
+            "Code 222",
+            headers={"X-Test-Flow": "Signup"},
+        )
+        with pytest.raises(AhraraError) as invalid:
+            inbox.wait_for_email(filter={"regex": True, "subject": "[private"})
+        assert invalid.value.code == "invalid_argument"
+        assert "private" not in str(invalid.value)
+        with pytest.raises(TimeoutError):
+            inbox.wait_for_email(
+                0.3, filter={"regex": True, "envelope_sender": "SENDER@EXAMPLE"}
+            )
+        first = inbox.wait_for_email(
+            1,
+            filter={
+                "regex": True,
+                "subject": " FIRST$",
+                "text": r"^Code [0-9]{3}",
+                "to": inbox.address,
+                "recipient": inbox.address.upper(),
+                "envelope_sender": "SENDER@EXAMPLE.TEST",
+                "has_attachments": False,
+            },
+        )
+        assert first["subject"] == "Accepted first"
+        assert inbox.wait_for_email(1)["subject"] == "Accepted later"
+        assert len(inbox.list_emails()["emails"]) == 2
+
+
 def test_regex_groups_plural_across_emails_and_invalid_query(inbox):
     send_email(inbox.address, "Nonmatch", "Keep this email")
     send_email(inbox.address, "Codes", "code=123 code=456X")
@@ -543,19 +643,21 @@ def test_stream_cancellation_after_match_does_not_start_another_wait(monkeypatch
 
     async def run():
         async with await create_inbox_async(**inbox_options()) as inbox:
-            original_wait = inbox._inbox._wait
+            original_request = inbox._inbox._request
             calls = 0
             seen = []
 
             def delayed_return(*args, **kwargs):
                 nonlocal calls
-                calls += 1
-                result = original_wait(*args, **kwargs)
-                matched.set()
-                assert release.wait(5), "Test did not release matched result"
+                if matched.is_set():
+                    calls += 1
+                result = original_request(*args, **kwargs)
+                if result["status"] == "matched":
+                    matched.set()
+                    assert release.wait(5), "Test did not release matched result"
                 return result
 
-            monkeypatch.setattr(inbox._inbox, "_wait", delayed_return)
+            monkeypatch.setattr(inbox._inbox, "_request", delayed_return)
             if kind == "email":
                 stream = inbox.wait_for_emails()
             elif kind == "regex":
@@ -587,7 +689,7 @@ def test_stream_cancellation_after_match_does_not_start_another_wait(monkeypatch
                 with pytest.raises(asyncio.CancelledError):
                     await consuming
                 assert len(seen) == 1, "The committed match should be delivered once"
-                assert calls == 1, "Cancellation must not start another native wait"
+                assert calls == 0, "Cancellation must not start another native wait"
             finally:
                 release.set()
                 consuming.cancel()

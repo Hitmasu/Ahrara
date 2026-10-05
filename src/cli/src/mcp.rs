@@ -21,7 +21,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Deserialize, JsonSchema)]
@@ -54,10 +54,13 @@ struct ReadEml {
 struct SaveAttachment {
     email_id: i64,
     attachment_id: String,
-    destination: String,
+    /// Plain file name inside the profile's attachments directory; defaults to
+    /// the sanitized attachment filename.
+    filename: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
+// Parsed in two steps: serde's flatten would ignore misspelled filter keys.
+#[derive(JsonSchema)]
 struct Wait {
     timeout_seconds: Option<u64>,
     #[serde(flatten)]
@@ -125,7 +128,14 @@ impl Mcp {
                 json!(c.status().await?)
             }
             "ahrara_wait_for_email" => {
-                let a: Wait = args(input)?;
+                let mut filters = input;
+                let timeout = filters
+                    .as_object_mut()
+                    .and_then(|input| input.remove("timeout_seconds"));
+                let a = Wait {
+                    timeout_seconds: args(timeout.unwrap_or_default())?,
+                    filters: args(filters)?,
+                };
                 json!(
                     c.wait_email(a.filters, a.timeout_seconds.unwrap_or(60))
                         .await?
@@ -154,7 +164,20 @@ impl Mcp {
             }
             "ahrara_save_attachment" => {
                 let a: SaveAttachment = args(input)?;
-                c.save_attachment(a.email_id, a.attachment_id, Path::new(&a.destination))
+                // MCP clients may be remote; confine writes to the private profile.
+                let directory = c
+                    .config
+                    .database_path
+                    .parent()
+                    .context("invalid database path")?
+                    .join("attachments");
+                let destination = match a.filename {
+                    Some(name) if crate::mail::safe_filename(&name) == name => directory.join(name),
+                    Some(_) => bail!("invalid_argument: filename must be a plain file name"),
+                    None => directory.clone(),
+                };
+                crate::config::private_dir(&directory)?;
+                c.save_attachment(a.email_id, a.attachment_id, &destination)
                     .await?
             }
             "ahrara_delete_email" => {
@@ -265,7 +288,7 @@ impl ServerHandler for Mcp {
                 ),
                 tool::<SaveAttachment>(
                     "ahrara_save_attachment",
-                    "Save attachment on the computer running Ahrara, not on the remote MCP client. Never overwrite existing paths.",
+                    "Save an attachment into the private attachments directory beside the profile database on the computer running Ahrara. filename must be a plain file name; it defaults to the sanitized attachment name. Never overwrites; returns the absolute saved path.",
                     false,
                     false,
                 ),
@@ -583,4 +606,109 @@ async fn session_active(core: &Core, authorization: Option<&crate::api::Authoriz
             Some(authorization) => crate::api::still_authorized(core, authorization).await,
             None => !core.mcp_auth_required(),
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mcp(dir: &std::path::Path) -> Mcp {
+        let (core, _) = Core::open(crate::config::Config {
+            database_path: dir.join("profile").join("inbox.db"),
+            identity_path: dir.join("profile").join("identity.key"),
+            ..Default::default()
+        })
+        .unwrap();
+
+        Mcp { core }
+    }
+
+    #[tokio::test]
+    async fn wait_rejects_misspelled_filter_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let mcp = mcp(dir.path());
+        let error = mcp
+            .invoke(
+                "ahrara_wait_for_email",
+                json!({"from": "x", "timeout_seconds": 1}),
+            )
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(error.to_string(), "invalid tool arguments");
+        let error = mcp
+            .invoke(
+                "ahrara_wait_for_email",
+                json!({"from_contains": "x", "timeout_seconds": 1}),
+            )
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(error.to_string(), "listener_not_started");
+    }
+
+    #[tokio::test]
+    async fn attachments_are_saved_only_inside_the_private_profile_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mcp = mcp(dir.path());
+        let core = &mcp.core;
+        let address = core.create_address(None).await.unwrap();
+        let id = core
+            .storage
+            .insert(
+                "attachment".into(),
+                core.identity.fingerprint(),
+                vec![address.routing_address],
+                "sender@example.test".into(),
+                include_bytes!("../tests/fixtures/message.eml").to_vec(),
+            )
+            .await
+            .unwrap()[0]
+            .id;
+        let save = |extra: Value| {
+            let mut input = json!({"email_id": id, "attachment_id": "1"});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            mcp.invoke("ahrara_save_attachment", input)
+        };
+        let directory = dir.path().join("profile").join("attachments");
+
+        for rejected in [
+            json!({"filename": "../escape.txt"}),
+            json!({"filename": "nested/escape.txt"}),
+            json!({"filename": ".."}),
+            json!({"filename": dir.path().join("absolute.txt")}),
+            json!({"destination": dir.path().join("absolute.txt")}),
+        ] {
+            assert!(save(rejected).await.is_err());
+        }
+
+        assert!(!dir.path().join("profile").join("escape.txt").exists());
+        assert!(!dir.path().join("absolute.txt").exists());
+        let saved = save(json!({})).await.unwrap();
+        let directory = directory.canonicalize().unwrap();
+
+        assert_eq!(saved["path"], json!(directory.join("attachment.txt")));
+        assert!(save(json!({})).await.is_err(), "never overwrite");
+        let named = save(json!({"filename": "named.txt"})).await.unwrap();
+
+        assert_eq!(saved["saved"], true);
+        assert_eq!(
+            std::fs::read(named["path"].as_str().unwrap()).unwrap(),
+            b"hello attachment\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
 }

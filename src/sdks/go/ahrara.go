@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,23 +46,29 @@ func (Options) String() string { return "Ahrara options (credentials redacted)" 
 func (o Options) GoString() string { return o.String() }
 
 // Filter combines all populated conditions. Header/text matches are Unicode
-// case-insensitive substrings; envelope fields and MessageID match exactly,
-// ignoring case. Rejected admission messages are discarded; per-call nonmatches
-// remain available for other receives.
+// case-insensitive substrings; envelope fields and MessageID match the whole
+// value, ignoring case. With Regex, strings are case-insensitive Rust regex
+// patterns: Recipient, EnvelopeSender and MessageID must match the whole value,
+// while the others match anywhere. Rejected admission messages are discarded;
+// per-call nonmatches remain available for other receives.
 type Filter struct {
+	// Regex interprets string conditions as case-insensitive Rust regex patterns.
+	// Header names remain literal; inline flags such as (?-i) override case.
+	Regex bool `json:"regex,omitempty" js:"regex"`
 	// Subject matches a substring of the subject header; empty matches any subject.
 	Subject string `json:"subject,omitempty" js:"subject"`
-	// From matches a substring of the sender header; empty matches any sender.
+	// From matches the decoded From header, including display names; empty
+	// matches any sender. Unlike ListOptions.From, it follows the Filter rules.
 	From string `json:"sender,omitempty" js:"sender"`
 	// To matches any decoded To header.
 	To string `json:"to,omitempty" js:"to"`
 	// CC matches any decoded Cc header.
 	CC string `json:"cc,omitempty" js:"cc"`
-	// Recipient matches the actual SMTP recipient.
+	// Recipient matches the whole SMTP recipient.
 	Recipient string `json:"recipient,omitempty" js:"recipient"`
-	// EnvelopeSender matches the actual SMTP sender.
+	// EnvelopeSender matches the whole SMTP sender.
 	EnvelopeSender string `json:"envelope_sender,omitempty" js:"envelopeSender"`
-	// MessageID matches the complete Message-ID header.
+	// MessageID matches the whole Message-ID header.
 	MessageID string `json:"message_id,omitempty" js:"messageId"`
 	// Text searches the complete decoded plain-text body, excluding attachments.
 	Text string `json:"text,omitempty" js:"text"`
@@ -72,7 +79,7 @@ type Filter struct {
 }
 
 func (f Filter) apply(request map[string]any) {
-	if f.Subject != "" || f.From != "" || f.To != "" || f.CC != "" ||
+	if f.Regex || f.Subject != "" || f.From != "" || f.To != "" || f.CC != "" ||
 		f.Recipient != "" || f.EnvelopeSender != "" || f.MessageID != "" ||
 		f.Text != "" || f.HasAttachments != nil || len(f.Headers) != 0 {
 		request["filter"] = f
@@ -90,8 +97,10 @@ type Error struct {
 // Error returns the native category and message.
 func (e *Error) Error() string { return fmt.Sprintf("Ahrara %s: %s", e.Code, e.Message) }
 
-// Inbox owns a live connection. Always Close it, normally with defer or t.Cleanup.
-// Multiple goroutines may use an Inbox. Waits consume messages one at a time.
+// Inbox owns a live connection. Always Close it, normally with defer or t.Cleanup;
+// an unreachable inbox is closed by a finalizer as a fallback. Multiple
+// goroutines may use an Inbox. Concurrent waits queue and consume messages one
+// at a time.
 type Inbox struct {
 	// Address is the registered recipient address. Treat it as read-only.
 	Address   string
@@ -169,11 +178,14 @@ func CreateInbox(ctx context.Context, options Options) (*Inbox, error) {
 			return
 		}
 
-		done <- outcome{inbox: &Inbox{
+		inbox := &Inbox{
 			Address:  result.Address,
 			handle:   result.Handle,
 			waitGate: make(chan struct{}, 1),
-		}}
+		}
+		// Native close can wait for the relay, so it must not block the finalizer goroutine.
+		runtime.SetFinalizer(inbox, func(i *Inbox) { go i.Close() })
+		done <- outcome{inbox: inbox}
 	}()
 	select {
 	case result := <-done:

@@ -25,8 +25,9 @@ async def verify_signup():
 
 Creation waits for authentication/subscription. Reception continues before the
 first wait. Matching receives are consumed once, while stored messages remain
-available until deleted. Use separate inboxes for parallel tests. Only one active
-wait is permitted per inbox; always close it or use its context manager.
+available until deleted. Use separate inboxes for parallel tests. Concurrent waits
+on one inbox are queued and run one at a time. Always close the inbox or use its
+context manager.
 
 ## Waiting and continuous reception
 
@@ -69,8 +70,7 @@ while the consumer handles the previous message. Cancel an active async `anext()
 task before closing its generator; synchronous waits accept a cancellation event.
 
 Repeated cancellation cannot abandon native creation or cleanup. Cancelled
-creation waits for its bounded connection attempt, then closes any result. Wait
-cancellation signals the worker directly, including when its executor is full.
+creation waits for its bounded connection attempt, then closes any result.
 A concurrently committed result may be delivered once before a stream propagates
 cancellation; cancellation never starts another receive.
 
@@ -81,8 +81,20 @@ At creation, `filter` discards rejected arrivals before storage. On individual
 waits, it leaves rejected messages available for a later wait. Every field is
 ANDed: `sender`, `subject`, `to`, `cc`, `text`, and `headers={name: value}` match
 case-insensitive substrings. `recipient`, `envelope_sender`, and `message_id`
-match exactly, ignoring case. `has_attachments` selects presence or absence;
-header names ignore case. Per-wait criteria add to the global receipt filter.
+match the whole value, ignoring case. `has_attachments` selects presence or
+absence; header names ignore case. Per-wait criteria add to the global receipt
+filter.
+
+Use `filter={"regex": True, "subject": r"^(Verification|Confirm email)$"}`
+to interpret all string conditions as case-insensitive Rust regex patterns.
+`recipient`, `envelope_sender`, and `message_id` patterns must match the whole
+value; other patterns match anywhere, so use `^` / `$` for a full match. Use
+`(?-i)` for case sensitivity; regex queries below are case-sensitive unless
+`ignore_case=True`. Header names and the `subject`/`from_address` wait arguments
+stay literal. Invalid patterns fail before consuming mail; omitting `regex` keeps
+literal matching. Robot Framework accepts the same dictionary, for example
+`&{filter}=    Create Dictionary    regex=${TRUE}    subject=^Verify$`. See the
+[shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 ```python
 match = inbox.wait_for_regex_match(

@@ -260,7 +260,7 @@ pub async fn serve(config: Configuration, router: Router, broker: Arc<Broker>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth, protocol as p};
+    use crate::{auth, protocol as p, secure};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use bytes::Bytes;
     use ed25519_dalek::{Signer, SigningKey};
@@ -333,30 +333,47 @@ mod tests {
 
     #[tokio::test]
     async fn raw_tunnel_requires_signed_authentication_and_cleans_up_on_edge_loss() {
+        let transport = snow::Builder::new(secure::PATTERN.parse().unwrap())
+            .generate_keypair()
+            .unwrap();
         for valid in [true, false] {
-            let broker = Broker::new();
+            let broker = Broker::encrypted(transport.private.as_slice().try_into().unwrap());
             let (client, server) = duplex(512);
             let task = tokio::spawn(serve_stream(
                 broker.clone(),
                 libcfd::Stream::from_io(server.compat()),
             ));
             let mut socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+            let mut handshake =
+                secure::initiator(transport.public.as_slice().try_into().unwrap()).unwrap();
+            let mut message = [0; secure::MAX_HANDSHAKE];
+            let length = handshake.write_message(&[], &mut message).unwrap();
+            socket
+                .send(Message::Binary(message[..length].to_vec().into()))
+                .await
+                .unwrap();
+            let Message::Binary(raw) = socket.next().await.unwrap().unwrap() else {
+                panic!("binary handshake required");
+            };
+
+            assert_eq!(handshake.read_message(&raw, &mut message).unwrap(), 0);
+            let binding: [u8; 32] = handshake.get_handshake_hash().try_into().unwrap();
+            let (mut sender, mut receiver) = secure::into_session(handshake).unwrap();
             let key = SigningKey::from_bytes(&[9; 32]);
             let public = key.verifying_key().to_bytes();
+            let hello = p::json(
+                p::HELLO,
+                &serde_json::json!({"public_key": URL_SAFE_NO_PAD.encode(public)}),
+            )
+            .unwrap();
             socket
-                .send(Message::Binary(
-                    p::json(
-                        p::HELLO,
-                        &serde_json::json!({"public_key": URL_SAFE_NO_PAD.encode(public)}),
-                    )
-                    .unwrap()
-                    .into(),
-                ))
+                .send(Message::Binary(sender.seal(&hello).unwrap().into()))
                 .await
                 .unwrap();
             let Message::Binary(raw) = socket.next().await.unwrap().unwrap() else {
                 panic!("binary challenge required");
             };
+            let raw = receiver.open(&raw).unwrap();
             let (kind, payload) = p::decode(&raw).unwrap();
 
             assert_eq!(kind, p::CHALLENGE);
@@ -366,20 +383,20 @@ mod tests {
                 .unwrap()
                 .try_into()
                 .unwrap();
-            let mut signature = key.sign(&auth::preimage(&public, &challenge)).to_bytes();
+            let mut signature = key
+                .sign(&secure::auth_preimage(&public, &challenge, &binding))
+                .to_bytes();
             if !valid {
                 signature[0] ^= 1;
             }
 
+            let authenticate = p::json(
+                p::AUTHENTICATE,
+                &serde_json::json!({"signature": URL_SAFE_NO_PAD.encode(signature)}),
+            )
+            .unwrap();
             socket
-                .send(Message::Binary(
-                    p::json(
-                        p::AUTHENTICATE,
-                        &serde_json::json!({"signature": URL_SAFE_NO_PAD.encode(signature)}),
-                    )
-                    .unwrap()
-                    .into(),
-                ))
+                .send(Message::Binary(sender.seal(&authenticate).unwrap().into()))
                 .await
                 .unwrap();
             let Message::Binary(raw) = socket.next().await.unwrap().unwrap() else {
@@ -387,7 +404,7 @@ mod tests {
             };
 
             assert_eq!(
-                p::decode(&raw).unwrap().0,
+                p::decode(&receiver.open(&raw).unwrap()).unwrap().0,
                 if valid { p::READY } else { p::FAILURE }
             );
             assert_eq!(broker.lookup(&auth::derive(&public)).is_some(), valid);

@@ -13,6 +13,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use zeroize::Zeroize;
 
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 static INBOXES: OnceLock<Mutex<HashMap<u64, Arc<Inbox>>>> = OnceLock::new();
@@ -279,8 +280,8 @@ fn failure(code: &str, message: &str) -> Value {
 }
 
 fn call_json(input: &str) -> Value {
-    if input.len() > 64 * 1024 {
-        return failure("invalid_argument", "Request exceeds 64 KiB");
+    if input.len() > 1024 * 1024 {
+        return failure("invalid_argument", "Request exceeds 1 MiB");
     }
 
     let request = match serde_json::from_str::<Request>(input) {
@@ -318,6 +319,7 @@ fn call_json(input: &str) -> Value {
                             | "internal_error"
                             | "email_not_found"
                             | "attachment_not_found"
+                            | "html_not_found"
                             | "invalid_message"
                     )
                 })
@@ -362,7 +364,10 @@ pub unsafe extern "C" fn ahrara_call(request_json: *const c_char) -> *mut c_char
 pub unsafe extern "C" fn ahrara_string_free(response_json: *mut c_char) {
     if !response_json.is_null() {
         // SAFETY: allocation originated from CString::into_raw above.
-        drop(unsafe { CString::from_raw(response_json) });
+        // Responses can contain exported recovery keys; clear them before freeing.
+        unsafe { CString::from_raw(response_json) }
+            .into_bytes_with_nul()
+            .zeroize();
     }
 }
 
@@ -392,6 +397,19 @@ mod tests {
             assert!(!pointer.is_null());
             ahrara_string_free(pointer);
             ahrara_string_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn requests_are_limited_to_one_mebibyte() {
+        for (size, code) in [
+            (512 * 1024, "inbox_closed"),
+            (1024 * 1024, "invalid_argument"),
+        ] {
+            let request = json!({"op": "wait", "handle": 42, "subject": "x".repeat(size)});
+            let response = call_json(&request.to_string());
+
+            assert_eq!(response["error"]["code"], code);
         }
     }
 }

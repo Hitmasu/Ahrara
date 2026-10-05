@@ -26,8 +26,10 @@ mod palette;
     about = "Ephemeral email. Server streams, your computer stores."
 )]
 struct Cli {
+    /// Use this config.toml; relative paths in it resolve beside the file.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Print machine-readable JSON instead of the interactive or text output.
     #[arg(long, global = true)]
     json: bool,
     /// Disable background update notifications for this invocation.
@@ -39,7 +41,8 @@ struct Cli {
     /// Use HTTPS for the shared Web, API and MCP server.
     #[arg(long, global = true)]
     https: bool,
-    /// Require the local API bearer token for MCP connections.
+    /// Require the local API bearer token for MCP connections (the default
+    /// unless the config sets mcp_auth = false).
     #[arg(long, global = true)]
     mcp_auth: bool,
     /// Expose Web and MCP to the private LAN (HTTPS); MCP still requires a bearer token.
@@ -54,8 +57,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Receive email for this profile's Identity (the default command).
     Listen,
+    /// Show connection, listener and local inbox status.
     Status,
+    /// Print the installed version.
     Version,
     /// Check releases or update a registered direct installation.
     Update {
@@ -67,6 +73,7 @@ enum Command {
         #[arg(long, value_enum)]
         register: Option<ahrara::update::InstallMethod>,
     },
+    /// List, read, export and delete locally stored email.
     Inbox {
         #[command(subcommand)]
         command: Inbox,
@@ -76,6 +83,7 @@ enum Command {
         #[command(subcommand)]
         command: Database,
     },
+    /// Create and manage the aliases of this profile's Identity.
     Address {
         #[command(subcommand)]
         command: Address,
@@ -85,6 +93,7 @@ enum Command {
         #[command(subcommand)]
         command: Domain,
     },
+    /// Show, export, register or replace the Identity Recovery Key.
     Auth {
         #[command(subcommand)]
         command: Auth,
@@ -101,6 +110,7 @@ enum Command {
         #[command(subcommand)]
         command: WebCommand,
     },
+    /// Serve the local REST API, or manage its bearer token.
     Api {
         #[command(subcommand)]
         command: Option<ApiCommand>,
@@ -122,6 +132,9 @@ struct List {
     address: Option<String>,
     #[arg(long)]
     from: Option<String>,
+    /// ASCII case-insensitive substring of the To header or SMTP recipient.
+    #[arg(long)]
+    to: Option<String>,
     #[arg(long)]
     subject: Option<String>,
     #[arg(long)]
@@ -135,10 +148,10 @@ impl From<List> for Filters {
         Self {
             address: q.address,
             from_contains: q.from,
+            to_contains: q.to,
             subject_contains: q.subject,
             after_id: q.after_id,
             limit: Some(q.limit),
-            ..Default::default()
         }
     }
 }
@@ -227,9 +240,9 @@ enum Auth {
         #[arg(long)]
         copy: bool,
     },
+    /// Replace the Identity of a profile without an inbox. Reads the Recovery
+    /// Key from a prompt or stdin, never from arguments visible to other processes.
     Import {
-        #[arg(conflicts_with = "stdin")]
-        key: Option<String>,
         #[arg(long)]
         stdin: bool,
         #[arg(long)]
@@ -304,6 +317,22 @@ fn confirm(yes: bool, prompt: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn recovery_key(stdin: bool) -> Result<Zeroizing<String>> {
+    if !stdin && io::stdin().is_terminal() {
+        return Ok(Zeroizing::new(rpassword::prompt_password(
+            "Recovery key: ",
+        )?));
+    }
+
+    let mut secret = Zeroizing::new(String::new());
+    io::stdin().lock().take(4097).read_to_string(&mut secret)?;
+    if secret.len() > 4096 {
+        bail!("Recovery key input is too large")
+    }
+
+    Ok(secret)
 }
 
 fn recovery(identity: &auth::Identity) {
@@ -391,18 +420,7 @@ async fn run() -> Result<()> {
             bail!("Identity already exists; auth set never replaces an existing key")
         }
 
-        let secret = if stdin || !io::stdin().is_terminal() {
-            let mut secret = Zeroizing::new(String::new());
-            io::stdin().lock().take(4097).read_to_string(&mut secret)?;
-            if secret.len() > 4096 {
-                bail!("Recovery key input is too large")
-            }
-
-            secret
-        } else {
-            Zeroizing::new(rpassword::prompt_password("Recovery key: ")?)
-        };
-        let identity = auth::Identity::install_new(&secret, &cfg)?;
+        let identity = auth::Identity::install_new(&recovery_key(stdin)?, &cfg)?;
         return output(&json!({
             "registered": true,
             "identity_fingerprint": identity.fingerprint()
@@ -437,7 +455,7 @@ async fn run() -> Result<()> {
         }
     }
     if let Command::Auth {
-        command: Auth::Import { key, stdin, yes },
+        command: Auth::Import { stdin, yes },
     } = command
     {
         let _guard = Ownership::acquire(&cfg, "auth import", "")?;
@@ -448,16 +466,7 @@ async fn run() -> Result<()> {
             confirm(yes, "Replace the current Identity?")?;
         }
 
-        let secret = if let Some(key) = key {
-            Zeroizing::new(key)
-        } else if stdin || !io::stdin().is_terminal() {
-            let mut s = Zeroizing::new(String::new());
-            io::stdin().read_to_string(&mut s)?;
-            s
-        } else {
-            Zeroizing::new(rpassword::prompt_password("Recovery key: ")?)
-        };
-        auth::Identity::import(&secret, &cfg)?;
+        auth::Identity::import(&recovery_key(stdin)?, &cfg)?;
         return output(&json!({
             "imported": true,
             "identity_fingerprint": auth::Identity::load(&cfg)?.fingerprint()

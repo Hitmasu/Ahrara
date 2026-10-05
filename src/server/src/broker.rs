@@ -77,19 +77,19 @@ impl WireReader {
 
 struct Sink {
     wire: WireSink,
-    secure: Option<secure::Sender>,
+    secure: secure::Sender,
 }
 
 impl Sink {
     async fn send(&mut self, message: Message) -> Result<()> {
         // The peer's sink mutex preserves ciphertext nonce order through the socket write.
-        self.wire.send(seal(message, self.secure.as_mut())?).await
+        self.wire.send(seal(message, &mut self.secure)?).await
     }
 }
 
 struct Reader {
     wire: WireReader,
-    secure: Option<secure::Receiver>,
+    secure: secure::Receiver,
 }
 
 impl Reader {
@@ -97,23 +97,21 @@ impl Reader {
         self.wire
             .next()
             .await
-            .map(|message| message.and_then(|message| open(message, self.secure.as_mut())))
+            .map(|message| message.and_then(|message| open(message, &mut self.secure)))
     }
 }
 
-fn seal(message: Message, secure: Option<&mut secure::Sender>) -> Result<Message> {
-    match (message, secure) {
-        (Message::Binary(frame), Some(sender)) => Ok(Message::Binary(sender.seal(&frame)?.into())),
-        (message, _) => Ok(message),
+fn seal(message: Message, sender: &mut secure::Sender) -> Result<Message> {
+    match message {
+        Message::Binary(frame) => Ok(Message::Binary(sender.seal(&frame)?.into())),
+        message => Ok(message),
     }
 }
 
-fn open(message: Message, secure: Option<&mut secure::Receiver>) -> Result<Message> {
-    match (message, secure) {
-        (Message::Binary(frame), Some(receiver)) => {
-            Ok(Message::Binary(receiver.open(&frame)?.into()))
-        }
-        (message, _) => Ok(message),
+fn open(message: Message, receiver: &mut secure::Receiver) -> Result<Message> {
+    match message {
+        Message::Binary(frame) => Ok(Message::Binary(receiver.open(&frame)?.into())),
+        message => Ok(message),
     }
 }
 
@@ -175,9 +173,9 @@ impl Connection {
 
 struct Session {
     connection: Connection,
-    sender: Option<secure::Sender>,
-    receiver: Option<secure::Receiver>,
-    binding: Option<[u8; 32]>,
+    sender: secure::Sender,
+    receiver: secure::Receiver,
+    binding: [u8; 32],
 }
 
 impl Session {
@@ -185,13 +183,11 @@ impl Session {
         self.connection
             .recv()
             .await
-            .map(|message| message.and_then(|message| open(message, self.receiver.as_mut())))
+            .map(|message| message.and_then(|message| open(message, &mut self.receiver)))
     }
 
     async fn send(&mut self, message: Message) -> Result<()> {
-        self.connection
-            .send(seal(message, self.sender.as_mut())?)
-            .await
+        self.connection.send(seal(message, &mut self.sender)?).await
     }
 
     fn split(self) -> (Sink, Reader) {
@@ -295,7 +291,7 @@ pub struct Broker {
     peers: RwLock<HashMap<Route, Arc<Peer>>>,
     started: Instant,
     pub stopped: CancellationToken,
-    transport_key: Option<Zeroizing<[u8; 32]>>,
+    transport_key: Zeroizing<[u8; 32]>,
 }
 
 /// The frame was sent, but the peer did not confirm it before the deadline.
@@ -312,7 +308,14 @@ impl std::error::Error for ReplyTimeout {}
 
 impl Broker {
     pub fn encrypted_with_limits(key: [u8; 32], limits: crate::limits::RuntimeLimits) -> Arc<Self> {
-        Self::create(Some(Zeroizing::new(key)), limits)
+        Arc::new(Self {
+            admission: crate::limits::Admission::new(limits),
+            sse: crate::sse::Sessions::default(),
+            peers: RwLock::new(HashMap::new()),
+            started: Instant::now(),
+            stopped: CancellationToken::new(),
+            transport_key: Zeroizing::new(key),
+        })
     }
 
     #[cfg(test)]
@@ -320,31 +323,21 @@ impl Broker {
         Self::encrypted_with_limits(key, crate::limits::RuntimeLimits::default())
     }
 
-    #[cfg(test)]
-    pub fn new() -> Arc<Self> {
-        Self::create(None, crate::limits::RuntimeLimits::default())
-    }
-
-    fn create(
-        transport_key: Option<Zeroizing<[u8; 32]>>,
-        limits: crate::limits::RuntimeLimits,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            admission: crate::limits::Admission::new(limits),
-            sse: crate::sse::Sessions::default(),
-            peers: RwLock::new(HashMap::new()),
-            started: Instant::now(),
-            stopped: CancellationToken::new(),
-            transport_key,
-        })
-    }
-
-    pub fn is_encrypted(&self) -> bool {
-        self.transport_key.is_some()
-    }
-
     pub fn lookup(&self, route: &Route) -> Option<Arc<Peer>> {
         self.peers.read().unwrap().get(route).cloned()
+    }
+
+    /// Connects an Identity without a client socket, replacing any current connection.
+    #[cfg(test)]
+    pub fn attach(&self, route: Route) -> Arc<Peer> {
+        let peer = Arc::new(Peer {
+            sink: AsyncMutex::new(None),
+            pending: Mutex::new(Pending::default()),
+            closed: CancellationToken::new(),
+            last_ping: AtomicU64::new(0),
+        });
+        self.peers.write().unwrap().insert(route, peer.clone());
+        peer
     }
 
     pub async fn sweep(self: Arc<Self>) {
@@ -383,30 +376,21 @@ impl Broker {
 
     pub async fn serve_connection(
         self: Arc<Self>,
-        connection: Connection,
+        mut connection: Connection,
         closed: CancellationToken,
     ) {
-        let mut session = Session {
-            connection,
-            sender: None,
-            receiver: None,
-            binding: None,
-        };
         // Keep the Noise handshake and authentication buffers out of the idle future.
         let authenticated = tokio::select! {
             _ = closed.cancelled() => return,
             _ = self.stopped.cancelled() => return,
             result = timeout(Duration::from_secs(15), Box::pin(async {
-                if let Some(key) = self.transport_key.as_ref() {
-                    let (sender, receiver, binding) = handshake(&mut session.connection, key).await?;
-                    session.sender = Some(sender);
-                    session.receiver = Some(receiver);
-                    session.binding = Some(binding);
-                }
-                authenticate(&mut session).await
+                let (sender, receiver, binding) = handshake(&mut connection, &self.transport_key).await?;
+                let mut session = Session { connection, sender, receiver, binding };
+                let identity = authenticate(&mut session).await?;
+                Ok::<_, anyhow::Error>((session, identity))
             })) => result,
         };
-        let Ok(Ok((route, fingerprint))) = authenticated else {
+        let Ok(Ok((session, (route, fingerprint)))) = authenticated else {
             return;
         };
         let (sink, mut reader) = session.split();
@@ -657,10 +641,7 @@ async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
         .await?;
         let signed: Signed = read(ws, p::AUTHENTICATE).await?;
         let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(signed.signature)?)?;
-        let preimage = match ws.binding.as_ref() {
-            Some(binding) => secure::auth_preimage(&public, &challenge, binding),
-            None => auth::preimage(&public, &challenge),
-        };
+        let preimage = secure::auth_preimage(&public, &challenge, &ws.binding);
         VerifyingKey::from_bytes(&public)?.verify_strict(&preimage, &signature)?;
         Ok((auth::derive(&public), hex::encode(Sha256::digest(public))))
     }
@@ -734,7 +715,9 @@ mod tests {
         }
     }
 
-    async fn encrypted_client() -> (Arc<Broker>, Client, tokio::task::JoinHandle<()>) {
+    async fn encrypted_client(
+        closed: CancellationToken,
+    ) -> (Arc<Broker>, Client, tokio::task::JoinHandle<()>) {
         let key = snow::Builder::new(secure::PATTERN.parse().unwrap())
             .generate_keypair()
             .unwrap();
@@ -742,10 +725,9 @@ mod tests {
         let broker = Broker::encrypted(private.as_slice().try_into().unwrap());
         let (send, incoming) = mpsc::channel(1);
         let (outgoing, mut receive) = mpsc::channel(1);
-        let connection = broker.clone().serve_connection(
-            Connection::Sse { incoming, outgoing },
-            CancellationToken::new(),
-        );
+        let connection = broker
+            .clone()
+            .serve_connection(Connection::Sse { incoming, outgoing }, closed);
         eprintln!(
             "encrypted broker connection future bytes={}",
             std::mem::size_of_val(&connection)
@@ -781,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn identity_signature_is_bound_to_its_secure_handshake() {
         for valid in [true, false] {
-            let (broker, mut client, task) = encrypted_client().await;
+            let (broker, mut client, task) = encrypted_client(CancellationToken::new()).await;
             let key = SigningKey::from_bytes(&[8; 32]);
             let mut binding = client.binding;
             if !valid {
@@ -811,7 +793,7 @@ mod tests {
     #[tokio::test]
     async fn encrypted_delivery_requires_authentic_ack_and_rejects_replay() {
         for invalid in ["valid", "tampered", "plaintext", "replayed"] {
-            let (broker, mut client, task) = encrypted_client().await;
+            let (broker, mut client, task) = encrypted_client(CancellationToken::new()).await;
             let key = SigningKey::from_bytes(&[8; 32]);
             client.login(&key, client.binding, p::READY).await;
             let peer = broker
@@ -916,6 +898,28 @@ mod tests {
         assert!(broker.peers.read().unwrap().is_empty());
     }
 
+    fn secure_pair() -> (secure::Sender, secure::Receiver) {
+        let key = snow::Builder::new(secure::PATTERN.parse().unwrap())
+            .generate_keypair()
+            .unwrap();
+        let mut client = secure::initiator(key.public.as_slice().try_into().unwrap()).unwrap();
+        let mut server = secure::responder(key.private.as_slice().try_into().unwrap()).unwrap();
+        let mut message = [0; secure::MAX_HANDSHAKE];
+        let mut payload = [0; secure::MAX_HANDSHAKE];
+        let length = client.write_message(&[], &mut message).unwrap();
+        server
+            .read_message(&message[..length], &mut payload)
+            .unwrap();
+        let length = server.write_message(&[], &mut message).unwrap();
+        client
+            .read_message(&message[..length], &mut payload)
+            .unwrap();
+        (
+            secure::into_session(server).unwrap().0,
+            secure::into_session(client).unwrap().1,
+        )
+    }
+
     fn peer(last_ping: u64) -> Arc<Peer> {
         Arc::new(Peer {
             sink: AsyncMutex::new(None),
@@ -930,9 +934,10 @@ mod tests {
         for blocked_write in [false, true] {
             let peer = peer(0);
             let (send, mut receive) = mpsc::channel(1);
+            let (sender, mut receiver) = secure_pair();
             *peer.sink.lock().await = Some(Sink {
                 wire: WireSink::Sse(send),
-                secure: None,
+                secure: sender,
             });
             if blocked_write {
                 peer.send(p::ABORT, &json!({"transfer_id": "previous"}))
@@ -946,7 +951,7 @@ mod tests {
                 .unwrap_err();
 
             assert_eq!(error.is::<ReplyTimeout>(), !blocked_write);
-            let frame = receive.recv().await.unwrap();
+            let frame = receiver.open(&receive.recv().await.unwrap()).unwrap();
 
             assert_eq!(
                 p::decode(&frame).unwrap().0,
@@ -979,7 +984,7 @@ mod tests {
 
     #[test]
     fn idle_sweep_preserves_clients_with_native_ping() {
-        let broker = Broker::new();
+        let broker = Broker::encrypted([7; 32]);
         let stale = peer(0);
         let alive = peer(90);
         broker.peers.write().unwrap().insert([1; 16], stale.clone());
@@ -996,62 +1001,28 @@ mod tests {
     #[tokio::test]
     async fn sse_authentication_requires_signed_challenge_and_removes_disconnected_identity() {
         for (valid_signature, abort) in [(true, false), (false, false), (true, true)] {
-            let broker = Broker::new();
-            let (send, incoming) = mpsc::channel(1);
-            let (outgoing, mut receive) = mpsc::channel(1);
             let closed = CancellationToken::new();
-            let task = tokio::spawn(
-                broker
-                    .clone()
-                    .serve_connection(Connection::Sse { incoming, outgoing }, closed.clone()),
-            );
+            let (broker, mut client, task) = encrypted_client(closed.clone()).await;
             let key = SigningKey::from_bytes(&[7; 32]);
             let public = key.verifying_key().to_bytes();
-            send.send(Message::Binary(
-                p::json(
-                    p::HELLO,
-                    &json!({"public_key": URL_SAFE_NO_PAD.encode(public)}),
-                )
-                .unwrap()
-                .into(),
-            ))
-            .await
-            .unwrap();
-            let raw = receive.recv().await.unwrap();
-            let (kind, payload) = p::decode(&raw).unwrap();
-
-            assert_eq!(kind, p::CHALLENGE);
-            let challenge = serde_json::from_slice::<serde_json::Value>(payload).unwrap();
-            let challenge: [u8; 32] = URL_SAFE_NO_PAD
-                .decode(challenge["challenge"].as_str().unwrap())
-                .unwrap()
-                .try_into()
-                .unwrap();
-            let mut signature = key.sign(&auth::preimage(&public, &challenge)).to_bytes();
+            let mut binding = client.binding;
+            // A signature over another handshake does not authenticate this connection.
             if !valid_signature {
-                signature[0] ^= 1;
+                binding[0] ^= 1;
             }
 
-            send.send(Message::Binary(
-                p::json(
-                    p::AUTHENTICATE,
-                    &json!({"signature": URL_SAFE_NO_PAD.encode(signature)}),
+            client
+                .login(
+                    &key,
+                    binding,
+                    if valid_signature {
+                        p::READY
+                    } else {
+                        p::FAILURE
+                    },
                 )
-                .unwrap()
-                .into(),
-            ))
-            .await
-            .unwrap();
-            let raw = receive.recv().await.unwrap();
+                .await;
 
-            assert_eq!(
-                p::decode(&raw).unwrap().0,
-                if valid_signature {
-                    p::READY
-                } else {
-                    p::FAILURE
-                }
-            );
             assert_eq!(
                 broker.lookup(&auth::derive(&public)).is_some(),
                 valid_signature

@@ -84,6 +84,43 @@ public sealed class SearchTests
     }
 
     [Fact]
+    public async Task RegexFiltersSearchTextFieldsAndAnchorExactFields()
+    {
+        await using var inbox = await Client.CreateInboxAsync(Relay.Options with
+        {
+            Filter = new EmailFilter { Regex = true, Sender = @"^SDK@EXAMPLE\.TEST$", Subject = @"^accept (now|later)$" }
+        });
+        await Relay.SendAsync(inbox.Address, "discard", "never stored");
+        await Relay.SendAsync(inbox.Address, "accept later", "retained");
+        await Relay.SendAsync(inbox.Address, "accept now", "code 123", attachment: [1], configure: message =>
+        {
+            message.Headers.Add("X-Test-Case", "expected-value");
+        });
+        var filter = new EmailFilter
+        {
+            Regex = true,
+            Subject = " now$",
+            To = inbox.Address,
+            Recipient = inbox.Address,
+            EnvelopeSender = "sdk@example.test",
+            Text = "^CODE [0-9]{3}",
+            HasAttachments = true,
+            Headers = new Dictionary<string, string> { ["x-test-case"] = "^EXPECTED-" }
+        };
+        await Assert.ThrowsAsync<AhraraException>(() => inbox.WaitForEmailAsync(
+            filter: new EmailFilter { Regex = true, Subject = "[private" }));
+        await Assert.ThrowsAsync<TimeoutException>(() => inbox.WaitForEmailAsync(
+            TimeSpan.FromMilliseconds(300), filter: new EmailFilter { Regex = true, EnvelopeSender = "sdk@example" }));
+        using var selected = await inbox.WaitForEmailAsync(TimeSpan.FromSeconds(3), filter: filter);
+
+        Assert.Equal("accept now", selected.Subject);
+        using var retained = await inbox.WaitForEmailAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal("accept later", retained.Subject);
+        Assert.Equal(2, (await inbox.ListEmailsAsync()).Emails.Count);
+    }
+
+    [Fact]
     public async Task SearchOptionsFilterInvalidExpressionsAndCancellationPreserveInbox()
     {
         await using var inbox = await Client.CreateInboxAsync(Relay.Options);

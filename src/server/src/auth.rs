@@ -11,10 +11,6 @@ pub fn derive(public: &[u8; 32]) -> Route {
     digest.finalize()[..16].try_into().unwrap()
 }
 
-pub fn preimage(public: &[u8; 32], challenge: &[u8; 32]) -> Vec<u8> {
-    [b"ahrara-auth-v1\0".as_slice(), public, challenge].concat()
-}
-
 pub fn address(value: &str) -> Result<(Route, [u8; 8], String)> {
     let (local, domain) = value.split_once('@').context("invalid address")?;
     ensure!(

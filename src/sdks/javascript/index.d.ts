@@ -47,21 +47,28 @@ export interface WaitOptions {
   signal?: AbortSignal;
 }
 
-/** Fields are ANDed. Text fields match case-insensitive substrings unless stated otherwise. */
+/**
+ * Fields are ANDed. Strings match case-insensitive substrings, except recipient,
+ * envelopeSender, and messageId, which match the whole value. With `regex: true`,
+ * strings are case-insensitive Rust regex patterns: those three are anchored to
+ * the whole value; the others match anywhere.
+ */
 export interface EmailFilter {
+  /** Interpret string conditions, including header values, as regex. Header names stay literal. */
+  regex?: boolean;
   sender?: string;
   subject?: string;
   to?: string;
   cc?: string;
   text?: string;
-  /** Exact case-insensitive SMTP recipient. */
+  /** Whole SMTP recipient, ignoring case; an anchored pattern with `regex`. */
   recipient?: string;
-  /** Exact case-insensitive SMTP envelope sender. */
+  /** Whole SMTP envelope sender, ignoring case; an anchored pattern with `regex`. */
   envelopeSender?: string;
-  /** Exact case-insensitive Message-ID header. */
+  /** Whole Message-ID header, ignoring case; an anchored pattern with `regex`. */
   messageId?: string;
   hasAttachments?: boolean;
-  /** Header names are case-insensitive; each value must occur as a substring. */
+  /** Literal, case-insensitive header names; each value matches anywhere in a header value. */
   headers?: Record<string, string>;
 }
 
@@ -78,6 +85,7 @@ export interface SearchOptions {
 export interface RegexOptions extends SearchOptions {
   /** Search full decoded text (default), original HTML, subject, or raw RFC 822 text. */
   source?: "text" | "html" | "subject" | "raw";
+  /** Defaults to false: query regex is case-sensitive, unlike filter regex. */
   ignoreCase?: boolean;
   multiLine?: boolean;
   dotMatchesNewLine?: boolean;
@@ -158,7 +166,7 @@ export interface HtmlEmail {
   remote_resources: number;
 }
 
-/** Native errors retain a stable code, including timeout/inbox_closed/wait_in_progress. */
+/** Native errors retain a stable code, including timeout/inbox_closed. */
 export class AhraraError extends Error {
   constructor(code: string, message: string);
   readonly code: string;
@@ -168,7 +176,7 @@ export class AhraraError extends Error {
 export class Inbox {
   private constructor();
   readonly address: string;
-  /** Consume one matching email. Omitted timeout waits indefinitely. Throws on finite timeout. */
+  /** Consume one matching email. Concurrent waits queue. Omitted timeout waits indefinitely. Throws on finite timeout. */
   waitForEmail(options?: WaitOptions): Promise<Email>;
   /** Sequential stream; total timeout includes consumer work and expires normally. */
   waitForEmails(options?: WaitOptions): AsyncGenerator<Email, void, unknown>;

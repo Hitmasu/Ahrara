@@ -15,6 +15,7 @@ internal sealed class InboxHandle : SafeHandle
 
     public override bool IsInvalid => handle == 0;
 
+    // Only finalizes an inbox that was never disposed; Inbox.Dispose closes explicitly.
     protected override bool ReleaseHandle()
     {
         try

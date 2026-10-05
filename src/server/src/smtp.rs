@@ -7,7 +7,6 @@ use crate::{
 use anyhow::{Result, bail};
 use bytes::Bytes;
 use futures_util::future::join_all;
-use ipnet::IpNet;
 use rand::{RngCore, rngs::OsRng};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -130,6 +129,14 @@ impl Transfer {
         let peer = broker
             .lookup(&route)
             .ok_or("550 5.1.1 Mailbox unavailable")?;
+        // A reconnect replaced the connection holding this transaction; never reserve the new one.
+        if self
+            .peers
+            .get(&route)
+            .is_some_and(|(current, _)| !Arc::ptr_eq(current, &peer))
+        {
+            return Err("451 4.4.2 Identity reconnected, start a new transaction");
+        }
         if !peer.reserve(&self.id) {
             return Err("450 4.2.1 Identity busy");
         }
@@ -188,6 +195,7 @@ impl Transfer {
         io: &mut Socket,
         broker: &Broker,
         trusted: bool,
+        forwarding: &routing::Config,
         buffer: &mut ChunkBuffer,
     ) -> std::result::Result<(), &'static str> {
         let failure = "451 4.4.2 Local delivery not confirmed";
@@ -210,7 +218,8 @@ impl Transfer {
                     .map(|p| p + 4)
                     .or_else(|| prefix.windows(2).position(|s| s == b"\n\n").map(|p| p + 2));
                 if let Some(end) = end {
-                    let recipient = routing::recipient(&prefix[..end])
+                    let recipient = forwarding
+                        .recipient(&prefix[..end])
                         .map_err(|_| "554 5.6.0 Invalid forwarding recipient")?;
                     self.offer(broker, &recipient).await?;
                     break;
@@ -373,16 +382,16 @@ pub async fn serve(
     tcp: TcpStream,
     broker: Arc<Broker>,
     tls: TlsAcceptor,
-    prefixes: Arc<Vec<IpNet>>,
+    forwarding: Arc<routing::Config>,
 ) {
     let trusted = tcp
         .peer_addr()
-        .is_ok_and(|addr| routing::trusted(addr.ip(), &prefixes));
+        .is_ok_and(|addr| forwarding.trusted(addr.ip()));
     let mut transfer = None;
     // A session budget cannot be renewed by commands or STARTTLS.
     let result = tokio::select! {
         _ = broker.stopped.cancelled() => Ok(()),
-        result = timeout(Duration::from_secs(1800),session(tcp,&broker,tls,trusted,&mut transfer)) => result.map(|_|()),
+        result = timeout(Duration::from_secs(1800),session(tcp,&broker,tls,trusted,&forwarding,&mut transfer)) => result.map(|_|()),
     };
     let _ = result;
     reset(&mut transfer, true).await;
@@ -393,6 +402,7 @@ async fn session(
     broker: &Broker,
     tls: TlsAcceptor,
     trusted: bool,
+    forwarding: &routing::Config,
     transfer: &mut Option<Transfer>,
 ) -> Result<()> {
     tcp.set_nodelay(true)?;
@@ -401,6 +411,8 @@ async fn session(
     let mut encrypted = false;
     let mut greeted = false;
     let mut errors = 0;
+    // Commands renew the read timer; only committed mail renews the session.
+    let mut progress = Instant::now() + broker.admission.settings().transaction_timeout;
     // Allocate lazily and reuse for sequential deliveries on this bounded session.
     let mut buffer = ChunkBuffer::default();
 
@@ -420,6 +432,14 @@ async fn session(
         }
         if line.len() > 2000 || !line.ends_with(b"\n") {
             bail!("SMTP line too long");
+        }
+        if Instant::now() >= progress {
+            response(
+                &mut io,
+                "421 4.4.2 No mail committed in time, closing connection",
+            )
+            .await?;
+            return Ok(());
         }
 
         let request = match Request::parse(&mut line.iter()) {
@@ -509,14 +529,14 @@ async fn session(
                 }
 
                 let result = if trusted {
-                    match auth::address(&to.address) {
+                    match forwarding.envelope(&to.address) {
                         Err(_) => Err("550 5.1.1 Mailbox unavailable"),
-                        Ok((_, _, recipient))
+                        Ok(recipient)
                             if !tx.envelopes.contains(&recipient) && tx.envelopes.len() >= 100 =>
                         {
                             Err("452 4.5.3 Too many distinct recipients")
                         }
-                        Ok((_, _, recipient)) => {
+                        Ok(recipient) => {
                             tx.envelopes.insert(recipient);
                             Ok(())
                         }
@@ -542,8 +562,11 @@ async fn session(
                 }
 
                 response(&mut io, "354 End data with <CR><LF>.<CR><LF>").await?;
-                let result =
-                    timeout_at(tx.deadline, tx.data(&mut io, broker, trusted, &mut buffer)).await;
+                let result = timeout_at(
+                    tx.deadline,
+                    tx.data(&mut io, broker, trusted, forwarding, &mut buffer),
+                )
+                .await;
                 buffer.clear();
                 let reply = match result {
                     Ok(result) => result,
@@ -561,6 +584,8 @@ async fn session(
                 if failed {
                     return Ok(());
                 }
+
+                progress = Instant::now() + broker.admission.settings().transaction_timeout;
             }
             Request::Rset => {
                 reset(transfer, true).await;
@@ -665,5 +690,94 @@ mod tests {
 
         assert_eq!(second_recipient.as_ref(), expected);
         assert_eq!(&p::decode(&next).unwrap().1[20..], b"new");
+    }
+
+    #[tokio::test]
+    async fn reconnect_during_a_transaction_never_leaves_the_new_connection_reserved() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let broker = Broker::encrypted([1; 32]);
+        let route = [3; 16];
+        let address = |alias: u8| {
+            format!(
+                "{}@ahrara.dev",
+                URL_SAFE_NO_PAD.encode([route.as_slice(), &[alias; 8]].concat())
+            )
+        };
+        let old = broker.attach(route);
+        let mut transfer = Transfer::new("sender@example.test".into(), 0, Duration::from_secs(5));
+
+        // The original connection accepted the first recipient, then the Identity reconnected.
+        assert!(old.reserve(&transfer.id));
+        transfer
+            .peers
+            .insert(route, (old.clone(), vec![address(1)]));
+        transfer.offered.insert(address(1));
+        transfer.recipients.insert(address(1));
+        old.closed.cancel();
+        let new = broker.attach(route);
+
+        assert!(transfer.offer(&broker, &address(2)).await.is_err());
+        transfer.release(true).await;
+
+        assert!(new.reserve("next"), "the reconnected Identity stayed busy");
+    }
+
+    #[tokio::test]
+    async fn commands_without_committed_mail_cannot_hold_a_session() {
+        let broker = Broker::encrypted_with_limits(
+            [1; 32],
+            crate::limits::RuntimeLimits {
+                transaction_timeout: Duration::from_millis(300),
+                ..crate::limits::RuntimeLimits::default()
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
+        let session = tokio::spawn(serve(
+            server,
+            broker,
+            TlsAcceptor::from(Arc::new(tls)),
+            Arc::new(routing::Config::new("", "", "").unwrap()),
+        ));
+        let mut client = BufReader::new(client);
+        let mut reply = String::new();
+        client.read_line(&mut reply).await.unwrap();
+
+        assert!(reply.starts_with("220 "));
+        // Every command arrives well within the command timeout.
+        timeout(Duration::from_secs(3), async {
+            for command in ["NOOP", "RSET", "VRFY user", "HELP"].into_iter().cycle() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                client
+                    .get_mut()
+                    .write_all(format!("{command}\r\n").as_bytes())
+                    .await
+                    .unwrap();
+                reply.clear();
+                client.read_line(&mut reply).await.unwrap();
+                if reply.starts_with("421 ") {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("commands without committed mail kept the session open");
+        reply.clear();
+
+        assert_eq!(client.read_line(&mut reply).await.unwrap(), 0);
+        timeout(Duration::from_secs(1), session)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

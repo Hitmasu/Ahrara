@@ -7,7 +7,7 @@ public sealed record RegexQuery(string Pattern)
     /// <summary>Gets the message source: text, html, subject, or raw. The default is text.</summary>
     public string Source { get; init; } = "text";
 
-    /// <summary>Gets whether matching ignores case.</summary>
+    /// <summary>Gets whether matching ignores case. False by default, unlike <see cref="EmailFilter.Regex"/> patterns.</summary>
     public bool IgnoreCase { get; init; }
 
     /// <summary>Gets whether anchors match individual lines.</summary>

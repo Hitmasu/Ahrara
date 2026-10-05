@@ -4,14 +4,28 @@
 
 <h1 align="center">Ahrara</h1>
 
-<p align="center">Zero Retention. Fast. Simple. Free.</p>
+<p align="center"><em>Zero Retention. Simple. Free. Open Source.</em></p>
 
-Ahrara lets you create unique email addresses and receive messages in an inbox
-on your own computer. Read mail in the terminal or browser, or let an AI agent
-work with your inbox through MCP.
+<p align="center"><strong>Disposable email for AI agents and automated tests.</strong></p>
 
-**Ahrara receives email; it does not send it.** Zero Retention applies to the
-relay. Received messages stay on your computer until you delete them.
+<p align="center">
+  <a href="https://ahrara.dev/">Website</a> ·
+  <a href="https://ahrara.dev/docs/">Documentation</a> ·
+  <a href="https://ahrara.dev/docs/pt-br/">Português</a> ·
+  <a href="https://ahrara.dev/docs/es/">Español</a> ·
+  <a href="https://github.com/sponsors/Hitmasu">Sponsor</a>
+</p>
+
+Ahrara gives you disposable email addresses with an inbox on your own computer.
+Receive any email, then read it in the terminal or browser, hand it to your AI
+agent through MCP, or assert on it from your test suite.
+
+- **Zero Retention.** The relay streams mail to your computer and keeps no inbox.
+  Received mail stays in your encrypted local inbox until you delete it.
+- **Built for automation.** Plugins for 25 coding agents, an MCP server, a local
+  HTTP API and SDKs for TypeScript, Python, .NET, Java, Go, Rust and k6.
+- **Receive-only.** Ahrara never sends email or relays it to other servers.
+- **Free and open source** under the MIT License.
 
 ## 📦 Install
 
@@ -98,132 +112,122 @@ ahrara
 
 1. Wait for **Connected**. Your first address is created automatically and shown
    in the **Email** row; press **C** to copy it.
-2. Send a message to that address using your usual email provider.
+2. Send a message to that address, or sign up with it in the app you are testing.
 3. Select the received message with **↑/↓** and press **Enter** to read it.
 
-**Keep Ahrara running and connected to receive messages.** Press **Ctrl+C** to
-stop. Ahrara does not queue messages for disconnected clients; already received
-mail remains in your local inbox.
+Keep Ahrara running to receive email: mail is not queued while you are offline.
+Press **/** for address, Web and MCP commands, and **Ctrl+C** to stop. The
+[user guide](docs/usage.md) covers every command and setting.
 
-Press **/** to manage addresses and interfaces. See the [user guide](docs/usage.md)
-for the full command and configuration reference.
+## 🤖 AI agents
 
-## 🌐 Web interface
+Install the plugin and your agent installs and starts Ahrara itself. Through MCP
+it can create addresses, wait for verification codes, read messages and check
+email templates.
 
-The Web interface starts with `ahrara` by default. Open the URL shown in
-the terminal's **Web** row, or select **/ → Web Page → Open Web Page**.
+| Agent | Install |
+| --- | --- |
+| Claude Code | `/plugin marketplace add Hitmasu/Ahrara`, then `/plugin install ahrara@ahrara` |
+| Codex | `codex plugin marketplace add Hitmasu/Ahrara`, then `codex plugin add ahrara@ahrara` |
+| GitHub Copilot CLI | `copilot plugin marketplace add Hitmasu/Ahrara`, then `copilot plugin install ahrara@ahrara` |
+| Gemini CLI | `gemini extensions install https://github.com/Hitmasu/Ahrara` |
 
-Search and read messages, view HTML, download EML and attachments, and create,
-disable, or delete addresses.
-
-Access is limited to your own computer by default, with no password required.
-Use **/ → Web Page** to set a password or disable the interface. See the
-[Web guide](docs/usage.md#web) for session settings, HTML privacy controls, and
-LAN access.
-
-## 🤖 MCP
-
-MCP lets an AI agent manage addresses, wait for incoming mail, read messages,
-and save attachments. Install the [Ahrara plugin](docs/agents.md) to let the
-agent install and start Ahrara itself. The plugin is distributed through this
-repository for Claude Code, Codex, Copilot CLI, Gemini CLI, and other agents.
-
-For an already running Ahrara, MCP is enabled by default; use **/ → MCP**
-to copy its URL or disable it. Local connections use HTTP without authentication
-by default.
-
-**Claude Code.** Add the following to `.mcp.json` in your project directory.
-If you changed the local address, use the complete MCP URL shown in the terminal.
+Plugins need Node.js 20+. Cursor, Windsurf, Cline, OpenCode, Kiro and 16 other
+agents are supported through plugins, rules or instructions; see the
+[agents guide](docs/agents.md). Any other MCP host can run Ahrara over stdio:
 
 ```json
 {
   "mcpServers": {
     "ahrara": {
-      "type": "http",
-      "url": "http://127.0.0.1:8787/mcp"
+      "command": "ahrara",
+      "args": ["mcp", "--transport", "stdio"]
     }
   }
 }
 ```
 
-Keep Ahrara running, launch `claude` from that project in another terminal, and
-approve the MCP server when prompted. No certificate or token setup is needed.
-
-Enable HTTPS with `--https` and bearer authentication with `--mcp-auth`, separately
-or together. See [MCP options](docs/usage.md#https-and-authentication) for setup,
-and the [MCP guide](docs/usage.md#mcp) for non-interactive use, profiles, attachment
-destinations, and shared receiver controls.
+To connect over HTTP instead, see the [MCP guide](docs/usage.md#mcp).
 
 ## 🧩 SDKs
 
-Create an inbox from .NET, JavaScript/TypeScript, Python, Go, Java, Rust, or k6.
-Use its address in your application, wait for a verification email, extract a
-code or link, and inspect messages or attachments from your tests.
+Give each test its own inbox. SDKs connect directly to the relay, so no CLI needs
+to run alongside your tests.
 
-SDKs connect directly to the relay and keep their own inbox. See the
-[SDK guide](docs/sdks.md) to choose a language, receive your first message, and
-decide whether to use a temporary inbox or preserve it between runs.
+| Language | Install |
+| --- | --- |
+| TypeScript / JavaScript | `npm install @ahrara/sdk` |
+| Python | `pip install ahrara` |
+| .NET | `dotnet add package Ahrara` |
+| Java | Maven dependency `dev.ahrara:ahrara` |
+| Go | `go get github.com/Hitmasu/Ahrara/src/sdks/go@latest` |
+| Rust | From source, see the [Rust guide](src/core/README.md) |
+| k6 | Custom k6 build, see the [k6 guide](src/sdks/k6/README.md) |
 
-## 🏗️ Architecture
+```ts
+import { Ahrara } from '@ahrara/sdk';
 
-```mermaid
-flowchart TB
-    Provider["Email provider"] ==> Routing
-
-    subgraph Remote["Remote infrastructure"]
-        Routing["Cloudflare Email Routing"] ==>|SMTP + STARTTLS| Relay["Ahrara relay<br/>SMTP ingress and message delivery"]
-        Tunnel["Cloudflare Tunnel"] -.->|Forward connection| Relay
-        Relay ==>|Email| Tunnel
-        Tunnel -->|ACK| Relay
-    end
-
-    subgraph Local["Your computer"]
-        Client["Ahrara client<br/>Terminal · Web · MCP"] <-->|Read / save| Inbox[("Encrypted local inbox")]
-    end
-
-    Client -.->|Open WSS connection| Tunnel
-    Tunnel ==>|Email over WSS| Client
-    Client -->|ACK after saving| Tunnel
+const inbox = await Ahrara.createInbox();
+try {
+  // Use inbox.address in the signup form of the app under test.
+  const match = await inbox.waitForRegexMatch('[0-9]{6}', {
+    timeoutMs: 30_000,
+    filter: { subject: 'Verification' },
+  });
+  console.log(match.value); // The verification code.
+} finally {
+  await inbox.close();
+}
 ```
 
-1. **Receive.** Cloudflare Email Routing forwards mail to the relay's SMTP
-   receiver using STARTTLS, independently of the Tunnel.
-2. **Deliver.** The client opens an authenticated WSS connection through
-   Cloudflare Tunnel. The relay streams incoming mail over that connection.
-3. **Save and confirm.** The client saves mail in the encrypted inbox shared by
-   Terminal, Web, and MCP, then sends an ACK. Only then does the relay confirm
-   SMTP delivery.
+The SDKs work with Playwright, Cypress, Robot Framework, Selenium, pytest, xUnit
+and JUnit. The [SDK guide](docs/sdks.md) covers filters, links, attachments and
+keeping an inbox between runs.
 
-See the [server documentation](src/server/README.md) for deployment details.
+## 🌐 Web interface
+
+The Web interface starts with `ahrara`. Open the URL in the terminal's **Web**
+row to search and read messages, view HTML, download EML and attachments, and
+manage addresses. It is only reachable from your own computer by default; see
+the [Web guide](docs/usage.md#web) for passwords and LAN access.
+
+## 🏗️ How it works
+
+```mermaid
+flowchart LR
+    Sender["Sender"] -->|Email| Relay["Ahrara relay<br/>no inbox"]
+    Relay -->|Encrypted connection| Client["Ahrara on your computer<br/>Terminal · Web · MCP · SDK"]
+    Client --- Inbox[("Encrypted local inbox")]
+```
+
+1. A sender delivers mail to your Ahrara address.
+2. The relay streams it to your connected client over an encrypted connection
+   and keeps no copy.
+3. Your client saves it to the encrypted inbox and confirms; only then does the
+   relay accept the delivery from the sender.
+
+See [how delivery works](https://ahrara.dev/docs/#delivery) and the
+[server documentation](src/server/README.md) to run your own relay.
 
 ## 🔐 Security
 
-**Identity.** Ahrara creates an Ed25519 Identity locally to authenticate with the
-relay. Your Recovery Key restores that Identity and derives the inbox encryption
-key. Keep it private; restoring messages also requires an
-[encrypted inbox backup](docs/usage.md#backups).
+- Your Identity is created on your computer. The Recovery Key restores it and
+  unlocks your inbox, so keep it private.
+- Mail is encrypted on its way to your client and in your local inbox.
+- Ahrara is not end-to-end encrypted: senders, forwarding providers and the
+  relay can read messages.
+- Web, MCP and the API listen only on your computer by default, and MCP and the
+  API require a token.
+- Treat email as untrusted input, especially when an AI agent reads it.
 
-**Transport.** SMTP ingress requires STARTTLS. WSS and a pinned Noise session
-protect relay-to-client traffic. Senders, forwarding providers, and the relay
-can read messages; Ahrara does not provide sender-to-recipient end-to-end
-encryption.
+See [SECURITY.md](SECURITY.md) for security boundaries and how to report a
+vulnerability.
 
-**Local access.** Web and MCP use HTTP on loopback without authentication by
-default. HTTPS, a Web password, and MCP bearer authentication are optional; the
-API always requires its token. LAN access requires HTTPS and an MCP token.
-The Web password does not encrypt Identity or token files. See
-[access options](docs/usage.md#https-and-authentication) and
-[Web sessions and LAN access](docs/usage.md#web).
+## 💖 Support
 
-**Storage and retention.** SQLCipher encrypts messages, attachments, and addresses
-locally. Exported EML, attachments saved outside the inbox, and runtime memory are
-not covered. Local data has no automatic expiry; deleting an address preserves
-its messages, which you can delete separately. The relay keeps delivery state in
-memory without a persistent inbox, but emits operational logs. Zero Retention
-does not mean zero logging.
-
-Treat email as untrusted input, including when passing it to an AI agent.
-See [SECURITY.md](SECURITY.md) for security boundaries and vulnerability reporting.
+Ahrara is free to use. If it saves you time, consider
+[sponsoring the project on GitHub](https://github.com/sponsors/Hitmasu) to help
+keep it online and evolving.
 
 ## 🤝 Contributing
 
@@ -239,8 +243,9 @@ Use the [checks guide](CONTRIBUTING.md#checks) for API and integration checks,
 and the [release guide](docs/releasing.md) when preparing a release.
 
 Report reproducible bugs through [issues](https://github.com/Hitmasu/Ahrara/issues)
-and propose focused changes through pull requests. Keep code and documentation
-in English.
+and propose focused changes through pull requests. Keep code and repository
+documentation in English; the website is also maintained in Portuguese and
+Spanish.
 
 ## 📄 License
 
