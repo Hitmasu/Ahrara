@@ -104,6 +104,8 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 /* How to use: one subsection per way of using Ahrara. */
 .usage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 56px; scroll-margin-top: 16px; }
 .usage + .usage { margin-top: 72px; padding-top: 72px; border-top: 1px solid var(--border); }
+/* The first way to use Ahrara starts below a line too, apart from the section title. */
+.section-heading + .usage { padding-top: 48px; border-top: 1px solid var(--border); }
 .usage h3 { font-size: 28px; font-weight: 720; letter-spacing: -.02em; }
 .usage-copy > p:not(.section-note) { margin-top: 12px; color: var(--secondary); font-size: 17px; line-height: 1.65; }
 .usage-copy > p code { color: var(--text); }
