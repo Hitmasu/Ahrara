@@ -79,28 +79,17 @@
   }
 
   /* Copy buttons */
-  function copy(text, button) {
+  async function copy(text, button) {
     const label = button.querySelector("span");
-    const done = () => {
-      button.dataset.copied = "";
-      label.textContent = ui.copied;
-      announce(ui.copiedStatus);
-      setTimeout(() => { delete button.dataset.copied; label.textContent = ui.copy; }, 1600);
-    };
-    const fallback = () => {
-      const area = document.createElement("textarea");
-      area.value = text;
-      area.setAttribute("readonly", "");
-      area.style.cssText = "position:fixed;top:0;left:0;opacity:0";
-      document.body.append(area);
-      area.select();
-      let ok = false;
-      try { ok = document.execCommand("copy"); } catch { ok = false; }
-      area.remove();
-      if (ok) done(); else announce(ui.copyFailed);
-    };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, fallback);
-    else fallback();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return announce(ui.copyFailed);
+    }
+    button.dataset.copied = "";
+    label.textContent = ui.copied;
+    announce(ui.copiedStatus);
+    setTimeout(() => { delete button.dataset.copied; label.textContent = ui.copy; }, 1600);
   }
   function copyButton(getText) {
     const button = document.createElement("button");
@@ -163,97 +152,18 @@
   // Long choices (every supported agent) use a listbox instead of a row of tabs.
   function buildPicker(group, bar) {
     const wrap = document.createElement("div");
-    const button = document.createElement("button");
     const current = document.createElement("span");
-    const list = document.createElement("ul");
-    const options = [];
-    let active = 0;
-    let heading;
-    wrap.className = "picker";
-    button.type = "button";
-    button.className = "picker-button";
-    button.setAttribute("aria-haspopup", "listbox");
-    button.setAttribute("aria-expanded", "false");
-    button.setAttribute("aria-label", group.dataset.label);
-    button.append(current);
-    list.className = "picker-list";
-    list.id = "picker-" + (++uid);
-    list.setAttribute("role", "listbox");
-    list.setAttribute("aria-label", group.dataset.label);
-    list.tabIndex = -1;
-    list.hidden = true;
-    button.setAttribute("aria-controls", list.id);
-    for (const panel of panelsOf(group)) {
-      if (panel.dataset.group && panel.dataset.group !== heading) {
-        heading = panel.dataset.group;
-        const title = document.createElement("li");
-        title.className = "picker-group";
-        title.setAttribute("role", "presentation");
-        title.textContent = heading;
-        list.append(title);
-      }
-      const id = "tab-" + (++uid);
-      const option = document.createElement("li");
-      option.id = id + "-tab";
-      option.className = "picker-option";
-      option.setAttribute("role", "option");
-      option.append(iconFor(panel, false), panel.dataset.label);
-      panel.id = id;
-      panel.setAttribute("role", "region");
-      panel.setAttribute("aria-labelledby", option.id);
-      option.addEventListener("click", () => pick(options.indexOf(option)));
-      option.addEventListener("mousemove", () => highlight(options.indexOf(option)));
-      list.append(option);
-      options.push(option);
-    }
     const panels = panelsOf(group);
-    function highlight(index) {
-      active = Math.max(0, Math.min(options.length - 1, index));
-      options.forEach((option, position) => option.classList.toggle("is-active", position === active));
-      list.setAttribute("aria-activedescendant", options[active].id);
-      options[active].scrollIntoView({ block: "nearest" });
-    }
-    function open() {
-      list.hidden = false;
-      button.setAttribute("aria-expanded", "true");
-      highlight(panels.findIndex((panel) => !panel.hidden));
-      list.focus({ preventScroll: true });
-    }
-    function close(focus = true) {
-      if (list.hidden) return;
-      list.hidden = true;
-      button.setAttribute("aria-expanded", "false");
-      if (focus) button.focus({ preventScroll: true });
-    }
-    function pick(index) {
-      close();
-      choose(group.dataset.sync, panels[index].dataset.key, button);
-    }
-    button.addEventListener("click", () => (list.hidden ? open() : close()));
-    button.addEventListener("keydown", (event) => {
-      if (!["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      open();
+    const listId = "picker-" + (++uid);
+    const entries = panels.map((panel) => {
+      panel.id = "tab-" + (++uid);
+      panel.setAttribute("role", "region");
+      panel.setAttribute("aria-labelledby", panel.id + "-tab");
+      return { id: panel.id + "-tab", label: panel.dataset.label, icon: iconFor(panel, false), group: panel.dataset.group };
     });
-    list.addEventListener("keydown", (event) => {
-      const moves = { ArrowDown: active + 1, ArrowUp: active - 1, Home: 0, End: options.length - 1, PageDown: active + 8, PageUp: active - 8 };
-      if (event.key in moves) highlight(moves[event.key]);
-      else if (event.key === "Enter" || event.key === " ") pick(active);
-      else if (event.key === "Escape") close();
-      else if (event.key === "Tab") return close(false);
-      else if (event.key.length === 1) {
-        // Jump to the next agent starting with the typed letter.
-        const letter = event.key.toLowerCase();
-        const starts = (option) => option.textContent.toLowerCase().startsWith(letter);
-        const next = options.findIndex((option, position) => position > active && starts(option));
-        const first = options.findIndex(starts);
-        if (next >= 0 || first >= 0) highlight(next >= 0 ? next : first);
-      } else return;
-      event.preventDefault();
-    });
-    document.addEventListener("click", (event) => {
-      if (!wrap.contains(event.target)) close(false);
-    });
+    const { button, list } = listbox("picker", group.dataset.label, listId, entries, () => panels.findIndex((panel) => !panel.hidden), (index) => choose(group.dataset.sync, panels[index].dataset.key, button));
+    wrap.className = "picker";
+    button.append(current);
     group.showChoice = (panel) => current.replaceChildren(iconFor(panel, false), panel.dataset.label);
     wrap.append(button, list);
     bar.append(wrap);
@@ -349,102 +259,6 @@
     lang.querySelector("summary").focus();
   });
 
-  /* Links into the previous docs keep working. Each new ID lists the old IDs it replaces;
-     "|sync=key" also selects that tab everywhere, as clicking it would. */
-  const LEGACY = new Map(Object.entries({
-    "overview": "overview-project",
-    "paths": "overview-uses",
-    "qs-install": "quick-start-install",
-    "qs-start": "quick-start-listen",
-    "qs-copy": "quick-start-address",
-    "qs-send": "quick-start-send",
-    "qs-read": "quick-start-read quick-start-next",
-    "install-client": "install-methods install-availability",
-    "install-client|install=shell": "install-shell",
-    "install-client|install=homebrew": "install-homebrew",
-    "install-client|install=powershell": "install-powershell",
-    "install-client|install=binaries": "install-binaries",
-    "install-sdk": "sdks-choose",
-    "install-sdk|lang=node": "install-typescript install-javascript",
-    "install-sdk|lang=python": "install-python",
-    "install-sdk|lang=csharp": "install-csharp",
-    "install-sdk|lang=go": "install-go",
-    "install-java|lang=java": "install-java",
-    "install-rust|lang=rust": "install-rust",
-    "install-k6|lang=k6": "install-k6",
-    "install-frameworks|lang=playwright": "install-playwright testing-playwright testing-playwright-setup testing-playwright-run",
-    "install-frameworks|lang=cypress": "install-cypress testing-cypress testing-cypress-run",
-    "install-frameworks|lang=robot": "install-robot testing-robot testing-robot-setup testing-robot-run",
-    "install-update": "install-updates update-shell update-homebrew update-powershell update-binaries update-typescript update-javascript update-python update-csharp update-go update-java update-rust update-k6 update-playwright update-robot update-cypress testing-playwright-update testing-cypress-update testing-robot-update sdk-updates",
-    "receive": "receiving",
-    "receive-terminal": "receiving-manual",
-    "receive-web": "web quick-start-web web-reading local-inbox inbox-read inbox-history",
-    "receive-addresses": "addresses addresses-manage",
-    "receive-domain": "addresses-domain",
-    "receive-profiles": "profiles inbox-lifetime profiles-keep",
-    "receive-backup": "inbox-backups profiles-restore storage-history",
-    "sdk": "sdks sdks-start receiving-automate",
-    "sdk-cypress|lang=cypress": "testing-cypress-setup",
-    "sdk-receive": "sdk-wait sdk-wait-order sdk-receive-example sdk-receive-result",
-    "sdk-filter": "filters filters-simple filters-examples sdk-wait-matches",
-    "sdk-code": "email-verification email-verification-prepare verification-example email-verification-result testing testing-flow testing-deadlines testing-example testing-examples testing-example-check",
-    "sdk-link": "password-reset password-reset-prepare reset-extract password-reset-result",
-    "sdk-attachments": "attachments attachments-prepare attachments-read attachments-files",
-    "sdk-reuse": "sdks-reuse sdks-session sdk-credentials",
-    "agents": "agents-capabilities",
-    "agents-install": "agents-integration agents-installation",
-    "agents-ask": "quick-start-agents",
-    "agents-update": "agents-maintenance agents-removal",
-    "api-start": "http-api-start",
-    "api-list": "http-api-request",
-    "api-read": "http-api-read",
-    "delivery": "delivery-next",
-    "delivery-path": "architecture architecture-concept architecture-delivery architecture-self-host",
-    "delivery-zero": "zero-retention zero-retention-server zero-retention-local storage-retention architecture-retention",
-    "delivery-offline": "receiving-connected storage-offline zero-retention-delivery",
-    "delivery-data": "data-storage storage-location storage-close",
-    "delivery-identity": "security",
-    "delivery-encryption": "security-identity security-transport security-limits",
-    "delivery-access": "security-local architecture-interfaces architecture-trust",
-    "delivery-untrusted": "security-input",
-    "delivery-report": "security-report",
-    "ref-cli": "cli",
-    "cli-commands": "cli-terminal quick-start-script cli-maintenance",
-    "cli-dashboard": "cli-status",
-    "ref-config": "configuration",
-    "config-file": "configuration-location",
-    "config-profile": "configuration-profile",
-    "config-settings": "configuration-options configuration-server",
-    "config-web": "authentication authentication-web",
-    "config-token": "authentication-api",
-    "config-mcp": "authentication-mcp",
-    "config-https": "authentication-https",
-    "config-lan": "authentication-lan web-access",
-    "ref-sdk": "sdk-reference",
-    "sdkref-calls": "sdk-language-reference sdk-history sdk-extraction",
-    "sdk-rules": "filters-rules sdk-filters",
-    "sdk-behavior": "sdks-lifecycle",
-    "ref-mcp": "mcp",
-    "mcp-connections": "mcp-plugin mcp-stdio mcp-http",
-    "mcp-sessions": "mcp-lifetime",
-    "ref-api": "api",
-    "api-basics": "api-authentication api-contract",
-    "errors-timeouts": "sdk-wait-timeout",
-    "errors-sdk": "sdk-errors",
-    "trouble-mail": "troubleshooting-mail",
-    "trouble-agent": "troubleshooting-agent",
-    "trouble-cypress": "troubleshooting-cypress",
-    "trouble-api": "troubleshooting-api",
-    "trouble-report": "troubleshooting-report",
-    "contrib-start": "contributing-start contributing-docs",
-    "contrib-license": "contributing-license",
-  }).flatMap(([to, from]) => from.split(" ").map((id) => [id, to])));
-  // The old installer listed agents as #install-agent-0…25 and #update-agent-0…25.
-  ["codex", "claude", "copilot", "gemini", ...Array(22)].forEach((agent, n) => {
-    LEGACY.set("install-agent-" + n, agent ? "agents-install|agent=" + agent : "agents-other");
-    LEGACY.set("update-agent-" + n, "agents-update");
-  });
-
   /* Pages: one article at a time, chosen by the URL hash. */
   const pages = $$(".page");
   const navLinks = $$(".nav a");
@@ -485,9 +299,7 @@
   function route(navigated) {
     let id = "";
     try { id = decodeURIComponent(location.hash.slice(1)); } catch { /* malformed hash: show the current page */ }
-    const [targetId, tab] = (LEGACY.get(id) || id).split("|");
-    if (tab) selectAll(...tab.split("="));
-    const target = targetId ? document.getElementById(targetId) : null;
+    const target = id ? document.getElementById(id) : null;
     const page = target?.closest(".page") || current || pages[0];
     for (const candidate of pages) candidate.hidden = candidate !== page;
     current = page;

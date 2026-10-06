@@ -23,133 +23,33 @@ languages.addEventListener("keydown", (event) => {
   languages.querySelector("summary").focus();
 });
 
-function copyFallback(text) {
-  const field = document.createElement("textarea");
-  field.value = text;
-  field.className = "visually-hidden";
-  field.setAttribute("readonly", "");
-  document.body.append(field);
-  field.select();
-  try {
-    if (!document.execCommand("copy")) throw new Error("Clipboard unavailable");
-  } finally {
-    field.remove();
-  }
-}
-
 const status = document.getElementById("copy-status");
 
 // Native selects cannot show icons in their options, so each one gets a listbox button.
 // The select stays the source of truth: choosing an item sets its value and fires "change".
 function enhanceSelect(select, icon) {
-  const label = document.querySelector(`label[for="${select.id}"]`).textContent;
-  const button = document.createElement("button");
   const current = document.createElement("span");
-  const list = document.createElement("ul");
-  const items = [];
-  let active = 0;
-  button.type = "button";
-  button.className = "method-button";
-  button.setAttribute("aria-haspopup", "listbox");
-  button.setAttribute("aria-expanded", "false");
-  button.setAttribute("aria-label", label);
-  button.append(current);
-  list.className = "method-list";
-  list.id = `${select.id}-list`;
-  list.setAttribute("role", "listbox");
-  list.setAttribute("aria-label", label);
-  list.tabIndex = -1;
-  list.hidden = true;
-  button.setAttribute("aria-controls", list.id);
-
-  for (const node of select.children) {
-    const options = node.tagName === "OPTGROUP" ? [...node.children] : [node];
-    if (node.tagName === "OPTGROUP") {
-      const heading = document.createElement("li");
-      heading.className = "method-group";
-      heading.setAttribute("role", "presentation");
-      heading.textContent = node.label;
-      list.append(heading);
-    }
-    for (const option of options) {
-      const item = document.createElement("li");
-      const image = document.createElement("img");
-      item.id = `${select.id}-${option.value}`;
-      item.className = "method-option";
-      item.setAttribute("role", "option");
-      image.src = icon.src.replace(/[^/]+$/, option.dataset.icon);
-      image.alt = "";
-      image.width = image.height = 20;
-      if (option.dataset.iconClass) image.className = option.dataset.iconClass;
-      item.append(image, option.textContent);
-      item.addEventListener("click", () => choose(items.indexOf(item)));
-      item.addEventListener("mousemove", () => highlight(items.indexOf(item)));
-      list.append(item);
-      items.push(item);
-    }
-  }
-
   const options = [...select.options];
-
-  function highlight(index) {
-    active = (index + items.length) % items.length;
-    items.forEach((item, position) => item.classList.toggle("is-active", position === active));
-    list.setAttribute("aria-activedescendant", items[active].id);
-    items[active].scrollIntoView({ block: "nearest" });
-  }
+  const entries = options.map((option) => {
+    const image = document.createElement("img");
+    image.src = icon.src.replace(/[^/]+$/, option.dataset.icon);
+    image.alt = "";
+    image.width = image.height = 20;
+    if (option.dataset.iconClass) image.className = option.dataset.iconClass;
+    return { id: `${select.id}-${option.value}`, label: option.textContent, icon: image, group: option.parentElement.label };
+  });
+  const label = document.querySelector(`label[for="${select.id}"]`).textContent;
+  const { button, list, items } = listbox("method", label, `${select.id}-list`, entries, () => select.selectedIndex, (index) => {
+    if (select.selectedIndex === index) return;
+    select.selectedIndex = index;
+    select.dispatchEvent(new Event("change"));
+  });
+  button.append(current);
 
   function sync() {
     current.textContent = select.selectedOptions[0].textContent;
     items.forEach((item, position) => item.setAttribute("aria-selected", String(options[position].selected)));
   }
-
-  function open() {
-    list.hidden = false;
-    button.setAttribute("aria-expanded", "true");
-    highlight(select.selectedIndex);
-    list.focus({ preventScroll: true });
-  }
-
-  function close(focus = true) {
-    if (list.hidden) return;
-    list.hidden = true;
-    button.setAttribute("aria-expanded", "false");
-    if (focus) button.focus({ preventScroll: true });
-  }
-
-  function choose(index) {
-    if (select.selectedIndex !== index) {
-      select.selectedIndex = index;
-      select.dispatchEvent(new Event("change"));
-    }
-    close();
-  }
-
-  button.addEventListener("click", () => (list.hidden ? open() : close()));
-  button.addEventListener("keydown", (event) => {
-    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
-      event.preventDefault();
-      open();
-    }
-  });
-  list.addEventListener("keydown", (event) => {
-    const moves = { ArrowDown: active + 1, ArrowUp: active - 1, Home: 0, End: items.length - 1, PageDown: active + 8, PageUp: active - 8 };
-    if (event.key in moves) highlight(Math.max(0, Math.min(items.length - 1, moves[event.key])));
-    else if (event.key === "Enter" || event.key === " ") choose(active);
-    else if (event.key === "Escape") close();
-    else if (event.key === "Tab") return close(false);
-    else if (event.key.length === 1) {
-      // Jump to the next item starting with the typed letter.
-      const letter = event.key.toLowerCase();
-      const next = items.findIndex((item, position) => position > active && item.textContent.toLowerCase().startsWith(letter));
-      const first = items.findIndex((item) => item.textContent.toLowerCase().startsWith(letter));
-      if (next >= 0 || first >= 0) highlight(next >= 0 ? next : first);
-    } else return;
-    event.preventDefault();
-  });
-  document.addEventListener("click", (event) => {
-    if (!button.contains(event.target) && !list.contains(event.target)) close(false);
-  });
 
   select.addEventListener("change", sync);
   select.classList.add("visually-hidden");
@@ -207,11 +107,7 @@ for (const installer of document.querySelectorAll(".installer")) {
     resetCopy();
     let copied = false;
     try {
-      try {
-        await navigator.clipboard.writeText(command);
-      } catch {
-        copyFallback(command);
-      }
+      await navigator.clipboard.writeText(command);
       copied = true;
     } catch {
       // Report clipboard failure locally; the command remains selectable.

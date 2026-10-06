@@ -43,6 +43,7 @@
     "connecting": "[~] Connecting…"
   }
   </script>
+  <script src="listbox.js" defer></script>
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -159,16 +160,14 @@ brew install hitmasu/ahrara/ahrara</code></div>
               <dt><span aria-hidden="true">✉</span> Email</dt><dd>nIvUcbwtK1bCU7Ivf6iXR1WFXe9NL8Pl@ahrara.dev (+3 more)</dd>
               <dt class="terminal-web"><span aria-hidden="true">◉</span> Web</dt><dd class="terminal-web">http://127.0.0.1:8787</dd>
               <dt><span aria-hidden="true">◇</span> MCP</dt><dd>http://127.0.0.1:8787/mcp</dd>
-              <dt class="terminal-memory"><span aria-hidden="true">▣</span> RAM usage</dt><dd class="terminal-memory">13.0 MB</dd>
-              <dt class="terminal-storage"><span aria-hidden="true">▤</span> SQLite</dt><dd class="terminal-storage">1.1 MB (DB + WAL + SHM)</dd>
             </dl>
           </div>
           <table class="terminal-inbox">
             <caption>Inbox — Page 1 — newest first</caption>
             <thead><tr><th scope="col" class="terminal-marker"><span class="visually-hidden">Selected</span></th><th scope="col" class="terminal-received">Received (local)</th><th scope="col" class="terminal-from">From</th><th scope="col" class="terminal-subject">Subject</th><th scope="col" class="terminal-size">Size</th></tr></thead>
             <tbody>
-              <tr><td class="terminal-marker"><span aria-hidden="true">*</span><span class="visually-hidden">Selected email</span></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">GitHub &lt;noreply@github.com&gt;</td><td class="terminal-subject">Your verification code: 482916</td><td class="terminal-size">1.0 KB</td></tr>
-              <tr><td class="terminal-marker"></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">Linear &lt;notifications@linear.app&gt;</td><td class="terminal-subject">You're invited to the workspace</td><td class="terminal-size">1.4 KB</td></tr>
+              <tr><td class="terminal-marker"><span aria-hidden="true">*</span><span class="visually-hidden">Selected email</span></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">GitHub &lt;noreply@github.com&gt;</td><td class="terminal-subject">Your verification code: 482916</td><td class="terminal-size">1.0 KiB</td></tr>
+              <tr><td class="terminal-marker"></td><td class="terminal-received"><time>Just now</time></td><td class="terminal-from">Linear &lt;notifications@linear.app&gt;</td><td class="terminal-subject">You're invited to the workspace</td><td class="terminal-size">1.4 KiB</td></tr>
             </tbody>
           </table>
         </figure>
@@ -272,7 +271,7 @@ brew install hitmasu/ahrara/ahrara</code></div>
               <p class="install-hint" id="sdk-hint">Node.js 20+.</p>
             </div>
           </div>
-          <p class="section-note">See the <a href="docs/#sdks">SDK guide</a> for filters, links, attachments and reusing an inbox.</p>
+          <p class="section-note">See the <a href="docs/#sdk">SDK guide</a> for filters, links, attachments and reusing an inbox.</p>
         </div>
         <figure class="code-sample" id="sdk-example">
           <figcaption>Extract a verification code</figcaption>

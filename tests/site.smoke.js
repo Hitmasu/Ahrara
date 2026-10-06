@@ -101,19 +101,8 @@ async (page) => {
       "": ["overview"],
       install: ["install"],
       agents: ["agents"],
-      sdks: ["sdk"],
-      "install-typescript": ["install-sdk", { lang: "node" }],
-      "install-python": ["install-sdk", { lang: "python" }],
-      "install-csharp": ["install-sdk", { lang: "csharp" }],
-      "install-go": ["install-sdk", { lang: "go" }],
-      "install-java": ["install-java", { lang: "java" }],
-      "install-rust": ["install-rust", { lang: "rust" }],
-      "install-k6": ["install-k6", { lang: "k6" }],
-      "install-playwright": ["install-frameworks", { lang: "playwright" }],
-      "install-cypress": ["install-frameworks", { lang: "cypress" }],
-      "install-robot": ["install-frameworks", { lang: "robot" }],
+      sdk: ["sdk"],
     };
-    // Current landing page links, plus those of earlier versions that may still be shared.
     const lpHashes = lpDocsLinks.map((href) => href.split("#")[1] || "");
     for (const hash of lpHashes) check(hash in landing, `Map the landing page link docs/#${hash} in this test.`);
     for (const hash of Object.keys(landing)) await landsOn(hash, ...landing[hash]);
@@ -152,23 +141,8 @@ async (page) => {
       check(await page.title() === (route === "#overview" ? text.siteTitle : text.pageTitle.replace("{page}", title)), `${route} sets the document title from #ui-strings.`);
     }
 
-    // Old URLs keep working: every old page, plus a sample of old sections.
-    const legacy = {
-      overview: "overview", "quick-start": "quick-start", install: "install", receiving: "receive", addresses: "receive-addresses",
-      web: "receive-web", profiles: "receive-profiles", sdks: "sdk", "sdk-receive": "sdk-receive", "sdk-wait": "sdk-receive",
-      filters: "sdk-filter", "email-verification": "sdk-code", "password-reset": "sdk-link", attachments: "sdk-attachments",
-      "sdks-reuse": "sdk-reuse", agents: "agents", "agents-integration": "agents-install", mcp: "ref-mcp", "http-api": "http-api",
-      delivery: "delivery", "data-storage": "delivery-data", "zero-retention": "delivery-zero", security: "delivery-identity",
-      architecture: "delivery-path", configuration: "ref-config", authentication: "config-web", cli: "ref-cli", api: "ref-api",
-      "sdk-reference": "ref-sdk", troubleshooting: "troubleshooting", contributing: "contributing",
-      "quick-start-listen": "qs-start", "authentication-https": "config-https", "mcp-stdio": "mcp-connections",
-      "troubleshooting-cypress": "trouble-cypress", "update-python": "install-update", "install-agent-9": "agents-other",
-    };
-    for (const [hash, target] of Object.entries(legacy)) await landsOn(hash, target);
-    await landsOn("install-agent-1", "agents-install", { agent: "claude" });
-    await landsOn("install-powershell", "install-client", { install: "powershell" });
-    await landsOn("testing-cypress-setup", "sdk-cypress", { lang: "cypress" });
-    check(await page.locator("#sdk-cypress").evaluate((details) => details.open), "Old Cypress setup links open the setup disclosure.");
+    await landsOn("sdk-cypress", "sdk-cypress");
+    check(await page.locator("#sdk-cypress").evaluate((details) => details.open), "Links to the Cypress setup open its disclosure.");
     check(await page.locator("pre code").filter({ hasText: "setupNodeEvents(on, config)" }).count() === 1, "The Cypress tasks are documented once.");
 
     // The delivery diagram and the complete MCP tool list.
@@ -200,6 +174,19 @@ async (page) => {
     await visit(`${docs}#install-client`);
     await page.locator("#install .tabs").first().getByRole("tab", { name: "PowerShell", exact: true }).click();
     check(await selectedKey('#quick-start .tabs[data-sync="install"]') === "powershell", "Install method tabs stay synchronized across pages.");
+    // The agent picker is the landing page's listbox: keyboard and pointer choices show one agent.
+    await visit(`${docs}#agents-install`);
+    const picker = page.locator('.tabs[data-sync="agent"] .picker-button');
+    await picker.focus();
+    await page.keyboard.press("ArrowDown");
+    check(await picker.getAttribute("aria-expanded") === "true", "The keyboard opens the agent picker.");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    check(await picker.evaluate((button) => button === document.activeElement && button.getAttribute("aria-expanded") === "false"), "Choosing an agent closes the picker and returns focus.");
+    check(await selectedKey('.tabs[data-sync="agent"]') === await page.locator('.tabs[data-sync="agent"] > .tab-panel').last().getAttribute("data-key"), "End and Enter choose the last agent.");
+    await picker.click();
+    await page.locator('.tabs[data-sync="agent"] [role=option]', { hasText: "Cline" }).click();
+    check(await selectedKey('.tabs[data-sync="agent"]') === "cline" && await page.locator('.tabs[data-sync="agent"] [role=listbox]').isHidden(), "Clicking an agent selects it and closes the picker.");
 
     // Copy to clipboard.
     await visit(`${docs}#install-manual`);
@@ -319,11 +306,11 @@ async (page) => {
         check(shape.keys === keys, `${url} must provide the same #ui-strings keys.`);
         check(shape.pages === 16, `${url} must show all 16 pages without JavaScript.`);
         check(shape.languages.join() === languageLinks.map((link) => link.href.split("#")[0]).join(), `${url} must link to the same three languages.`);
-        check(shape.shared === "/docs/script.js,/docs/styles.css", `${url} must share the docs script and stylesheet.`);
+        check(shape.shared === "/docs/script.js,/docs/styles.css,/listbox.js", `${url} must share the docs scripts and stylesheet.`);
         check(shape.images, `${url} must load its images without JavaScript.`);
         check(shape.search, `${url} must not offer search without JavaScript.`);
-        // With JavaScript, an old link opens the same page in this language.
-        await visit(`${url}#configuration`);
+        // With JavaScript, a section link opens its page in this language.
+        await visit(`${url}#config-file`);
         await expectPage("ref-config");
         check(await page.evaluate(() => document.documentElement.lang) === locale.lang, `${url} keeps its language with JavaScript.`);
         checked.push(locale.lang);
@@ -350,7 +337,7 @@ async (page) => {
         check(shape.lang === lang, `${url} must declare lang="${lang}".`);
         check(shape.ids === landingIds, `${url} must keep the same element IDs as English.`);
         check(shape.keys === Object.keys(lpText).sort().join(), `${url} must provide the same #ui-strings keys.`);
-        check(shape.shared === "/script.js,/styles.css", `${url} must share the landing page script and stylesheet.`);
+        check(shape.shared === "/listbox.js,/script.js,/styles.css", `${url} must share the landing page scripts and stylesheet.`);
         check(shape.readable && shape.images, `${url} must be readable without JavaScript.`);
         checked.push(`landing ${lang}`);
       }
@@ -374,7 +361,7 @@ async (page) => {
     }
 
     check(!errors.length, `Browser errors: ${errors.join("; ")}`);
-    return `PASS: landing page and docs links, 16 pages, ${Object.keys(legacy).length + 3} legacy links, tabs, clipboard, search, theme, mobile and languages (${checked.join(", ")})${notes.length ? "; " + notes.join("; ") : ""}.`;
+    return `PASS: landing page and docs links, 16 pages, tabs, clipboard, search, theme, mobile and languages (${checked.join(", ")})${notes.length ? "; " + notes.join("; ") : ""}.`;
   } finally {
     page.off("pageerror", onError);
     page.off("console", onConsole);

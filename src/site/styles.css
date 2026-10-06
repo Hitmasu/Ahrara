@@ -193,8 +193,6 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 .terminal-status dt span { display: inline-block; width: 12px; }
 .terminal-connected { color: #52e78b; }
 .terminal-web { color: #d2d431; }
-.terminal-memory { color: #e378e9; }
-.terminal-storage { color: #a9a5ff; }
 .terminal-inbox { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; border: 1px solid var(--terminal-border); font: inherit; }
 .terminal-inbox caption { padding: 12px 0 9px; text-align: left; color: var(--terminal-cyan); }
 .terminal-inbox th, .terminal-inbox td { padding: 6px 8px; border-right: 1px solid var(--terminal-border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
