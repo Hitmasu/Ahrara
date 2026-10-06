@@ -1,12 +1,13 @@
 use crate::{auth::decode_address, core::Core, protocol::*};
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde::Deserialize;
 use serde_json::{Value, json as value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, io::BufReader, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 use tokio_tungstenite::{
@@ -15,10 +16,7 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 
-enum Wire {
-    WebSocket(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
-    Sse(Sse),
-}
+type Wire = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 struct Socket {
     wire: Wire,
@@ -31,158 +29,6 @@ impl Socket {
             wire,
             channel: None,
         }
-    }
-}
-
-struct Sse {
-    client: reqwest::Client,
-    url: String,
-    token: reqwest::header::HeaderValue,
-    frames: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send>>,
-}
-
-impl Sse {
-    async fn connect(core: &Core) -> Result<Self> {
-        let mut tls = tls_config(core)?;
-        tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        let client = Self::client(tls, Duration::from_secs(120))?;
-        let response = tokio::time::timeout(
-            Duration::from_secs(10),
-            client
-                .get(&core.config.server_url)
-                .header("accept", "text/event-stream")
-                .send(),
-        )
-        .await??;
-        if response.status() != reqwest::StatusCode::OK
-            || response
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .is_none_or(|v| v.split(';').next() != Some("text/event-stream"))
-        {
-            bail!("invalid SSE response")
-        }
-
-        let mut token = response
-            .headers()
-            .get("x-ahrara-session")
-            .context("missing SSE session")?
-            .clone();
-        if URL_SAFE_NO_PAD.decode(token.as_bytes())?.len() != 32 {
-            bail!("invalid SSE session")
-        }
-
-        token.set_sensitive(true);
-        let frames = Self::frames(response);
-        Ok(Self {
-            client,
-            url: core.config.server_url.clone(),
-            token,
-            frames,
-        })
-    }
-
-    fn client(tls: rustls::ClientConfig, read_timeout: Duration) -> Result<reqwest::Client> {
-        Ok(reqwest::Client::builder()
-            .use_preconfigured_tls(tls)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            // POST heartbeats can succeed while the independent GET is stalled.
-            // Server comments every 30 seconds keep a healthy downlink active.
-            .read_timeout(read_timeout)
-            .build()?)
-    }
-
-    fn frames(response: reqwest::Response) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send>> {
-        Box::pin(async_stream::try_stream! {
-            let mut body = response.bytes_stream();
-            let mut parser = SseParser::default();
-            while let Some(chunk) = body.next().await {
-                for byte in chunk? {
-                    if let Some(frame) = parser.push(byte)? { yield frame; }
-                }
-            }
-        })
-    }
-
-    async fn post(&mut self, frame: Vec<u8>) -> Result<()> {
-        let response = self
-            .client
-            .post(&self.url)
-            .header("x-ahrara-session", self.token.clone())
-            .header("content-type", "application/octet-stream")
-            .body(frame)
-            .send()
-            .await?;
-        if response.status() != reqwest::StatusCode::NO_CONTENT {
-            bail!("SSE POST failed: {}", response.status())
-        }
-
-        Ok(())
-    }
-}
-
-// The Ahrara endpoint emits one bounded data line per frame. Reject malformed
-// events instead of buffering arbitrary SSE fields or an unbounded response.
-#[derive(Default)]
-struct SseParser {
-    line: Vec<u8>,
-    frame_event: bool,
-    frame: Option<Vec<u8>>,
-    event_bytes: usize,
-}
-
-impl SseParser {
-    fn push(&mut self, byte: u8) -> Result<Option<Vec<u8>>> {
-        const MAX_EVENT: usize = MAX_FRAME.div_ceil(3) * 4 + 128;
-        self.event_bytes += 1;
-        if self.event_bytes > MAX_EVENT {
-            bail!("SSE event exceeds frame limit")
-        }
-        if byte != b'\n' {
-            self.line.push(byte);
-            return Ok(None);
-        }
-
-        let mut line = std::mem::take(&mut self.line);
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        if line.is_empty() {
-            self.event_bytes = 0;
-            if self.frame.is_some() && !self.frame_event {
-                bail!("invalid SSE event")
-            }
-
-            self.frame_event = false;
-            return Ok(self.frame.take());
-        }
-        if line.starts_with(b":") {
-            return Ok(None);
-        }
-        if line == b"event: frame" {
-            if self.frame_event {
-                bail!("duplicate SSE event type")
-            }
-
-            self.frame_event = true;
-        } else if let Some(data) = line.strip_prefix(b"data: ") {
-            if self.frame.is_some() {
-                bail!("duplicate SSE frame data")
-            }
-
-            let frame = URL_SAFE_NO_PAD.decode(data)?;
-            if frame.len() > MAX_FRAME {
-                bail!("SSE frame exceeds limit")
-            }
-
-            self.frame = Some(frame);
-        } else {
-            bail!("invalid SSE field")
-        }
-
-        Ok(None)
     }
 }
 
@@ -212,15 +58,14 @@ pub async fn run(core: Arc<Core>, cancel: CancellationToken) {
                     _ = cancel.cancelled() => {
                         // Keep ownership until the relay closes its side. Dropping
                         // TCP alone races immediate reuse of this identity.
-                        if let Wire::WebSocket(ws) = &mut socket.wire {
-                            let _ = tokio::time::timeout(Duration::from_secs(5), async {
-                                ws.as_mut().close(None).await?;
-                                while let Some(frame) = ws.next().await {
-                                    frame?;
-                                }
-                                Ok::<(), tokio_tungstenite::tungstenite::Error>(())
-                            }).await;
-                        }
+                        let ws = &mut socket.wire;
+                        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                            ws.close(None).await?;
+                            while let Some(frame) = ws.next().await {
+                                frame?;
+                            }
+                            Ok::<(), tokio_tungstenite::tungstenite::Error>(())
+                        }).await;
                         break;
                     }
                     result = connect(&core, &mut socket) => result,
@@ -271,12 +116,10 @@ async fn send(socket: &mut Socket, kind: u8, value: &Value) -> Result<()> {
 }
 
 async fn send_packet(wire: &mut Wire, frame: Vec<u8>) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        match wire {
-            Wire::WebSocket(ws) => Ok(ws.send(Message::Binary(frame.into())).await?),
-            Wire::Sse(sse) => sse.post(frame).await,
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        wire.send(Message::Binary(frame.into())),
+    )
     .await??;
 
     Ok(())
@@ -312,24 +155,7 @@ async fn receive(socket: &mut Socket, heartbeat: &mut Heartbeat) -> Result<Vec<u
     }
 }
 
-async fn receive_packet(wire: &mut Wire, heartbeat: &mut Heartbeat) -> Result<Vec<u8>> {
-    if let Wire::Sse(sse) = wire {
-        loop {
-            tokio::select! {
-                biased;
-                _ = tokio::time::sleep_until(heartbeat.next) => {
-                    tokio::time::timeout(heartbeat.timeout, sse.post(Vec::new())).await??;
-                    heartbeat.next = Instant::now() + Heartbeat::delay(heartbeat.interval);
-                }
-                frame = sse.frames.next() => return frame.context("connection closed")?,
-            }
-        }
-    }
-
-    let Wire::WebSocket(socket) = wire else {
-        unreachable!()
-    };
-
+async fn receive_packet(socket: &mut Wire, heartbeat: &mut Heartbeat) -> Result<Vec<u8>> {
     loop {
         let frame = tokio::select! {
             // A stream of data or unrelated PONGs must not starve the deadline.
@@ -370,9 +196,9 @@ fn tls_config(core: &Core) -> Result<rustls::ClientConfig> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(path) = &core.config.tls_ca_path {
-        let file = std::fs::File::open(path).context("cannot open configured TLS CA")?;
-        let certs = rustls_pemfile::certs(&mut BufReader::new(file))
-            .collect::<std::io::Result<Vec<_>>>()?;
+        let certs = CertificateDer::pem_file_iter(path)
+            .context("cannot open configured TLS CA")?
+            .collect::<Result<Vec<_>, _>>()?;
         if certs.is_empty() {
             bail!("configured TLS CA contains no certificates")
         }
@@ -484,28 +310,19 @@ impl Delivery {
 }
 
 async fn open_wire(core: &Core) -> Result<Wire> {
-    if core.config.server_url.starts_with("https://") {
-        Ok(Wire::Sse(Sse::connect(core).await?))
-    } else {
-        let config = WebSocketConfig::default()
-            .max_message_size(Some(MAX_FRAME))
-            .max_frame_size(Some(MAX_FRAME))
-            .write_buffer_size(0)
-            .max_write_buffer_size(MAX_FRAME * 2);
-        let connector = Connector::Rustls(Arc::new(tls_config(core)?));
-        let (socket, _) = tokio::time::timeout(
-            Duration::from_secs(10),
-            connect_async_tls_with_config(
-                &core.config.server_url,
-                Some(config),
-                true,
-                Some(connector),
-            ),
-        )
-        .await??;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME))
+        .max_frame_size(Some(MAX_FRAME))
+        .write_buffer_size(0)
+        .max_write_buffer_size(MAX_FRAME * 2);
+    let connector = Connector::Rustls(Arc::new(tls_config(core)?));
+    let (socket, _) = tokio::time::timeout(
+        Duration::from_secs(10),
+        connect_async_tls_with_config(&core.config.server_url, Some(config), true, Some(connector)),
+    )
+    .await??;
 
-        Ok(Wire::WebSocket(Box::new(socket)))
-    }
+    Ok(socket)
 }
 
 async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
@@ -753,108 +570,6 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn sse_parser_bounds_and_validates_frames() {
-        let frame = json(READY, &value!({"route_id":"test"})).unwrap();
-        let event = format!(
-            "event: frame\r\ndata: {}\r\n\r\n",
-            URL_SAFE_NO_PAD.encode(&frame)
-        );
-        let mut parser = SseParser::default();
-        let mut received = Vec::new();
-
-        for byte in event.bytes().chain(event.bytes()) {
-            if let Some(frame) = parser.push(byte).unwrap() {
-                received.push(frame);
-            }
-        }
-
-        assert_eq!(received, [frame.clone(), frame]);
-
-        for malformed in [
-            "data: YQ\n\n",
-            "event: other\n",
-            "event: frame\ndata: %%%\n",
-            "data: AQIAAAAA\n\n",
-        ] {
-            let mut parser = SseParser::default();
-            assert!(
-                malformed.bytes().any(|b| parser.push(b).is_err()),
-                "{malformed}"
-            );
-        }
-
-        let mut parser = SseParser::default();
-
-        assert!((0..MAX_FRAME * 2).any(|_| parser.push(b'x').is_err()));
-    }
-
-    #[tokio::test]
-    async fn sse_detects_stalled_downlink_while_post_heartbeats_succeed() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let posts = Arc::new(AtomicUsize::new(0));
-        let count = posts.clone();
-        let app = axum::Router::new().route(
-            "/sse",
-            axum::routing::get(|| async {
-                let first = futures_util::stream::once(async {
-                    Ok::<_, std::convert::Infallible>(
-                        axum::response::sse::Event::default().comment("connected"),
-                    )
-                });
-
-                axum::response::Sse::new(first.chain(futures_util::stream::pending()))
-            })
-            .post(move || {
-                let count = count.clone();
-                async move {
-                    count.fetch_add(1, Ordering::Relaxed);
-                    axum::http::StatusCode::NO_CONTENT
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/sse", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(rustls::RootCertStore::empty())
-        .with_no_client_auth();
-        let client = Sse::client(tls, Duration::from_millis(80)).unwrap();
-        let response = client.get(&url).send().await.unwrap();
-        let mut socket = Socket::new(Wire::Sse(Sse {
-            client,
-            url,
-            token: reqwest::header::HeaderValue::from_static("test"),
-            frames: Sse::frames(response),
-        }));
-        let mut heartbeat = Heartbeat::new(Duration::from_millis(15), Duration::from_millis(40));
-        let result = tokio::time::timeout(
-            Duration::from_millis(500),
-            receive(&mut socket, &mut heartbeat),
-        )
-        .await;
-        server.abort();
-
-        assert!(
-            posts.load(Ordering::Relaxed) >= 2,
-            "upload must remain healthy"
-        );
-        let error = result
-            .expect("GET stalled indefinitely while POSTs succeeded")
-            .unwrap_err();
-
-        assert!(
-            error
-                .downcast_ref::<reqwest::Error>()
-                .is_some_and(reqwest::Error::is_timeout),
-            "{error:#}"
-        );
-    }
-
     #[tokio::test]
     async fn heartbeat_detects_blackhole_and_abrupt_tcp_close() {
         for mode in [0, 1, 2] {
@@ -888,7 +603,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let mut socket = Socket::new(Wire::WebSocket(Box::new(socket)));
+            let mut socket = Socket::new(socket);
             let mut heartbeat =
                 Heartbeat::new(Duration::from_millis(30), Duration::from_millis(60));
             let error =
@@ -927,7 +642,7 @@ mod tests {
             tokio_tungstenite::client_async(format!("ws://{address}"), MaybeTlsStream::Plain(tcp))
                 .await
                 .unwrap();
-        let mut socket = Socket::new(Wire::WebSocket(Box::new(socket)));
+        let mut socket = Socket::new(socket);
         let mut heartbeat = Heartbeat::new(Duration::from_secs(90), Duration::from_secs(30));
         let received = tokio::time::timeout(
             Duration::from_secs(110),

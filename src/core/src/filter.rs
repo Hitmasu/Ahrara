@@ -40,11 +40,6 @@ pub(crate) struct CompiledEmailFilter {
 }
 
 impl EmailFilter {
-    /// Validates limits before creating an inbox or starting a receive.
-    pub fn validate(&self) -> Result<()> {
-        self.compile().map(|_| ())
-    }
-
     pub(crate) fn compile(&self) -> Result<CompiledEmailFilter> {
         let (mut patterns, mut whole_patterns) = (BTreeMap::new(), BTreeMap::new());
         let whole = [&self.recipient, &self.envelope_sender, &self.message_id];
@@ -204,7 +199,7 @@ mod tests {
             headers: BTreeMap::from([("x-trace".into(), "SECOND".into())]),
             ..Default::default()
         };
-        filter.validate().unwrap();
+        filter.compile().unwrap();
 
         assert!(
             filter
@@ -240,7 +235,7 @@ mod tests {
             headers: BTreeMap::from([("bad:secret".into(), "x".into())]),
             ..Default::default()
         };
-        let error = filter.validate().unwrap_err().to_string();
+        let error = filter.compile().err().unwrap().to_string();
 
         assert!(error.starts_with("invalid_argument:"));
         assert!(!error.contains("secret"));
@@ -264,7 +259,7 @@ mod tests {
         }))
         .unwrap();
 
-        filter.validate().unwrap();
+        filter.compile().unwrap();
         assert!(
             filter
                 .compile()
@@ -331,7 +326,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"regex": true, "recipient": "x)|(inbox"}))
                 .unwrap();
 
-        assert!(escape.validate().is_err());
+        assert!(escape.compile().is_err());
     }
 
     #[test]
@@ -381,7 +376,7 @@ mod tests {
                 let filter: EmailFilter =
                     serde_json::from_value(serde_json::json!({ "regex": true, field: value }))
                         .unwrap();
-                let error = filter.validate().unwrap_err().to_string();
+                let error = filter.compile().err().unwrap().to_string();
                 assert!(error.starts_with("invalid_argument:"));
                 assert!(!error.contains("private"));
             }

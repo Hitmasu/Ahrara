@@ -325,14 +325,6 @@ paths:
         schema:
           type: integer
           format: int64
-      - name: Range
-        in: header
-        description: Single bytes range
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
       responses:
         '200':
           description: ''
@@ -340,10 +332,6 @@ paths:
             message/rfc822:
               schema:
                 type: string
-        '206':
-          description: Partial EML
-        '416':
-          description: Invalid range
   /v1/events:
     get:
       tags: []

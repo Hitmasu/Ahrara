@@ -6,13 +6,12 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicI64, Ordering},
@@ -174,7 +173,7 @@ pub struct Ownership {
 
 impl Drop for Ownership {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -195,7 +194,7 @@ impl Ownership {
             .create(true)
             .truncate(false)
             .open(cfg.profile_dir().join(name))?;
-        if FileExt::try_lock_exclusive(&file).is_err() {
+        if file.try_lock().is_err() {
             let mut text = String::new();
             file.read_to_string(&mut text)?;
             let owner = serde_json::from_str::<Owner>(&text).ok();
@@ -234,8 +233,8 @@ impl Ownership {
         }
 
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-        if FileExt::try_lock_exclusive(&file).is_ok() {
-            FileExt::unlock(&file)?;
+        if file.try_lock().is_ok() {
+            file.unlock()?;
             return Ok(None);
         }
 
@@ -282,15 +281,6 @@ impl Core {
         directory: Option<tempfile::TempDir>,
     ) -> Result<(Arc<Self>, bool)> {
         let (identity, created) = Identity::load_or_create(&config)?;
-        let _migration = if Storage::is_plaintext(&config.database_path)? {
-            Some(Ownership::acquire(
-                &config,
-                "database encryption",
-                &identity.fingerprint(),
-            )?)
-        } else {
-            None
-        };
         let mut storage = Storage::open(&config.database_path, &identity.database_key())?;
         // The storage jobs can outlive a cancelled wait. Retain the directory
         // with storage so Windows can close the database before removing it.
@@ -375,7 +365,7 @@ impl Core {
         Ok(address)
     }
 
-    pub async fn start(self: &Arc<Self>, mode: &str, wait: bool) -> Result<Status> {
+    pub async fn start(self: &Arc<Self>, mode: &str) -> Result<Status> {
         {
             let mut running = self.running.lock().await;
             if running.as_ref().is_some_and(|r| r.task.is_finished()) {
@@ -408,42 +398,49 @@ impl Core {
                 *running = Some(Running { cancel, task });
             }
         }
-        if wait {
-            let mut state = self.state.subscribe();
-            let result = tokio::time::timeout(Duration::from_secs(20), async {
-                loop {
-                    let current = state.borrow().clone();
-                    if current.connected {
-                        return Ok(());
-                    }
-                    if current.state == "failed" {
-                        bail!(
-                            "{}",
-                            current
-                                .last_error
-                                .unwrap_or_else(|| "connection failed".into())
-                        )
-                    }
-
-                    state.changed().await.context("listener stopped")?;
-                }
-            })
-            .await;
-
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    self.stop().await;
-                    return Err(e);
-                }
-                Err(_) => {
-                    self.stop().await;
-                    bail!("connection timed out")
-                }
-            }
-        }
 
         self.status().await
+    }
+
+    /// Waits for the started listener to connect; stops it on failure or timeout.
+    pub async fn wait_connected(&self, timeout: Duration) -> Result<()> {
+        let mut state = self.state.subscribe();
+        let ready = tokio::time::timeout(timeout, async {
+            loop {
+                let current = state.borrow().clone();
+                if current.connected {
+                    return Ok(());
+                }
+                if current.state == "failed" {
+                    bail!(
+                        "connection_failed: {}",
+                        current
+                            .last_error
+                            .unwrap_or_else(|| "receiver failed".into())
+                    );
+                }
+
+                state
+                    .changed()
+                    .await
+                    .context("connection_failed: receiver stopped")?;
+            }
+        })
+        .await;
+        let error = match ready {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => error,
+            Err(_) => anyhow::anyhow!(
+                "connection_failed: connection timed out ({})",
+                self.state
+                    .borrow()
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "handshake did not complete".into())
+            ),
+        };
+        self.stop().await;
+        Err(error)
     }
 
     pub async fn stop(&self) {
@@ -582,12 +579,7 @@ impl Core {
             }
 
             tokio::select! {
-                _ = async {
-                    match deadline {
-                        Some(value) => tokio::time::sleep_until(value).await,
-                        None => std::future::pending().await
-                    }
-                } => return Ok(None),
+                _ = crate::inbox::wait_until(deadline) => return Ok(None),
                 event = events.recv() => {
                     match event {
                         Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {},
@@ -639,14 +631,11 @@ impl Core {
         id: i64,
         attachment_id: String,
         destination: &Path,
-    ) -> Result<Value> {
+    ) -> Result<PathBuf> {
         let (meta, bytes) = self.attachment(id, attachment_id).await?;
         let destination = destination.to_owned();
-        let path =
-            tokio::task::spawn_blocking(move || mail::save_attachment(&meta, &bytes, &destination))
-                .await??;
-
-        Ok(json!({"path": path, "saved": true}))
+        tokio::task::spawn_blocking(move || mail::save_attachment(&meta, &bytes, &destination))
+            .await?
     }
 
     /// Applies SDK admission rules before any message reaches persistent storage.

@@ -5,14 +5,13 @@ use crate::{
     web_state::WebState,
 };
 use anyhow::{Context, Result, bail, ensure};
-use fs2::FileExt;
 use rmcp::transport::{
     Transport,
     async_rw::AsyncRwTransport,
     streamable_http_client::{StreamableHttpClientTransport, StreamableHttpClientTransportConfig},
 };
 use std::{
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     process::Stdio,
     time::Duration,
@@ -36,12 +35,10 @@ async fn startup_lock(cfg: &Config) -> Result<File> {
     let file = lock(cfg, "mcp.start.lock")?;
     timeout(Duration::from_secs(15), async {
         loop {
-            match FileExt::try_lock_exclusive(&file) {
+            match file.try_lock() {
                 Ok(()) => return Ok(file),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    sleep(Duration::from_millis(25)).await
-                }
-                Err(e) => return Err(e.into()),
+                Err(TryLockError::WouldBlock) => sleep(Duration::from_millis(25)).await,
+                Err(TryLockError::Error(e)) => return Err(e.into()),
             }
         }
     })
@@ -55,10 +52,10 @@ pub(crate) async fn idle(cfg: &Config) -> Result<File> {
     loop {
         sleep(Duration::from_secs(1)).await;
         let start = startup_lock(cfg).await?;
-        match FileExt::try_lock_exclusive(&sessions) {
+        match sessions.try_lock() {
             Ok(()) => return Ok(start),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e.into()),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(e)) => return Err(e.into()),
         }
     }
 }
@@ -66,7 +63,7 @@ pub(crate) async fn idle(cfg: &Config) -> Result<File> {
 pub async fn serve(mut cfg: Config) -> Result<()> {
     let start = startup_lock(&cfg).await?;
     let sessions = lock(&cfg, "mcp.sessions.lock")?;
-    FileExt::try_lock_shared(&sessions)?;
+    sessions.try_lock_shared()?;
     let existing = Ownership::current_http(&cfg)?.is_some();
     if existing {
         // Includes one-shot --https / --mcp-auth options of the running server.

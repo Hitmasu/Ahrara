@@ -49,6 +49,20 @@ pub enum Query {
     },
 }
 
+impl Query {
+    /// A plain-text regex with default flags.
+    pub(crate) fn regex(pattern: impl Into<String>, all: bool) -> Self {
+        Self::Regex {
+            pattern: pattern.into(),
+            source: Default::default(),
+            ignore_case: false,
+            multi_line: false,
+            dot_matches_new_line: false,
+            all,
+        }
+    }
+}
+
 /// A numbered capture; group zero is the entire match.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RegexGroup {

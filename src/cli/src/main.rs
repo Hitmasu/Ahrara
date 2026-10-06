@@ -2,10 +2,9 @@ use ahrara::{
     auth,
     config::Config,
     core::{Core, Ownership},
-    storage::Filters,
 };
 use anyhow::{Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::json;
@@ -126,39 +125,9 @@ enum McpTransport {
     Stdio,
 }
 
-#[derive(Args)]
-struct List {
-    #[arg(long)]
-    address: Option<String>,
-    #[arg(long)]
-    from: Option<String>,
-    /// ASCII case-insensitive substring of the To header or SMTP recipient.
-    #[arg(long)]
-    to: Option<String>,
-    #[arg(long)]
-    subject: Option<String>,
-    #[arg(long)]
-    after_id: Option<i64>,
-    #[arg(long, default_value_t = 20)]
-    limit: u32,
-}
-
-impl From<List> for Filters {
-    fn from(q: List) -> Self {
-        Self {
-            address: q.address,
-            from_contains: q.from,
-            to_contains: q.to,
-            subject_contains: q.subject,
-            after_id: q.after_id,
-            limit: Some(q.limit),
-        }
-    }
-}
-
 #[derive(Subcommand)]
 enum Inbox {
-    List(List),
+    List(ahrara::api::EmailQuery),
     Show {
         id: i64,
         #[arg(long, default_value_t = 16384)]
@@ -204,15 +173,19 @@ enum Address {
         limit: u32,
     },
     Show {
+        #[arg(allow_hyphen_values = true)]
         address_or_id: String,
     },
     Enable {
+        #[arg(allow_hyphen_values = true)]
         address_or_id: String,
     },
     Disable {
+        #[arg(allow_hyphen_values = true)]
         address_or_id: String,
     },
     Delete {
+        #[arg(allow_hyphen_values = true)]
         address_or_id: String,
     },
 }
@@ -720,11 +693,12 @@ async fn run() -> Result<()> {
                         attachment_id,
                         destination,
                     },
-            } => output(
-                &core
+            } => {
+                let path = core
                     .save_attachment(email_id, attachment_id, &destination)
-                    .await?,
-            ),
+                    .await?;
+                output(&json!({"path": path, "saved": true}))
+            }
         },
         _ => unreachable!(),
     }
@@ -758,12 +732,10 @@ async fn listen(core: Arc<Core>, json_output: bool) -> Result<()> {
             ui.refresh(&core).await?;
         }
 
-        let startup = core.start("listen", false);
+        let startup = core.start("listen");
         tokio::pin!(startup);
         let mut repaint = tokio::time::interval(std::time::Duration::from_millis(125));
         repaint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut sample = tokio::time::interval(std::time::Duration::from_secs(1));
-        sample.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             if let Some(ui) = &mut ui {
@@ -801,9 +773,6 @@ async fn listen(core: Arc<Core>, json_output: bool) -> Result<()> {
                 }
                 _ = state.changed(), if ui.is_some() => {},
                 _ = repaint.tick(), if ui.is_some() => { tick = tick.wrapping_add(1); },
-                _ = sample.tick(), if ui.is_some() => {
-                    stats.refresh(&core.config.database_path).await;
-                },
                 event = events.recv(), if status.is_some() => {
                     let event = match event {
                         Ok(event) => event,
@@ -898,4 +867,21 @@ async fn enable_lan(core: &Arc<Core>, mut acknowledged: bool) -> Result<()> {
 
     core.update_interfaces("lan", true, acknowledged, None)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_addresses_may_start_with_a_hyphen() {
+        // Base64url addresses can begin with `-`; clap must not read them as flags.
+        for args in [
+            &["ahrara", "inbox", "list", "--address", "-Vx@ahrara.dev"][..],
+            &["ahrara", "address", "delete", "-Vx@ahrara.dev"][..],
+            &["ahrara", "address", "show", "-Vx@ahrara.dev"][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
+    }
 }

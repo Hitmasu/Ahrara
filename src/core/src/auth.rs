@@ -1,4 +1,5 @@
 use crate::config::{Config, private_write};
+pub use crate::protocol::{decode_address, derive_route};
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
@@ -90,7 +91,6 @@ impl Identity {
 
         let identity = Self::from_recovery(recovery)?;
         crate::storage::Storage::validate_existing(&cfg.database_path, &identity.database_key())?;
-        crate::storage::validate_plaintext_identity(&cfg.database_path, &identity.fingerprint())?;
         let seed = Zeroizing::new(identity.key.to_bytes());
         private_write(&cfg.identity_path, &*seed, false)?;
         Ok(identity)
@@ -151,38 +151,11 @@ impl Identity {
     }
 }
 
-pub fn derive_route(public: &[u8; 32]) -> [u8; 16] {
-    let mut h = Sha256::new();
-    h.update(b"ahrara-route-v1\0");
-    h.update(public);
-    h.finalize()[..16].try_into().expect("16 bytes")
-}
-
 pub fn address(route: &[u8; 16], alias: &[u8; 8]) -> String {
     let mut bytes = [0; 24];
     bytes[..16].copy_from_slice(route);
     bytes[16..].copy_from_slice(alias);
     format!("{}@ahrara.dev", URL_SAFE_NO_PAD.encode(bytes))
-}
-
-pub fn decode_address(value: &str) -> Result<([u8; 16], [u8; 8], String)> {
-    let (local, domain) = value.split_once('@').context("invalid address")?;
-    if local.len() != 32 || !domain.eq_ignore_ascii_case("ahrara.dev") {
-        bail!("invalid address")
-    }
-
-    let bytes = URL_SAFE_NO_PAD
-        .decode(local)
-        .context("invalid address token")?;
-    if bytes.len() != 24 || URL_SAFE_NO_PAD.encode(&bytes) != local {
-        bail!("invalid address token")
-    }
-
-    Ok((
-        bytes[..16].try_into()?,
-        bytes[16..].try_into()?,
-        format!("{local}@ahrara.dev"),
-    ))
 }
 
 pub fn generate_token(cfg: &Config, overwrite: bool) -> Result<()> {

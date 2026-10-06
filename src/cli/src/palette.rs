@@ -1,6 +1,5 @@
 use ahrara::{
     core::Core,
-    storage::Address,
     web_state::{LAN_WARNING, Settings},
 };
 use anyhow::Result;
@@ -11,12 +10,8 @@ use zeroize::Zeroizing;
 enum Screen {
     Root,
     Web,
-    Emails,
     Mcp,
-    Addresses,
-    CopyAddress,
     Lan,
-    Confirm(Destructive),
     Password {
         first: Zeroizing<String>,
         confirm: Zeroizing<String>,
@@ -25,19 +20,11 @@ enum Screen {
     },
 }
 
-#[derive(Clone)]
-enum Destructive {
-    Address(String),
-    Emails,
-}
-
 pub struct Palette {
     screen: Screen,
     selected: usize,
     settings: Settings,
     mcp_auth_required: bool,
-    addresses: Vec<Address>,
-    pages: Vec<i64>,
     pub notice: String,
     pub close: bool,
     pub copy: Option<String>,
@@ -51,8 +38,6 @@ impl Palette {
             selected: 0,
             settings: core.web.settings(),
             mcp_auth_required: core.mcp_auth_required(),
-            addresses: vec![],
-            pages: vec![0],
             notice: String::new(),
             close: false,
             copy: None,
@@ -71,7 +56,7 @@ impl Palette {
 
     fn items(&self) -> Vec<String> {
         match &self.screen {
-            Screen::Root => vec!["Web Page".into(), "Emails".into(), "MCP".into()],
+            Screen::Root => vec!["Web Page".into(), "MCP".into()],
             Screen::Web => vec![
                 "Open Web Page".into(),
                 format!(
@@ -92,12 +77,6 @@ impl Palette {
                 ),
                 "Reset Password".into(),
             ],
-            Screen::Emails => vec![
-                "Delete address".into(),
-                "Delete all emails".into(),
-                "Clear attachments".into(),
-                "Copy an email address".into(),
-            ],
             Screen::Mcp => vec![format!(
                 "{} MCP (Streamable HTTP)",
                 if self.settings.mcp_enabled {
@@ -106,23 +85,11 @@ impl Palette {
                     "Enable"
                 }
             )],
-            Screen::Addresses | Screen::CopyAddress => self
-                .addresses
-                .iter()
-                .map(|a| {
-                    format!(
-                        "{} — {}",
-                        a.label.as_deref().unwrap_or("Unlabeled"),
-                        a.address
-                    )
-                })
-                .collect(),
             Screen::Lan => vec![
                 "Cancel".into(),
                 "Set password".into(),
                 "Continue without authentication".into(),
             ],
-            Screen::Confirm(_) => vec!["Cancel".into(), "Delete".into()],
             Screen::Password { .. } => vec![],
         }
     }
@@ -131,25 +98,13 @@ impl Palette {
         let name = match &self.screen {
             Screen::Root => "Commands",
             Screen::Web => "Web Page",
-            Screen::Emails => "Emails",
             Screen::Mcp => "MCP",
-            Screen::Addresses => "Delete address",
-            Screen::CopyAddress => "Copy email address",
             Screen::Lan => "LAN access",
-            Screen::Confirm(_) => "Confirm deletion",
             Screen::Password { .. } => "Web password",
         };
         let mut lines = vec![(format!("Ahrara / {name}"), "36;1"), (String::new(), "")];
         match &self.screen {
             Screen::Lan => lines.extend(LAN_WARNING.lines().map(|s| (s.to_owned(), "33"))),
-            Screen::Confirm(Destructive::Address(id)) => lines.push((
-                format!("Delete address #{id}? Existing emails will be kept."),
-                "33",
-            )),
-            Screen::Confirm(Destructive::Emails) => lines.push((
-                "Delete all local emails? This cannot be undone.".into(),
-                "33",
-            )),
             Screen::Password {
                 first,
                 confirm,
@@ -195,8 +150,6 @@ impl Palette {
                     "2",
                 ));
             }
-            Screen::Emails => lines.push(("Deletes affect only local data.".into(), "2")),
-            Screen::CopyAddress => lines.push(("Enter/C Copy address".into(), "2")),
             _ => {}
         }
 
@@ -215,32 +168,11 @@ impl Palette {
                     )
                 }),
         );
-        if matches!(self.screen, Screen::Addresses | Screen::CopyAddress) {
-            lines.push(("←/→ Address pages".into(), "2"));
-        }
         if !self.notice.is_empty() {
             lines.push((self.notice.clone(), "33"));
         }
 
         lines
-    }
-
-    async fn load_addresses(&mut self, core: &Core) -> Result<()> {
-        self.addresses = core
-            .storage
-            .addresses(
-                core.identity.fingerprint(),
-                *self.pages.last().unwrap(),
-                20,
-                false,
-            )
-            .await?;
-        self.selected = 0;
-        if self.addresses.is_empty() {
-            self.notice = "No local addresses on this page.".into();
-        }
-
-        Ok(())
     }
 
     pub async fn input(&mut self, core: &Arc<Core>, key: KeyCode) -> Result<()> {
@@ -300,12 +232,6 @@ impl Palette {
             self.url = core.web_url();
             return Ok(());
         }
-        if matches!(self.screen, Screen::CopyAddress)
-            && matches!(key, KeyCode::Enter | KeyCode::Char('c' | 'C'))
-        {
-            self.copy = self.addresses.get(self.selected).map(|a| a.address.clone());
-            return Ok(());
-        }
         match key {
             KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down => {
@@ -317,33 +243,12 @@ impl Palette {
             KeyCode::Char('c' | 'C') if matches!(self.screen, Screen::Mcp) => {
                 self.copy = Some(format!("{}/mcp", core.web_url()))
             }
-            KeyCode::Right if matches!(self.screen, Screen::Addresses | Screen::CopyAddress) => {
-                if let Some(last) = self.addresses.last() {
-                    let next = core
-                        .storage
-                        .addresses(core.identity.fingerprint(), last.id, 1, false)
-                        .await?;
-
-                    if !next.is_empty() {
-                        self.pages.push(last.id);
-                        self.load_addresses(core).await?;
-                    }
-                }
-            }
-            KeyCode::Left
-                if matches!(self.screen, Screen::Addresses | Screen::CopyAddress)
-                    && self.pages.len() > 1 =>
-            {
-                self.pages.pop();
-                self.load_addresses(core).await?;
-            }
             KeyCode::Enter => {
                 self.notice.clear();
                 match &self.screen {
                     Screen::Root => {
                         self.screen = match self.selected {
                             0 => Screen::Web,
-                            1 => Screen::Emails,
                             _ => Screen::Mcp,
                         }
                     }
@@ -378,44 +283,9 @@ impl Palette {
                         }
                         _ => self.password(false),
                     },
-                    Screen::Emails => match self.selected {
-                        0 => {
-                            self.pages = vec![0];
-                            self.load_addresses(core).await?;
-                            self.screen = Screen::Addresses;
-                        }
-                        1 => self.screen = Screen::Confirm(Destructive::Emails),
-                        2 => self.notice = "No cached attachments to clear.".into(),
-                        _ => {
-                            self.pages = vec![0];
-                            self.load_addresses(core).await?;
-                            self.screen = Screen::CopyAddress;
-                        }
-                    },
                     Screen::Mcp => {
                         core.update_interfaces("mcp", !self.settings.mcp_enabled, false, None)
                             .await?;
-                    }
-                    Screen::Addresses => {
-                        if let Some(a) = self.addresses.get(self.selected) {
-                            self.screen = Screen::Confirm(Destructive::Address(a.id.to_string()));
-                        }
-                    }
-                    Screen::Confirm(action) => {
-                        if self.selected == 1 {
-                            match action.clone() {
-                                Destructive::Address(id) => {
-                                    core.change_address(id, None).await?;
-                                }
-                                Destructive::Emails => {
-                                    core.delete_emails(None).await?;
-                                }
-                            }
-
-                            self.notice = "Deleted.".into();
-                        }
-
-                        self.screen = Screen::Emails;
                     }
                     Screen::Lan => match self.selected {
                         0 => self.screen = Screen::Web,
@@ -425,7 +295,7 @@ impl Palette {
                             self.screen = Screen::Web;
                         }
                     },
-                    Screen::Password { .. } | Screen::CopyAddress => {}
+                    Screen::Password { .. } => {}
                 }
 
                 self.selected = 0;
@@ -463,7 +333,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn copy_address_picker_pages_without_deleting_addresses() {
+    async fn palette_requires_lan_choice_and_masks_passwords() {
         let dir = tempfile::tempdir().unwrap();
         let (core, _) = Core::open(ahrara::config::Config {
             identity_path: dir.path().join("identity.key"),
@@ -471,113 +341,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let mut addresses = vec![];
-
-        for _ in 0..21 {
-            addresses.push(core.create_address(None).await.unwrap());
-        }
-
         let mut palette = Palette::new(&core);
-
-        for key in [
-            KeyCode::Down,
-            KeyCode::Enter,
-            KeyCode::Down,
-            KeyCode::Down,
-            KeyCode::Down,
-            KeyCode::Enter,
-            KeyCode::Down,
-            KeyCode::Char('c'),
-        ] {
-            palette.input(&core, key).await.unwrap();
-        }
-
-        assert_eq!(
-            palette.copy.take().as_deref(),
-            Some(addresses[1].address.as_str())
-        );
-        palette.input(&core, KeyCode::Right).await.unwrap();
-        palette.input(&core, KeyCode::Enter).await.unwrap();
-
-        assert_eq!(
-            palette.copy.take().as_deref(),
-            Some(addresses[20].address.as_str())
-        );
-        palette.input(&core, KeyCode::Left).await.unwrap();
-        palette.input(&core, KeyCode::Enter).await.unwrap();
-
-        assert_eq!(
-            palette.copy.take().as_deref(),
-            Some(addresses[0].address.as_str())
-        );
-
-        assert_eq!(
-            core.storage
-                .address_count(core.identity.fingerprint(), false)
-                .await
-                .unwrap(),
-            21
-        );
-    }
-
-    #[tokio::test]
-    async fn palette_confirms_deletion_preserves_eml_and_masks_passwords() {
-        let dir = tempfile::tempdir().unwrap();
-        let (core, _) = Core::open(ahrara::config::Config {
-            identity_path: dir.path().join("identity.key"),
-            database_path: dir.path().join("inbox.db"),
-            ..Default::default()
-        })
-        .unwrap();
-        let address = core.create_address(None).await.unwrap();
-        let raw =
-            b"From: Sender <sender@example.test>\r\nSubject: Palette test\r\n\r\nMessage.\r\n"
-                .to_vec();
-        core.storage
-            .insert(
-                "palette".into(),
-                core.identity.fingerprint(),
-                vec![address.address.clone()],
-                "sender@example.test".into(),
-                raw.clone(),
-            )
-            .await
-            .unwrap();
-        let mut palette = Palette::new(&core);
-
-        // Emails -> Clear attachments leaves the original untouched.
-        for key in [
-            KeyCode::Down,
-            KeyCode::Enter,
-            KeyCode::Down,
-            KeyCode::Down,
-            KeyCode::Enter,
-        ] {
-            palette.input(&core, key).await.unwrap();
-        }
-
-        assert_eq!(palette.notice, "No cached attachments to clear.");
-        assert_eq!(core.storage.email(1).await.unwrap().1, raw);
-
-        // Delete all requires selecting the affirmative option explicitly.
-        for key in [KeyCode::Down, KeyCode::Enter, KeyCode::Enter] {
-            palette.input(&core, key).await.unwrap();
-        }
-
-        assert!(core.storage.email(1).await.is_ok());
-
-        for key in [KeyCode::Down, KeyCode::Enter, KeyCode::Down, KeyCode::Enter] {
-            palette.input(&core, key).await.unwrap();
-        }
-
-        assert_eq!(core.storage.stats().await.unwrap().0, 0);
-        assert!(
-            core.storage
-                .get_address(core.identity.fingerprint(), address.id.to_string())
-                .await
-                .is_ok()
-        );
-        palette = Palette::new(&core);
 
         for key in [KeyCode::Enter, KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
             palette.input(&core, key).await.unwrap();

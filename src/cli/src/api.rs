@@ -161,13 +161,13 @@ pub(crate) async fn authenticate(core: &Core, headers: &HeaderMap) -> Option<Aut
     Some(Authorization(Sha256::digest(expected.as_bytes()).into()))
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateAddress {
     pub label: Option<String>,
 }
 
-#[derive(Default, Deserialize, IntoParams)]
+#[derive(Default, Deserialize, IntoParams, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in=Query)]
 pub struct Pagination {
@@ -175,16 +175,23 @@ pub struct Pagination {
     pub limit: Option<u32>,
 }
 
-#[derive(Default, Deserialize, IntoParams)]
+#[derive(Default, Deserialize, IntoParams, clap::Args)]
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in=Query)]
 pub struct EmailQuery {
+    // Generated addresses are base64url and may begin with `-`.
+    #[arg(long, allow_hyphen_values = true)]
     pub address: Option<String>,
+    #[arg(long)]
     pub from: Option<String>,
     /// ASCII case-insensitive substring of the To header or SMTP recipient.
+    #[arg(long)]
     pub to: Option<String>,
+    #[arg(long)]
     pub subject: Option<String>,
+    #[arg(long)]
     pub after_id: Option<i64>,
+    #[arg(long, default_value = "20")]
     pub limit: Option<u32>,
 }
 
@@ -405,73 +412,15 @@ async fn wait(
 #[utoipa::path(
     get,
     path = "/v1/emails/{id}/eml",
-    params(
-        ("id" = i64, Path),
-        ("Range" = Option<String>, Header, description = "Single bytes range")
-    ),
-    responses(
-        (status = 200, body = String, content_type = "message/rfc822"),
-        (status = 206, description = "Partial EML"),
-        (status = 416, description = "Invalid range")
-    )
+    params(("id" = i64, Path)),
+    responses((status = 200, body = String, content_type = "message/rfc822"))
 )]
-pub(crate) async fn eml(
-    State(core): State<Arc<Core>>,
-    Path(id): Path<i64>,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
+pub(crate) async fn eml(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> ApiResult<Response> {
     let (meta, raw) = core.storage.email(id).await?;
-    let total = raw.len();
-    let mut start = 0;
-    let mut end = total;
-    let mut status = StatusCode::OK;
-    if let Some(range) = headers.get(header::RANGE) {
-        let parsed = range
-            .to_str()
-            .ok()
-            .and_then(|s| s.strip_prefix("bytes="))
-            .and_then(|s| s.split_once('-'))
-            .and_then(|(a, b)| {
-                if a.is_empty() {
-                    let suffix = b.parse::<usize>().ok()?;
-                    if suffix == 0 {
-                        return None;
-                    }
-
-                    Some((total.saturating_sub(suffix), total))
-                } else {
-                    let first = a.parse::<usize>().ok()?;
-                    let last = if b.is_empty() {
-                        total
-                    } else {
-                        b.parse::<usize>().ok()?.checked_add(1)?.min(total)
-                    };
-
-                    Some((first, last))
-                }
-            });
-        let Some((a, b)) = parsed.filter(|(a, b)| a < b && *a < total) else {
-            return Ok((
-                StatusCode::RANGE_NOT_SATISFIABLE,
-                [(header::CONTENT_RANGE, format!("bytes */{total}"))],
-            )
-                .into_response());
-        };
-        start = a;
-        end = b;
-        status = StatusCode::PARTIAL_CONTENT;
-    }
-
-    let bytes = axum::body::Bytes::from(raw).slice(start..end);
-    let mut response = Response::new(Body::from(bytes));
-    *response.status_mut() = status;
+    let mut response = Response::new(Body::from(raw));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("message/rfc822"),
-    );
-    response.headers_mut().insert(
-        header::ACCEPT_RANGES,
-        header::HeaderValue::from_static("bytes"),
     );
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
@@ -479,14 +428,6 @@ pub(crate) async fn eml(
             .parse()
             .unwrap(),
     );
-    if status == StatusCode::PARTIAL_CONTENT {
-        response.headers_mut().insert(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{}/{total}", end - 1)
-                .parse()
-                .unwrap(),
-        );
-    }
 
     Ok(response)
 }
@@ -674,7 +615,6 @@ pub fn router(core: Arc<Core>) -> Router {
 pub struct HttpServer {
     core: Arc<Core>,
     _ownership: crate::core::Ownership,
-    force_api: bool,
     active: Option<(
         std::net::SocketAddr,
         axum_server::Handle,
@@ -702,7 +642,6 @@ impl HttpServer {
         let mut server = Self {
             core,
             _ownership: ownership,
-            force_api,
             active: None,
         };
         server.sync().await?;
@@ -711,7 +650,12 @@ impl HttpServer {
 
     pub async fn sync(&mut self) -> Result<()> {
         let preferences = self.core.web.settings();
-        let enabled = self.force_api
+        let force_api = self
+            .core
+            .web
+            .api_forced
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let enabled = force_api
             || preferences.api_enabled
             || preferences.web_enabled
             || preferences.mcp_enabled;
@@ -726,7 +670,7 @@ impl HttpServer {
                 std::net::Ipv6Addr::UNSPECIFIED.into()
             });
         }
-        if self.force_api
+        if force_api
             || preferences.api_enabled
             || preferences.mcp_enabled && self.core.mcp_auth_required()
         {
@@ -751,14 +695,7 @@ impl HttpServer {
         }
 
         let tls = if self.core.https_enabled() {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            Some(
-                axum_server::tls_rustls::RustlsConfig::from_pem_file(
-                    &self.core.config.api_tls_cert_path,
-                    &self.core.config.api_tls_key_path,
-                )
-                .await?,
-            )
+            Some(self.core.validate_http_tls().await?)
         } else {
             None
         };
@@ -818,7 +755,7 @@ pub async fn serve(core: Arc<Core>) -> Result<()> {
 pub(crate) async fn serve_mode(core: Arc<Core>, mode: &str) -> Result<()> {
     let mut events = core.events.subscribe();
     let mut server = HttpServer::new(core.clone(), mode == "api").await?;
-    core.start(mode, false).await?;
+    core.start(mode).await?;
     eprintln!("Ahrara local server listening on {}", core.web_url());
     if core.web.settings().mcp_enabled {
         eprintln!(

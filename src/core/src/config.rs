@@ -12,8 +12,6 @@ pub struct Config {
     pub server_url: String,
     /// Public Noise key provisioned independently of the relay connection.
     pub server_public_key: Option<String>,
-    pub smtp_dev_address: String,
-    pub domain: String,
     pub tls_ca_path: Option<PathBuf>,
     pub database_path: PathBuf,
     pub identity_path: PathBuf,
@@ -35,7 +33,7 @@ impl Default for Config {
 impl Config {
     // Serde also uses these defaults for an explicit --config. Without a home
     // directory, `load` resolves the relative paths beside that file instead.
-    fn defaults(dirs: Option<&ProjectDirs>) -> Self {
+    pub(crate) fn defaults(dirs: Option<&ProjectDirs>) -> Self {
         let data = dirs.map_or_else(PathBuf::new, |dirs| dirs.data_local_dir().to_owned());
         let config = dirs.map_or_else(PathBuf::new, |dirs| dirs.config_dir().to_owned());
         Self {
@@ -43,8 +41,6 @@ impl Config {
             server_public_key: option_env!("AHRARA_SERVER_PUBLIC_KEY")
                 .filter(|key| !key.is_empty())
                 .map(str::to_owned),
-            smtp_dev_address: "localhost:2525".into(),
-            domain: "ahrara.dev".into(),
             tls_ca_path: None,
             database_path: data.join("ahrara.db"),
             identity_path: config.join("identity.key"),
@@ -65,8 +61,12 @@ impl Config {
             .join("config.toml");
         let chosen = path.unwrap_or(&default_path);
         let mut cfg = if chosen.exists() {
-            toml::from_str::<Self>(&std::fs::read_to_string(chosen)?)
-                .context("invalid configuration")?
+            let mut table: toml::Table = toml::from_str(&std::fs::read_to_string(chosen)?)
+                .context("invalid configuration")?;
+            // Retired keys remain in older and development profiles.
+            table.remove("domain");
+            table.remove("smtp_dev_address");
+            table.try_into::<Self>().context("invalid configuration")?
         } else if path.is_some() {
             bail!("configuration file does not exist: {}", chosen.display())
         } else {
@@ -99,21 +99,18 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        let server = reqwest::Url::parse(&self.server_url).context("invalid server_url")?;
+        let server = url::Url::parse(&self.server_url).context("invalid server_url")?;
         if let Some(key) = &self.server_public_key {
             crate::secure::parse_public_key(key)?;
         }
-        if server.scheme() != "wss" && !(server.scheme() == "https" && server.path() == "/sse") {
-            bail!("server_url must use wss:// or https:// with /sse")
+        if server.scheme() != "wss" {
+            bail!("server_url must use wss://")
         }
         if !server.username().is_empty()
             || server.password().is_some()
             || server.fragment().is_some()
         {
             bail!("server_url must not contain credentials or a fragment")
-        }
-        if self.domain != "ahrara.dev" {
-            bail!("v1 domain must be ahrara.dev")
         }
 
         Ok(())
@@ -254,5 +251,21 @@ mod tests {
         assert_eq!(config.database_path, Path::new("ahrara.db"));
         assert_eq!(config.identity_path, Path::new("identity.key"));
         assert_eq!(config.api_token_path, Path::new("api.token"));
+    }
+
+    #[test]
+    fn retired_keys_load_but_unknown_keys_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "domain = \"ahrara.dev\"\nsmtp_dev_address = \"localhost:2525\"\n",
+        )
+        .unwrap();
+
+        assert!(Config::load(Some(&path)).is_ok());
+        std::fs::write(&path, "unknown = 1\n").unwrap();
+
+        assert!(Config::load(Some(&path)).is_err());
     }
 }

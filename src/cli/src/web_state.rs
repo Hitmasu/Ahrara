@@ -282,10 +282,9 @@ impl Core {
         .await?
     }
 
-    pub async fn validate_http_tls(&self) -> Result<()> {
+    pub async fn validate_http_tls(&self) -> Result<axum_server::tls_rustls::RustlsConfig> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        axum_server::tls_rustls::RustlsConfig::from_pem_file(&self.config.api_tls_cert_path, &self.config.api_tls_key_path).await.context("Web/API/MCP requires valid TLS certificate and key; configure api_tls_cert_path and api_tls_key_path")?;
-        Ok(())
+        axum_server::tls_rustls::RustlsConfig::from_pem_file(&self.config.api_tls_cert_path, &self.config.api_tls_key_path).await.context("Web/API/MCP requires valid TLS certificate and key; configure api_tls_cert_path and api_tls_key_path")
     }
 
     pub fn web_url(&self) -> String {

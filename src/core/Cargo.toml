@@ -17,7 +17,6 @@ chrono = { version = "0.4", features = ["serde"] }
 cssparser = { version = "=0.38.0", default-features = false }
 directories = "6.0"
 ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
-fs2 = "0.4"
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 hkdf = "=0.12.4"
@@ -30,20 +29,19 @@ regex = "1.13"
 sxd-document = "0.3.2"
 sxd-xpath = "0.4.2"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
 rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-pemfile = "2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 snow = { version = "=0.10.0", default-features = false, features = ["ring-accelerated", "use-curve25519", "use-chacha20poly1305", "use-sha2"] }
 tempfile = "3.23"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tokio-util = "0.7"
 toml = "0.9"
-utoipa = { version = "5.4", features = ["axum_extras", "yaml"] }
+url = "2.5"
+utoipa = "5.4"
 webpki-roots = "1.0"
 zeroize = "1.8"
 
@@ -52,9 +50,6 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 
 [patch.crates-io]
 mailparse = { path = "../third_party/mailparse" }
-
-[dev-dependencies]
-axum = "0.8"
 
 [profile.dev]
 debug = 0

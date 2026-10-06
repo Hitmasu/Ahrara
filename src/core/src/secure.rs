@@ -1,4 +1,4 @@
-//! Authenticated transport between the Rust relay and client, inside WSS or SSE.
+//! Authenticated transport between the Rust relay and client, inside WSS.
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use snow::{

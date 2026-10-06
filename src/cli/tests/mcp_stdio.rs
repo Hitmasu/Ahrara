@@ -90,7 +90,7 @@ async fn agents_share_one_receiver_and_closing_one_keeps_the_other_alive() {
         Ownership::current_http(&cfg).unwrap().unwrap().pid,
         owner.pid
     );
-    assert!(!b.list_all_resources().await.unwrap().is_empty());
+    assert!(!b.list_all_tools().await.unwrap().is_empty());
     // Reception can be stopped while the shared MCP server remains attachable.
     b.call_tool(CallToolRequestParam {
         name: "ahrara_stop".into(),

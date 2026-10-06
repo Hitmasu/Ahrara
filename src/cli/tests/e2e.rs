@@ -2,6 +2,7 @@
 //! Run through make e2e / mcp-e2e / api-e2e after docker compose up --wait.
 use ahrara::{auth, config::Config};
 use futures_util::StreamExt;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -33,21 +34,13 @@ fn forwarding_end_to_end() {
     };
     let smtp_port = port();
     let wss_port = port();
-    p.config.server_url = p.ingress_url(&format!("localhost:{wss_port}"));
-    p.config.smtp_dev_address = format!("localhost:{smtp_port}");
+    p.config.server_url = format!("wss://localhost:{wss_port}");
+    p.smtp = format!("localhost:{smtp_port}");
     std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
     let server_dir = tempfile::tempdir().unwrap();
     let _server = Process(
         Command::new(p.ingress_binary())
             .env("AHRARA_SMTP_BIND", format!("127.0.0.1:{smtp_port}"))
-            .env(
-                "AHRARA_ENABLE_SSE",
-                if p.config.server_url.starts_with("https://") {
-                    "1"
-                } else {
-                    "0"
-                },
-            )
             .env("AHRARA_HTTPS_BIND", format!("127.0.0.1:{wss_port}"))
             .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
             .env("AHRARA_TLS_KEY", &p.config.api_tls_key_path)
@@ -171,7 +164,7 @@ fn email_routing_end_to_end() {
         let smtp_port = port();
         let wss_port = port();
         p.config.server_url = format!("wss://localhost:{wss_port}");
-        p.config.smtp_dev_address = format!("localhost:{smtp_port}");
+        p.smtp = format!("localhost:{smtp_port}");
         std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
         let destination = p.run(&["address", "create"]);
         let target = destination["address"].as_str().unwrap();
@@ -239,6 +232,7 @@ fn email_routing_end_to_end() {
 struct TestProfile {
     _dir: tempfile::TempDir,
     config: Config,
+    smtp: String,
     path: PathBuf,
     root: PathBuf,
     eml: PathBuf,
@@ -255,11 +249,17 @@ impl TestProfile {
             .to_owned();
         let _dir = tempfile::tempdir().unwrap();
         let dir = _dir.path();
-        let dev: Config = toml::from_str(
-            &std::fs::read_to_string(root.join(".dev/profile/config.toml"))
-                .expect("run make dev-certs"),
-        )
-        .unwrap();
+        let profile = root.join(".dev/profile/config.toml");
+        let dev = Config::load(Some(&profile)).expect("run make dev-certs");
+        // make dev-certs records the SMTP endpoint; the client ignores this key.
+        let smtp = std::env::var("AHRARA_TEST_SMTP_ADDRESS").unwrap_or_else(|_| {
+            toml::from_str::<toml::Table>(&std::fs::read_to_string(&profile).unwrap())
+                .unwrap()
+                .get("smtp_dev_address")
+                .and_then(|value| value.as_str())
+                .unwrap_or("localhost:2525")
+                .into()
+        });
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -267,8 +267,6 @@ impl TestProfile {
             .port();
         let config = Config {
             server_url: std::env::var("AHRARA_TEST_SERVER_URL").unwrap_or(dev.server_url),
-            smtp_dev_address: std::env::var("AHRARA_TEST_SMTP_ADDRESS")
-                .unwrap_or(dev.smtp_dev_address),
             server_public_key: std::env::var("AHRARA_TEST_SERVER_PUBLIC_KEY")
                 .ok()
                 .or(dev.server_public_key)
@@ -301,6 +299,7 @@ impl TestProfile {
         Self {
             _dir,
             config,
+            smtp,
             path,
             root,
             eml,
@@ -312,14 +311,6 @@ impl TestProfile {
         std::env::var_os("AHRARA_TEST_INGRESS_BINARY")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.root.join("dist/ahrara-server"))
-    }
-
-    fn ingress_url(&self, address: &str) -> String {
-        if self.config.server_url.starts_with("https://") {
-            format!("https://{address}/sse")
-        } else {
-            format!("wss://{address}")
-        }
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -386,7 +377,7 @@ impl TestProfile {
             }
         }
 
-        let socket = TcpStream::connect(&self.config.smtp_dev_address)?;
+        let socket = TcpStream::connect(&self.smtp)?;
         socket.set_read_timeout(Some(Duration::from_secs(90)))?;
         socket.set_write_timeout(Some(Duration::from_secs(90)))?;
         let mut stream = BufReader::new(socket);
@@ -396,14 +387,14 @@ impl TestProfile {
         let ca = std::fs::read(self.config.tls_ca_path.as_ref().unwrap())?;
         let mut roots = rustls::RootCertStore::empty();
 
-        for cert in rustls_pemfile::certs(&mut ca.as_slice()) {
+        for cert in CertificateDer::pem_slice_iter(&ca) {
             roots.add(cert?)?;
         }
 
         let tls = rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
-        let host = self.config.smtp_dev_address.rsplit_once(':').unwrap().0;
+        let host = self.smtp.rsplit_once(':').unwrap().0;
         let connection = rustls::ClientConnection::new(
             std::sync::Arc::new(tls),
             rustls::pki_types::ServerName::try_from(host.trim_matches(['[', ']']).to_owned())?,
@@ -869,16 +860,6 @@ fn mcp_end_to_end() {
                 .unwrap()
                 .join("saved.txt")
         );
-        c.request("resources/list", json!({}));
-        c.request("resources/templates/list", json!({}));
-
-        for uri in [
-            "ahrara://status".to_owned(),
-            format!("ahrara://emails/{id}"),
-            format!("ahrara://emails/{id}/eml"),
-        ] {
-            c.request("resources/read", json!({"uri": uri}));
-        }
 
         assert_eq!(
             c.tool(
@@ -1146,16 +1127,6 @@ async fn api_end_to_end() {
             .as_ref(),
         p.raw
     );
-    let range = client
-        .get(format!("{base}/v1/emails/{id}/eml"))
-        .bearer_auth(&token)
-        .header("Range", "bytes=2-7")
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(range.status(), 206);
-    assert_eq!(range.bytes().await.unwrap().as_ref(), &p.raw[2..8]);
     let attachments: Value = client
         .get(format!("{base}/v1/emails/{id}/attachments"))
         .bearer_auth(&token)
@@ -1326,21 +1297,13 @@ async fn reconnect_end_to_end() {
             }
         }
     });
-    p.config.smtp_dev_address = smtp.clone();
-    p.config.server_url = p.ingress_url(&proxy_address.to_string());
+    p.smtp = smtp.clone();
+    p.config.server_url = format!("wss://{proxy_address}");
     std::fs::write(&p.path, toml::to_string(&p.config).unwrap()).unwrap();
     let server = || {
         Process(
             Command::new(p.ingress_binary())
                 .env("AHRARA_SMTP_BIND", &smtp)
-                .env(
-                    "AHRARA_ENABLE_SSE",
-                    if p.config.server_url.starts_with("https://") {
-                        "1"
-                    } else {
-                        "0"
-                    },
-                )
                 .env("AHRARA_HTTPS_BIND", &https)
                 .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
                 .env("AHRARA_TLS_KEY", &p.config.api_tls_key_path)

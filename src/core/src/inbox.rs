@@ -136,7 +136,7 @@ enum Received {
     Query(QueryMatches),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 enum ReceiveKind {
     Email,
     MailMessage,
@@ -197,22 +197,14 @@ impl Inbox {
             }
 
             private_dir(path)?;
-            // Set every location explicitly: SDKs never read the user's profile.
+            // Without project directories, SDKs never read the user's profile.
             let config = Config {
                 server_url: options.server_url,
                 server_public_key: options.server_public_key,
                 tls_ca_path: options.tls_ca_path,
                 database_path: path.join("inbox.db"),
                 identity_path: path.join("identity.key"),
-                api_token_path: path.join("unused.token"),
-                api_tls_cert_path: path.join("unused.pem"),
-                api_tls_key_path: path.join("unused.key"),
-                api_bind: "127.0.0.1:0".into(),
-                api_https: false,
-                mcp_auth: false,
-                check_for_updates: false,
-                smtp_dev_address: String::new(),
-                domain: "ahrara.dev".into(),
+                ..Config::defaults(None)
             };
             config.validate()?;
             let recovery = options
@@ -272,46 +264,10 @@ impl Inbox {
             receive: Mutex::new(ReceiveState::default()),
             closed: CancellationToken::new(),
         };
-        let mut state = inbox.receiver.state.subscribe();
-        inbox.receiver.start("sdk", false).await?;
-        let ready = tokio::time::timeout(connect_timeout, async {
-            loop {
-                let current = state.borrow().clone();
-                if current.connected {
-                    return Ok(());
-                }
-                if current.state == "failed" {
-                    bail!(
-                        "connection_failed: {}",
-                        current
-                            .last_error
-                            .unwrap_or_else(|| "receiver failed".into())
-                    );
-                }
-
-                state
-                    .changed()
-                    .await
-                    .context("connection_failed: receiver stopped")?;
-            }
-        })
-        .await;
-
-        match ready {
-            Ok(Ok(())) => Ok(inbox),
-            other => {
-                let last_error = inbox.receiver.state.borrow().last_error.clone();
-                inbox.close().await;
-                match other {
-                    Ok(Err(error)) => Err(error),
-                    Err(_) => anyhow::bail!(
-                        "connection_failed: connection timed out ({})",
-                        last_error.unwrap_or_else(|| "handshake did not complete".into())
-                    ),
-                    Ok(Ok(())) => unreachable!(),
-                }
-            }
-        }
+        inbox.receiver.start("sdk").await?;
+        // On failure the receiver is stopped; dropping the inbox closes it.
+        inbox.receiver.wait_connected(connect_timeout).await?;
+        Ok(inbox)
     }
 
     /// The address ready to receive mail after successful creation.
@@ -324,10 +280,7 @@ impl Inbox {
     /// Calls on the same inbox are serialized; timeouts include time waiting for
     /// that cursor. Dropping this future cancels only this wait, not reception.
     pub async fn wait_for_email(&self, options: WaitOptions) -> Result<Option<ParsedEmail>> {
-        match self
-            .receive(options, ReceiveKind::Email, "email", None)
-            .await?
-        {
+        match self.receive(options, ReceiveKind::Email, None).await? {
             Some(Received::Email(email)) => Ok(Some(*email)),
             None => Ok(None),
             _ => unreachable!("receive key identifies the result type"),
@@ -341,7 +294,7 @@ impl Inbox {
         options: WaitOptions,
     ) -> Result<Option<crate::mail::MailMessage>> {
         match self
-            .receive(options, ReceiveKind::MailMessage, "mail_message", None)
+            .receive(options, ReceiveKind::MailMessage, None)
             .await?
         {
             Some(Received::MailMessage(email)) => Ok(Some(*email)),
@@ -354,12 +307,11 @@ impl Inbox {
         &self,
         options: WaitOptions,
         kind: ReceiveKind,
-        query_key: &str,
         cancel: Option<&CancellationToken>,
     ) -> Result<Option<Received>> {
         let deadline = receive_deadline(options.timeout_ms)?;
         let key =
-            serde_json::to_string(&(query_key, &options.subject, &options.from, &options.filter))?;
+            serde_json::to_string(&(&kind, &options.subject, &options.from, &options.filter))?;
 
         loop {
             let (mut receive, result) = tokio::select! {
@@ -452,9 +404,8 @@ impl Inbox {
         query: Query,
         options: WaitOptions,
     ) -> Result<Option<QueryMatches>> {
-        let key = serde_json::to_string(&query)?;
         match self
-            .receive(options, ReceiveKind::Query(query), &key, None)
+            .receive(options, ReceiveKind::Query(query), None)
             .await?
         {
             Some(Received::Query(found)) => Ok(Some(found)),
@@ -471,16 +422,26 @@ impl Inbox {
         options: WaitOptions,
         cancel: CancellationToken,
     ) -> impl Stream<Item = Result<QueryMatches>> + '_ {
+        self.receive_stream(ReceiveKind::Query(query), options, cancel)
+            .map(|found| match found? {
+                Received::Query(found) => Ok(found),
+                _ => unreachable!("receive key identifies the result type"),
+            })
+    }
+
+    fn receive_stream(
+        &self,
+        kind: ReceiveKind,
+        options: WaitOptions,
+        cancel: CancellationToken,
+    ) -> impl Stream<Item = Result<Received>> + '_ {
         async_stream::try_stream! {
-            let key = serde_json::to_string(&query)?;
             let deadline = receive_deadline(options.timeout_ms)?;
             loop {
                 if deadline.is_some_and(|value| value <= tokio::time::Instant::now()) { break; }
                 let mut next = options.clone();
                 next.timeout_ms = deadline.map(|value| value.saturating_duration_since(tokio::time::Instant::now()).as_millis().max(1) as u64);
-                let found = self.receive(next, ReceiveKind::Query(query.clone()), &key, Some(&cancel)).await?;
-                match found { Some(Received::Query(found)) => yield found, None => break,
-                    _ => unreachable!("receive key identifies the result type") }
+                match self.receive(next, kind.clone(), Some(&cancel)).await? { Some(found) => yield found, None => break }
             }
         }
     }
@@ -493,17 +454,7 @@ impl Inbox {
         options: WaitOptions,
     ) -> Result<Option<RegexMatch>> {
         Ok(self
-            .wait_for_query(
-                Query::Regex {
-                    pattern: pattern.into(),
-                    source: Default::default(),
-                    ignore_case: false,
-                    multi_line: false,
-                    dot_matches_new_line: false,
-                    all: false,
-                },
-                options,
-            )
+            .wait_for_query(Query::regex(pattern, false), options)
             .await?
             .and_then(|found| found.matches.into_iter().next()))
     }
@@ -515,27 +466,7 @@ impl Inbox {
         options: WaitOptions,
         cancel: CancellationToken,
     ) -> impl Stream<Item = Result<RegexMatch>> + '_ {
-        let query = Query::Regex {
-            pattern: pattern.into(),
-            source: Default::default(),
-            ignore_case: false,
-            multi_line: false,
-            dot_matches_new_line: false,
-            all: true,
-        };
-
-        async_stream::try_stream! {
-            let deadline = receive_deadline(options.timeout_ms)?;
-            let stream = self.wait_for_queries(query, options, cancel.clone());
-            futures_util::pin_mut!(stream);
-            while let Some(found) = stream.next().await {
-                for value in found?.matches {
-                    if cancel.is_cancelled() { Err(anyhow::anyhow!("cancelled: query stream was cancelled"))?; }
-                    if deadline.is_some_and(|value| value <= tokio::time::Instant::now()) { return; }
-                    yield value;
-                }
-            }
-        }
+        self.query_values(Query::regex(pattern, true), options, cancel, |m| m.matches)
     }
 
     /// Evaluates XPath 1.0 against normalized HTML and returns the first value.
@@ -567,13 +498,22 @@ impl Inbox {
             expression: expression.into(),
             all: true,
         };
+        self.query_values(query, options, cancel, |m| m.values)
+    }
 
+    fn query_values<T: 'static>(
+        &self,
+        query: Query,
+        options: WaitOptions,
+        cancel: CancellationToken,
+        values: fn(QueryMatches) -> Vec<T>,
+    ) -> impl Stream<Item = Result<T>> + '_ {
         async_stream::try_stream! {
             let deadline = receive_deadline(options.timeout_ms)?;
             let stream = self.wait_for_queries(query, options, cancel.clone());
             futures_util::pin_mut!(stream);
             while let Some(found) = stream.next().await {
-                for value in found?.values {
+                for value in values(found?) {
                     if cancel.is_cancelled() { Err(anyhow::anyhow!("cancelled: query stream was cancelled"))?; }
                     if deadline.is_some_and(|value| value <= tokio::time::Instant::now()) { return; }
                     yield value;
@@ -590,17 +530,11 @@ impl Inbox {
         options: WaitOptions,
         cancel: CancellationToken,
     ) -> impl Stream<Item = Result<ParsedEmail>> + '_ {
-        async_stream::try_stream! {
-            let deadline = receive_deadline(options.timeout_ms)?;
-            loop {
-                if deadline.is_some_and(|value| value <= tokio::time::Instant::now()) { break; }
-                let mut next = options.clone();
-                next.timeout_ms = deadline.map(|value| value.saturating_duration_since(tokio::time::Instant::now()).as_millis().max(1) as u64);
-                let email = self.receive(next, ReceiveKind::Email, "email", Some(&cancel)).await?;
-                match email { Some(Received::Email(email)) => yield *email, None => break,
-                    _ => unreachable!("receive key identifies the result type") }
-            }
-        }
+        self.receive_stream(ReceiveKind::Email, options, cancel)
+            .map(|found| match found? {
+                Received::Email(email) => Ok(*email),
+                _ => unreachable!("receive key identifies the result type"),
+            })
     }
 
     /// Invokes an awaited callback sequentially for each match. Callback failures
@@ -743,12 +677,10 @@ impl Inbox {
             bail!("invalid_argument: attachment destination must be absolute")
         }
 
-        let (metadata, bytes) = self.attachment(id, attachment_id).await?;
-        let destination = destination.to_owned();
-        tokio::task::spawn_blocking(move || {
-            crate::mail::save_attachment(&metadata, &bytes, &destination)
-        })
-        .await?
+        self.check_email(id).await?;
+        self.receiver
+            .save_attachment(id, attachment_id, destination)
+            .await
     }
 
     /// Returns the original stored MIME message as bytes, without consuming it.
@@ -833,7 +765,7 @@ fn receive_deadline(timeout_ms: Option<u64>) -> Result<Option<tokio::time::Insta
     }
 }
 
-async fn wait_until(deadline: Option<tokio::time::Instant>) {
+pub(crate) async fn wait_until(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(value) => tokio::time::sleep_until(value).await,
         None => std::future::pending().await,
@@ -876,7 +808,7 @@ mod tests {
 
         let address = receiver.create_address(None).await.unwrap().routing_address;
         // The unreachable relay keeps reconnecting; stored mail remains receivable.
-        receiver.start("test", false).await.unwrap();
+        receiver.start("test").await.unwrap();
         Inbox {
             receiver,
             address,

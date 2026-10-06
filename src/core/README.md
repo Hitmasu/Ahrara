@@ -34,7 +34,7 @@ credentials for restoring the address in another profile; alternatively supply
 `recovery_key` to import an identity and optionally `address` to select an owned
 alias. A Recovery Key cannot replace a different identity in an existing profile.
 WebSocket close waits up to five seconds for the relay; network failure can delay
-remote identity release, and SSE teardown has no remote-close acknowledgement.
+remote identity release.
 
 `wait_for_emails(options, cancellation_token)` returns a lazy `Stream` with a
 total optional duration. `receive_emails(options, cancellation_token, handler)`

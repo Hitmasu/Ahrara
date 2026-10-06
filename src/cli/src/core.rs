@@ -1,6 +1,6 @@
 //! Application interfaces around the shared, embeddable Rust receiver.
 use crate::{config::Config, web_state::WebState};
-pub use ahrara_core::core::{ConnectionState, Event, Owner, Ownership, Status, WaitResult};
+pub use ahrara_core::core::{ConnectionState, Owner, Ownership, Status, WaitResult};
 use anyhow::Result;
 use std::{ops::Deref, sync::Arc};
 

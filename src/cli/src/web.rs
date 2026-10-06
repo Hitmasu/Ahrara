@@ -86,17 +86,13 @@ fn session<'a>(core: &Core, headers: &'a HeaderMap) -> Option<&'a str> {
 }
 
 pub(crate) fn loopback(ip: IpAddr) -> bool {
-    ip.is_loopback()
-        || matches!(ip, IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4|v4.is_loopback()))
+    ip.to_canonical().is_loopback()
 }
 
 fn private_ip(ip: IpAddr) -> bool {
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-        IpAddr::V6(ip) => ip
-            .to_ipv4_mapped()
-            .map(|ip| private_ip(ip.into()))
-            .unwrap_or(ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()),
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
     }
 }
 
@@ -244,7 +240,7 @@ fn date(s: &str) -> String {
     mail::local_date(s, "%b %d, %H:%M %:z")
 }
 
-fn bytes(n: usize) -> String {
+pub fn bytes(n: usize) -> String {
     if n < 1024 {
         format!("{n} B")
     } else if n < 1024 * 1024 {
@@ -763,4 +759,19 @@ pub fn router(core: Arc<Core>) -> Router {
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(core.clone(), guard))
         .with_state(core)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv4_mapped_peers_follow_ipv4_rules() {
+        let ip = |value: &str| value.parse::<IpAddr>().unwrap();
+
+        assert!(loopback(ip("::ffff:127.0.0.1")) && loopback(ip("::1")));
+        assert!(!loopback(ip("::ffff:10.0.0.1")));
+        assert!(private_ip(ip("::ffff:192.168.1.2")) && private_ip(ip("fd00::1")));
+        assert!(!private_ip(ip("::ffff:8.8.8.8")) && !private_ip(ip("2001:db8::1")));
+    }
 }

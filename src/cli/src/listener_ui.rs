@@ -18,10 +18,7 @@ use crossterm::{
         enable_raw_mode,
     },
 };
-use std::{
-    io::{self, IsTerminal, Write},
-    path::Path,
-};
+use std::io::{self, IsTerminal, Write};
 
 const LOGO: &str = r"    _    _   _ ____      _    ____      _
    / \  | | | |  _ \    / \  |  _ \    / \
@@ -32,8 +29,6 @@ const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
 
 #[derive(Default)]
 pub struct Stats {
-    memory_bytes: Option<u64>,
-    sqlite_bytes: Option<u64>,
     web: Option<String>,
     mcp: Option<String>,
     lan_no_password: bool,
@@ -71,55 +66,6 @@ impl Stats {
 
         self.lan_no_password = settings.lan_enabled && settings.password_hash.is_none();
     }
-
-    pub async fn refresh(&mut self, database: &Path) {
-        let database = database.to_owned();
-        (self.memory_bytes, self.sqlite_bytes) = tokio::task::spawn_blocking(move || {
-            (
-                memory_stats::memory_stats().map(|usage| usage.physical_mem as u64),
-                sqlite_size(&database).ok(),
-            )
-        })
-        .await
-        .unwrap_or_default();
-    }
-}
-
-fn sqlite_size(database: &Path) -> io::Result<u64> {
-    let mut total = std::fs::metadata(database)?.len();
-    // WAL holds committed messages that may not have reached the main file yet.
-    for suffix in ["-wal", "-shm"] {
-        let mut path = database.as_os_str().to_owned();
-        path.push(suffix);
-        match std::fs::metadata(path) {
-            Ok(file) => total += file.len(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-
-    Ok(total)
-}
-
-fn format_bytes(bytes: Option<u64>) -> String {
-    let Some(bytes) = bytes else {
-        return "Unavailable".into();
-    };
-    let mut value = bytes as f64;
-
-    for unit in ["B", "KB", "MB", "GB", "TB"] {
-        if value < 1000.0 || unit == "TB" {
-            return if unit == "B" {
-                format!("{bytes} B")
-            } else {
-                format!("{value:.1} {unit}")
-            };
-        }
-
-        value /= 1000.0;
-    }
-
-    unreachable!()
 }
 
 // Only one metadata page and one opened message are kept in memory.
@@ -845,33 +791,24 @@ fn dashboard(
     let mut fields = vec![
         ("● Status", format!("[{indicator}] {label}"), color),
         ("✉ Email", address, ""),
-        ("▣ RAM usage", format_bytes(stats.memory_bytes), "35;1"),
-        (
-            "▤ SQLite",
-            format!("{} (DB + WAL + SHM)", format_bytes(stats.sqlite_bytes)),
-            "34;1",
-        ),
     ];
     if let Some(web) = &stats.web {
-        fields.insert(
-            2,
-            (
-                "◉ Web",
-                format!(
-                    "{}{}",
-                    web,
-                    if stats.lan_no_password {
-                        " · LAN · No password"
-                    } else {
-                        ""
-                    }
-                ),
-                if stats.lan_no_password { "33" } else { "" },
+        fields.push((
+            "◉ Web",
+            format!(
+                "{}{}",
+                web,
+                if stats.lan_no_password {
+                    " · LAN · No password"
+                } else {
+                    ""
+                }
             ),
-        );
+            if stats.lan_no_password { "33" } else { "" },
+        ));
     }
     if let Some(mcp) = &stats.mcp {
-        fields.insert(3, ("◇ MCP", mcp.clone(), ""));
+        fields.push(("◇ MCP", mcp.clone(), ""));
     }
 
     let mut lines = Vec::<(String, &str)>::new();
@@ -1012,7 +949,7 @@ fn email_line(email: &Email, width: usize, selected: bool) -> String {
             &date,
             sender,
             subject,
-            &format_bytes(u64::try_from(email.size_bytes).ok()),
+            &ahrara::web::bytes(email.size_bytes.max(0) as usize),
         ],
         width,
         selected,
@@ -1164,7 +1101,7 @@ mod tests {
             };
             let frame = render(&state, None, &mut browser, &stats, 0, size, false);
             if size == (12, 32) {
-                assert!(frame.contains("SQLite"));
+                assert!(frame.contains("✉ Email"));
                 assert!(frame.contains("v0.1.0"));
             }
 
@@ -1187,11 +1124,7 @@ mod tests {
         let frame = render(&state, None, &mut browser, &stats, 0, (32, 80), false);
 
         assert!(frame.contains("日本語") && frame.contains("Second message"));
-        let local_received = chrono::DateTime::parse_from_rfc3339("2026-09-26T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let local_received = local_date("2026-09-26T12:00:00Z", "%Y-%m-%d %H:%M:%S");
 
         assert!(frame.contains(&local_received) && frame.contains("4 B"));
         assert!(!frame.contains("Received this session"));
@@ -1249,41 +1182,13 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn usage_counts_sqlite_sidecars_and_refreshes_after_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let database = dir.path().join("inbox.db");
-        std::fs::write(&database, vec![0; 1024]).unwrap();
-        std::fs::write(dir.path().join("inbox.db-wal"), vec![0; 2048]).unwrap();
-        std::fs::write(dir.path().join("inbox.db-shm"), vec![0; 512]).unwrap();
-        let mut stats = Stats::default();
-        stats.refresh(&database).await;
-
-        assert_eq!(stats.sqlite_bytes, Some(3584));
-        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-        assert!(stats.memory_bytes.is_some_and(|bytes| bytes > 0));
-        std::fs::remove_file(dir.path().join("inbox.db-wal")).unwrap();
-        stats.refresh(&database).await;
-
-        assert_eq!(stats.sqlite_bytes, Some(1536));
-        std::fs::remove_file(&database).unwrap();
-        stats.refresh(&database).await;
-
-        assert_eq!(stats.sqlite_bytes, None);
-    }
-
     #[test]
-    fn table_aligns_values_and_distinguishes_zero_from_unavailable() {
-        let stats = Stats {
-            memory_bytes: Some(10 * 1024 * 1024),
-            sqlite_bytes: Some(3584),
-            ..Default::default()
-        };
+    fn table_aligns_values() {
         let frame = render(
             &ConnectionState::default(),
             None,
             &mut Browser::default(),
-            &stats,
+            &Stats::default(),
             0,
             (24, 80),
             false,
@@ -1293,9 +1198,6 @@ mod tests {
             assert_eq!(measure_text_width(line), 79);
         }
 
-        assert!(frame.contains("10.5 MB") && frame.contains("3.6 KB (DB + WAL + SHM)"));
-        assert_eq!(format_bytes(Some(0)), "0 B");
-        assert_eq!(format_bytes(None), "Unavailable");
         assert_eq!(measure_text_width(&cell("日本語\t\x1b[31m", 12)), 12);
     }
 

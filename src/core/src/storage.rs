@@ -1,14 +1,12 @@
 use crate::{auth, config::private_dir};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use fs2::FileExt;
 use mailparse::MailHeaderMap;
 use rand::{RngCore, rngs::OsRng};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
-    io::Read,
+    fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -217,21 +215,21 @@ fn database_lock(path: &Path, suffix: &str, exclusive: bool, wait: bool) -> Resu
 
     loop {
         let result = if exclusive {
-            FileExt::try_lock_exclusive(&file)
+            file.try_lock()
         } else {
-            FileExt::try_lock_shared(&file)
+            file.try_lock_shared()
         };
 
         match result {
             Ok(()) => return Ok(file),
-            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            Err(TryLockError::WouldBlock) => {
                 if !wait || Instant::now() >= deadline {
                     bail!("inbox is in use; close other clients before replacing or encrypting it")
                 }
 
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(error) => return Err(error.into()),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
         }
     }
 }
@@ -281,16 +279,15 @@ fn apply_migrations(c: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn validate_database(c: &Connection, encrypted: bool, current_schema: bool) -> Result<()> {
+fn validate_database(c: &Connection, current_schema: bool) -> Result<()> {
     let integrity: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     if integrity != "ok" {
         bail!("inbox integrity check failed")
     }
-    if encrypted
-        && c.prepare("PRAGMA cipher_integrity_check")?
-            .query([])?
-            .next()?
-            .is_some()
+    if c.prepare("PRAGMA cipher_integrity_check")?
+        .query([])?
+        .next()?
+        .is_some()
     {
         bail!("encrypted inbox integrity check failed")
     }
@@ -324,7 +321,7 @@ fn validate_database(c: &Connection, encrypted: bool, current_schema: bool) -> R
 }
 
 fn database_uri(path: &Path, mode: &str) -> Result<String> {
-    let mut uri = reqwest::Url::from_file_path(std::path::absolute(path)?)
+    let mut uri = url::Url::from_file_path(std::path::absolute(path)?)
         .map_err(|_| anyhow::anyhow!("invalid inbox file path"))?;
     uri.query_pairs_mut().append_pair("mode", mode);
     Ok(uri.into())
@@ -360,71 +357,6 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn migrate_plaintext(path: &Path, key: &auth::DatabaseKey) -> Result<()> {
-    let mut source = Connection::open(path)?;
-    source.busy_timeout(Duration::from_secs(5))?;
-    let checkpoint: (i64, i64, i64) =
-        source.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?;
-    if checkpoint.0 != 0 {
-        bail!("inbox WAL is in use; close other clients before encrypting it")
-    }
-
-    let mode: String =
-        source.pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get(0))?;
-    if mode != "delete" {
-        bail!("cannot safely consolidate inbox WAL")
-    }
-
-    source.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
-    validate_database(&source, false, false)?;
-    let staged = tempfile::NamedTempFile::new_in(path.parent().context("inbox needs parent")?)?;
-    export_attached(&mut source, staged.path(), key)?;
-    let mut encrypted = encrypted_connection(staged.path(), key, OpenFlags::default())?;
-    encrypted.pragma_update(None, "synchronous", "FULL")?;
-    apply_migrations(&mut encrypted)?;
-    validate_database(&encrypted, true, true)?;
-    drop(encrypted);
-    source.close().map_err(|(_, error)| error)?;
-    staged.as_file().sync_all()?;
-    staged.persist(path).map_err(|error| error.error)?;
-    sync_parent(path)
-}
-
-pub(crate) fn validate_plaintext_identity(path: &Path, fingerprint: &str) -> Result<()> {
-    if !Storage::is_plaintext(path)? {
-        return Ok(());
-    }
-
-    let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut any = false;
-    let mut matching = false;
-
-    for table in ["messages", "addresses"] {
-        let exists: bool = source.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1 AND type='table')",
-            [table],
-            |r| r.get(0),
-        )?;
-
-        if exists {
-            let (count, matches): (i64, i64) = source.query_row(
-                &format!("SELECT count(*),coalesce(sum(identity_fingerprint=?1),0) FROM {table}"),
-                [fingerprint],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            any |= count > 0;
-            matching |= matches > 0;
-        }
-    }
-    if any && !matching {
-        bail!("Recovery Key does not match the identities saved in the existing inbox")
-    }
-
-    Ok(())
-}
-
 fn routing_filter(c: &Connection, address: &str) -> Result<String> {
     if let Ok((_, _, canonical)) = auth::decode_address(address) {
         return Ok(canonical);
@@ -446,20 +378,6 @@ impl Storage {
         self._temporary_profile = Some(directory);
     }
 
-    pub fn is_plaintext(path: &Path) -> Result<bool> {
-        let mut file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
-        let mut header = [0; 16];
-        match file.read_exact(&mut header) {
-            Ok(()) => Ok(header == *b"SQLite format 3\0"),
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-            Err(error) => Err(error.into()),
-        }
-    }
-
     pub fn validate_existing(path: &Path, key: &auth::DatabaseKey) -> Result<()> {
         if !path.try_exists()? || path.metadata()?.len() == 0 {
             return Ok(());
@@ -467,14 +385,8 @@ impl Storage {
 
         let _opening = database_lock(path, ".open.lock", true, true)?;
         let _reading = database_lock(path, ".lock", false, true)?;
-        let plaintext = Self::is_plaintext(path)?;
-        let c = if plaintext {
-            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
-        } else {
-            encrypted_connection(path, key, OpenFlags::SQLITE_OPEN_READ_ONLY)?
-        };
-
-        validate_database(&c, !plaintext, false)
+        let c = encrypted_connection(path, key, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        validate_database(&c, false)
     }
 
     pub fn open(path: &Path, key: &auth::DatabaseKey) -> Result<Arc<Self>> {
@@ -483,12 +395,6 @@ impl Storage {
                 .ok_or_else(|| anyhow::anyhow!("database needs parent"))?,
         )?;
         let _opening = database_lock(path, ".open.lock", true, true)?;
-        if Self::is_plaintext(path)? {
-            let conversion = database_lock(path, ".lock", true, false)?;
-            migrate_plaintext(path, key)?;
-            drop(conversion);
-        }
-
         let database_lock = database_lock(path, ".lock", false, true)?;
         let mut c = encrypted_connection(path, key, OpenFlags::default())?;
         // SQLite may return BUSY immediately for concurrent journal-mode
@@ -545,7 +451,7 @@ impl Storage {
             export_attached(source, staged.path(), &key)?;
             let snapshot =
                 encrypted_connection(staged.path(), &key, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            validate_database(&snapshot, true, true)?;
+            validate_database(&snapshot, true)?;
             drop(snapshot);
             staged.as_file().sync_all()?;
             staged
@@ -563,12 +469,8 @@ impl Storage {
         key: &auth::DatabaseKey,
         overwrite: bool,
     ) -> Result<()> {
-        if Self::is_plaintext(source)? {
-            bail!("import requires an encrypted Ahrara snapshot")
-        }
-
         let snapshot = encrypted_connection(source, key, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        validate_database(&snapshot, true, true)?;
+        validate_database(&snapshot, true)?;
         drop(snapshot);
         private_dir(destination.parent().context("inbox needs parent")?)?;
         let _opening = database_lock(destination, ".open.lock", true, true)?;
@@ -595,14 +497,10 @@ impl Storage {
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
         target.execute_batch("DETACH DATABASE ahrara_import;")?;
-        validate_database(&target, true, true)?;
+        validate_database(&target, true)?;
         drop(target);
         if destination.try_exists()? && destination.metadata()?.len() > 0 {
-            let current = if Self::is_plaintext(destination)? {
-                Connection::open(destination)?
-            } else {
-                encrypted_connection(destination, key, OpenFlags::default())?
-            };
+            let current = encrypted_connection(destination, key, OpenFlags::default())?;
             current.busy_timeout(Duration::from_secs(5))?;
             let checkpoint: i64 =
                 current.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
@@ -1356,30 +1254,62 @@ mod encryption_tests {
     }
 
     #[test]
-    fn registration_checks_plaintext_history_before_installing_a_key() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let cfg = config(first.path());
+    fn plaintext_inbox_is_rejected_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
         let (identity, _) = Identity::load_or_create(&cfg).unwrap();
-        let (wrong, _) = Identity::load_or_create(&config(second.path())).unwrap();
-        let connection = Connection::open(&cfg.database_path).unwrap();
-        connection.execute_batch(MIGRATIONS[0]).unwrap();
-        connection.execute_batch(MIGRATIONS[1]).unwrap();
-        connection.pragma_update(None, "user_version", 2).unwrap();
-        connection.execute(
-            "INSERT INTO addresses(identity_fingerprint,route_id,alias_id,address,created_at) VALUES(?1,zeroblob(16),zeroblob(8),'legacy-address','timestamp')",
-            [identity.fingerprint()]
-        ).unwrap();
-        drop(connection);
-        std::fs::remove_file(&cfg.identity_path).unwrap();
+        plain_fixture(&cfg.database_path);
+        let before = std::fs::read(&cfg.database_path).unwrap();
+        let error = Storage::open(&cfg.database_path, &identity.database_key())
+            .err()
+            .unwrap();
 
-        assert!(Identity::install_new(&wrong.export(), &cfg).is_err());
-        assert!(!cfg.identity_path.exists());
-        let installed = Identity::install_new(&identity.export(), &cfg).unwrap();
-        let storage = Storage::open(&cfg.database_path, &installed.database_key()).unwrap();
+        assert_eq!(
+            error.to_string(),
+            "incorrect inbox key or damaged encrypted database"
+        );
+        assert!(std::fs::read(&cfg.database_path).unwrap() == before);
+    }
 
-        assert!(!Storage::is_plaintext(&cfg.database_path).unwrap());
-        drop(storage);
+    #[tokio::test]
+    async fn query_index_migration_preserves_existing_inbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let (identity, _) = Identity::load_or_create(&cfg).unwrap();
+        let key = identity.database_key();
+        {
+            let c = encrypted_connection(&cfg.database_path, &key, OpenFlags::default()).unwrap();
+            c.execute_batch(MIGRATIONS[0]).unwrap();
+            c.execute_batch(MIGRATIONS[1]).unwrap();
+            c.pragma_update(None, "user_version", 2).unwrap();
+            c.execute(
+                "INSERT INTO messages(transfer_id,identity_fingerprint,recipient,envelope_sender,received_at,from_header,to_header,subject,size_bytes,raw_eml) VALUES('existing','fp','recipient','sender','timestamp','','','',3,?1)",
+                [b"\0\r\n".as_slice()]
+            ).unwrap();
+            c.execute(
+                "INSERT INTO addresses(identity_fingerprint,route_id,alias_id,address,created_at) VALUES('fp',zeroblob(16),zeroblob(8),'existing','timestamp')",
+                []
+            ).unwrap();
+        }
+
+        for _ in 0..2 {
+            let storage = Storage::open(&cfg.database_path, &key).unwrap();
+            assert_eq!(storage.schema_version().await.unwrap(), 5);
+            assert_eq!(
+                storage.stats().await.unwrap(),
+                (1, Some("timestamp".into()), 1)
+            );
+            assert_eq!(storage.email(1).await.unwrap().1, b"\0\r\n");
+            assert_eq!(storage.address_count("fp".into(), true).await.unwrap(), 1);
+            assert_eq!(
+                storage
+                    .get_address("fp".into(), "1".into())
+                    .await
+                    .unwrap()
+                    .address,
+                "existing"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1433,7 +1363,11 @@ mod encryption_tests {
         let snapshot = first.path().join("snapshot ' unicode-é %#.db");
         storage.export(snapshot.clone()).await.unwrap();
 
-        assert!(!Storage::is_plaintext(&snapshot).unwrap());
+        assert!(
+            !std::fs::read(&snapshot)
+                .unwrap()
+                .starts_with(b"SQLite format 3\0")
+        );
         assert!(storage.export(snapshot.clone()).await.is_err());
         let snapshot_bytes = std::fs::read(&snapshot).unwrap();
         #[cfg(unix)]
@@ -1551,66 +1485,5 @@ mod encryption_tests {
         }
 
         assert!(Storage::open(&cfg.database_path, &key).is_ok());
-    }
-
-    #[test]
-    fn committed_plaintext_wal_fixture_child() {
-        let Some(path) = std::env::var_os("AHRARA_SQLITE_WAL_FIXTURE") else {
-            return;
-        };
-        let connection = Connection::open(PathBuf::from(path)).unwrap();
-        connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .unwrap();
-        connection
-            .pragma_update(None, "wal_autocheckpoint", 0)
-            .unwrap();
-        connection.execute_batch(MIGRATIONS[0]).unwrap();
-        connection.execute_batch(MIGRATIONS[1]).unwrap();
-        connection.pragma_update(None, "user_version", 2).unwrap();
-        connection.execute(
-            "INSERT INTO messages(transfer_id,identity_fingerprint,recipient,envelope_sender,received_at,from_header,to_header,subject,size_bytes,raw_eml) VALUES('wal-transfer','legacy','recipient','sender','timestamp','','','wal-subject',5,?1)",
-            [b"\0\r\n\xFFx".as_slice()]
-        ).unwrap();
-        connection.execute(
-            "INSERT INTO addresses(identity_fingerprint,route_id,alias_id,address,label,created_at) VALUES('legacy',zeroblob(16),zeroblob(8),'legacy-address','legacy-label','timestamp')",
-            []
-        ).unwrap();
-        // Simulate process exit after committed WAL writes, without Connection::drop/checkpoint.
-        std::process::exit(0);
-    }
-
-    #[tokio::test]
-    async fn plaintext_conversion_preserves_committed_wal_and_old_schema() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = config(dir.path());
-        let (identity, _) = Identity::load_or_create(&cfg).unwrap();
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "storage::encryption_tests::committed_plaintext_wal_fixture_child",
-            ])
-            .env("AHRARA_SQLITE_WAL_FIXTURE", &cfg.database_path)
-            .output()
-            .unwrap();
-
-        assert!(child.status.success());
-        assert!(PathBuf::from(format!("{}-wal", cfg.database_path.display())).exists());
-        assert!(Storage::is_plaintext(&cfg.database_path).unwrap());
-        let storage = Storage::open(&cfg.database_path, &identity.database_key()).unwrap();
-
-        assert_eq!(storage.schema_version().await.unwrap(), 5);
-        assert_eq!(storage.email(1).await.unwrap().1, b"\0\r\n\xFFx");
-        assert_eq!(
-            storage
-                .get_address("legacy".into(), "1".into())
-                .await
-                .unwrap()
-                .label
-                .as_deref(),
-            Some("legacy-label")
-        );
-
-        assert!(!Storage::is_plaintext(&cfg.database_path).unwrap());
     }
 }

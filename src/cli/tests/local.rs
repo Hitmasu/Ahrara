@@ -508,48 +508,6 @@ async fn indexed_queries_preserve_filters_identity_order_and_stats() {
     assert_eq!(core.storage.stats().await.unwrap(), (0, None, 0));
 }
 
-#[tokio::test]
-async fn query_index_migration_preserves_existing_inbox() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("v2.db");
-    let (identity, _) = Identity::load_or_create(&config(dir.path())).unwrap();
-    {
-        let c = rusqlite::Connection::open(&path).unwrap();
-        c.execute_batch(include_str!("../../core/migrations/001_messages.sql"))
-            .unwrap();
-        c.execute_batch(include_str!("../../core/migrations/002_addresses.sql"))
-            .unwrap();
-        c.pragma_update(None, "user_version", 2).unwrap();
-        c.execute(
-            "INSERT INTO messages(transfer_id,identity_fingerprint,recipient,envelope_sender,received_at,from_header,to_header,subject,size_bytes,raw_eml) VALUES('existing','fp','recipient','sender','timestamp','','','',3,?1)",
-            [b"\0\r\n".as_slice()]
-        ).unwrap();
-        c.execute(
-            "INSERT INTO addresses(identity_fingerprint,route_id,alias_id,address,created_at) VALUES('fp',zeroblob(16),zeroblob(8),'existing','timestamp')",
-            []
-        ).unwrap();
-    }
-
-    for _ in 0..2 {
-        let storage = Storage::open(&path, &identity.database_key()).unwrap();
-        assert_eq!(storage.schema_version().await.unwrap(), 5);
-        assert_eq!(
-            storage.stats().await.unwrap(),
-            (1, Some("timestamp".into()), 1)
-        );
-        assert_eq!(storage.email(1).await.unwrap().1, b"\0\r\n");
-        assert_eq!(storage.address_count("fp".into(), true).await.unwrap(), 1);
-        assert_eq!(
-            storage
-                .get_address("fp".into(), "1".into())
-                .await
-                .unwrap()
-                .address,
-            "existing"
-        );
-    }
-}
-
 #[test]
 fn ownership_identifies_process_and_releases_after_drop() {
     let dir = tempfile::tempdir().unwrap();
@@ -736,7 +694,7 @@ async fn start_preserves_disabled_aliases_and_offline_ownership() {
     core.change_address(alias.id.to_string(), Some(false))
         .await
         .unwrap();
-    core.start("api", false).await.unwrap();
+    core.start("api").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     assert_eq!(

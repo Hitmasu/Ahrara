@@ -1,5 +1,7 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 pub const MAX_EMAIL: usize = 10 * 1024 * 1024;
 pub const CHUNK_SIZE: usize = 64 * 1024;
@@ -59,4 +61,57 @@ pub fn decode(frame: &[u8]) -> Result<(u8, &[u8])> {
     }
 
     Ok((frame[1], &frame[6..]))
+}
+
+pub type Route = [u8; 16];
+
+pub fn derive_route(public: &[u8; 32]) -> Route {
+    let mut h = Sha256::new();
+    h.update(b"ahrara-route-v1\0");
+    h.update(public);
+    h.finalize()[..16].try_into().expect("16 bytes")
+}
+
+pub fn decode_address(value: &str) -> Result<(Route, [u8; 8], String)> {
+    let (local, domain) = value.split_once('@').context("invalid address")?;
+    if local.len() != 32 || !domain.eq_ignore_ascii_case("ahrara.dev") {
+        bail!("invalid address")
+    }
+
+    let bytes = URL_SAFE_NO_PAD
+        .decode(local)
+        .context("invalid address token")?;
+    if bytes.len() != 24 || URL_SAFE_NO_PAD.encode(&bytes) != local {
+        bail!("invalid address token")
+    }
+
+    Ok((
+        bytes[..16].try_into()?,
+        bytes[16..].try_into()?,
+        format!("{local}@ahrara.dev"),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_roundtrip_and_canonical_domain() {
+        let route = derive_route(&[42; 32]);
+        let encoded = URL_SAFE_NO_PAD.encode([route.as_slice(), &[7; 8]].concat());
+        let (got, alias, canonical) = decode_address(&format!("{encoded}@AHRARA.DEV")).unwrap();
+
+        assert_eq!(got, route);
+        assert_eq!(alias, [7; 8]);
+        assert_eq!(canonical, format!("{encoded}@ahrara.dev"));
+
+        for bad in [
+            "a@ahrara.dev",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@example.test",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=@ahrara.dev",
+        ] {
+            assert!(decode_address(bad).is_err());
+        }
+    }
 }

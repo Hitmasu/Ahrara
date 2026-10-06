@@ -2,7 +2,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signature, VerifyingKey};
-use fs2::FileExt;
 use reqwest::{Client, Url};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -140,9 +139,9 @@ fn installation_lock(executable: &Path, exclusive: bool) -> Result<File> {
         .open(sidecar(executable, ".update.lock"))
         .context("cannot open installation lock; the installation directory must be writable")?;
     let result = if exclusive {
-        FileExt::try_lock_exclusive(&file)
+        file.try_lock()
     } else {
-        FileExt::try_lock_shared(&file)
+        file.try_lock_shared()
     };
     result.context(
         "installation busy: stop other Ahrara processes using this executable before updating",
@@ -539,7 +538,7 @@ async fn cached_notice(
         .create(true)
         .truncate(false)
         .open(sidecar(path, ".lock"))?;
-    if FileExt::try_lock_exclusive(&lock).is_err() {
+    if lock.try_lock().is_err() {
         return Ok(None);
     }
 
