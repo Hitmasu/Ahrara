@@ -13,17 +13,13 @@ CARGO = $(DOCKER) --platform linux/$(DOCKER_ARCH) -w /work/src/cli \
 	-e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS \
 	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY ahrara-builder:$(DOCKER_ARCH) cargo
 
-.PHONY: dev-certs server cli check test openapi openapi-check e2e mcp-e2e api-e2e web-e2e e2e-static toolchain cargo
+.PHONY: dev-certs server cli check test client-lint client-test openapi openapi-check e2e mcp-e2e api-e2e web-e2e toolchain cargo
 
 server: toolchain
 	mkdir -p dist
 	case "$$(uname -m)" in x86_64) target=x86_64-unknown-linux-musl ;; aarch64|arm64) target=aarch64-unknown-linux-musl ;; *) exit 1 ;; esac
 	$(CARGO) build --locked --release --manifest-path /work/src/server/Cargo.toml --target "$$target"
-	staged=$$(mktemp dist/.ahrara-server.XXXXXX)
-	trap 'rm -f "$$staged"' EXIT
-	cp ".dev/target/$$target/release/ahrara-server" "$$staged"
-	chmod 755 "$$staged"
-	mv -f "$$staged" dist/ahrara-server
+	install -m755 ".dev/target/$$target/release/ahrara-server" dist/ahrara-server
 
 dev-certs: server
 	docker run --rm --network host -i --user "$$(id -u):$$(id -g)" -v "$$PWD:/work" -w /work -e AHRARA_WSS_PORT="$$AHRARA_WSS_PORT" ahrara-builder:$$SDK_DOCKER_ARCH bash -s <<'AHRARA_CERTS'
@@ -94,22 +90,27 @@ cross-toolchain:
 	@mkdir -p .dev/cargo .dev/cross-target .dev/zigbuild .dev/zig
 	docker build --platform linux/amd64 --target cross -f src/cli/Dockerfile.builder -t ahrara-builder:cross .
 
-check: toolchain
+check: toolchain client-lint
 	$(CARGO) fmt --manifest-path /work/src/core/Cargo.toml --all -- --check
 	$(CARGO) fmt --manifest-path /work/src/native/Cargo.toml --all -- --check
 	$(CARGO) clippy --locked --manifest-path /work/src/core/Cargo.toml --all-targets -- -D warnings
 	$(CARGO) clippy --locked --manifest-path /work/src/native/Cargo.toml --all-targets -- -D warnings
-	$(CARGO) fmt --all -- --check
-	$(CARGO) clippy --locked --all-targets -- -D warnings
 	$(CARGO) fmt --manifest-path /work/src/server/Cargo.toml --all -- --check
 	$(CARGO) clippy --locked --manifest-path /work/src/server/Cargo.toml --all-targets --all-features -- -D warnings
 
-test: toolchain
+test: toolchain client-test
 	$(CARGO) test --locked --manifest-path /work/src/core/Cargo.toml
 	$(CARGO) test --locked --manifest-path /work/src/native/Cargo.toml
-	$(CARGO) test --locked --lib --bin ahrara --test local --test web --test update_cli --test crypto_cli --test mcp_stdio
 	$(CARGO) test --locked --manifest-path /work/src/third_party/mailparse/Cargo.toml
 	$(CARGO) test --locked --manifest-path /work/src/server/Cargo.toml --all-features
+
+# The client release workflow runs these two targets.
+client-lint: toolchain
+	$(CARGO) fmt --all -- --check
+	$(CARGO) clippy --locked --all-targets -- -D warnings
+
+client-test: toolchain
+	$(CARGO) test --locked --lib --bin ahrara --test local --test web --test update_cli --test crypto_cli --test mcp_stdio
 	$(DOCKER) -w /work python:3.13-slim python3 -B -m unittest discover -s tests -p 'test_release_manifest.py'
 	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs
 
@@ -143,9 +144,6 @@ forwarding-e2e: server
 	$(CARGO) test --locked --test e2e forwarding_end_to_end -- --ignored --nocapture
 	$(CARGO) test --locked --test e2e email_routing_end_to_end -- --ignored --nocapture
 
-e2e-static: cli server
-	AHRARA_TEST_BINARY=/work/dist/ahrara-linux-$(ARCH) $(CARGO) test --locked --test e2e -- --ignored --test-threads=1
-
 toolchain:
 	@mkdir -p .dev/cargo .dev/target
 	if ! docker image inspect ahrara-builder:$(DOCKER_ARCH) >/dev/null 2>&1; then
@@ -158,6 +156,11 @@ cargo: toolchain
 .PHONY: sdk-native sdk-rust-e2e
 sdk-native: toolchain
 	$(CARGO) build --locked --manifest-path /work/src/native/Cargo.toml
+	native=$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}
+	if [[ ! -f "$$native" || "$$native" != /* ]]; then
+	  echo 'Build the native core first, or set AHRARA_NATIVE_LIBRARY to an absolute library path.' >&2
+	  exit 1
+	fi
 
 sdk-rust-e2e: toolchain
 	$(CARGO) test --locked --manifest-path /work/src/core/Cargo.toml --test embedded -- --ignored
@@ -169,6 +172,16 @@ SDK_OS ?= linux
 SDK_ARCH ?= $(DOCKER_ARCH)
 export SDK_NATIVE_LIBRARY AHRARA_WSS_PORT SDK_OS SDK_ARCH
 export SDK_DOCKER_ARCH = $(DOCKER_ARCH)
+# Development relay defaults; the environment overrides each one. Test containers mount the repository at /repo.
+SDK_TESTS = sdk-dotnet-test sdk-java-test sdk-javascript-test sdk-python-test sdk-go-test sdk-k6-test
+$(SDK_TESTS): export AHRARA_TEST_SERVER_URL ?= wss://localhost:8443
+$(SDK_TESTS): export AHRARA_TEST_SMTP_ADDRESS ?= localhost:2525
+$(SDK_TESTS): export AHRARA_TEST_TLS_CA ?= /repo/.dev/certs/ca.pem
+$(SDK_TESTS): export AHRARA_TEST_SERVER_PUBLIC_KEY ?= $(shell cat .dev/certs/transport-public.txt 2>/dev/null)
+GO_DOCKER = docker run --rm --network host -i -v "$(CURDIR):/repo" -w /repo --user "$(shell id -u):$(shell id -g)" \
+	-e HOME=/tmp -e GOPATH=/repo/.dev/go -e GOCACHE=/repo/.dev/go-build -e GOFLAGS=-modcacherw \
+	-e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY \
+	golang:1.27.1-bookworm sh -s
 
 .PHONY: sdk-test sdk-dotnet-test sdk-java-test sdk-javascript-test sdk-python-test sdk-go-package sdk-go-test sdk-k6-test
 
@@ -176,20 +189,13 @@ sdk-dotnet-test: sdk-native
 	set -euo pipefail
 	repo="$$PWD"
 	native=$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}
-	test -f "$$native" || { echo 'Build the native Rust SDK library first.' >&2; exit 1; }
 
 	docker run --rm --network host --user "$$(id -u):$$(id -g)" \
 	  --volume "$$repo:/repo" --volume "$$native:/ahrara-native/libahrara_native.so:ro" --workdir /repo \
 	  --env DOTNET_CLI_HOME=/repo/.dev/dotnet-home --env NUGET_PACKAGES=/repo/.dev/nuget \
-	  --env AHRARA_TEST_SERVER_URL="$${AHRARA_TEST_SERVER_URL:-wss://localhost:8443}" \
-	  --env AHRARA_TEST_SMTP_ADDRESS="$${AHRARA_TEST_SMTP_ADDRESS:-localhost:2525}" \
-	  --env AHRARA_TEST_TLS_CA="$${AHRARA_TEST_TLS_CA:-/repo/.dev/certs/ca.pem}" \
-	  --env AHRARA_TEST_SERVER_PUBLIC_KEY \
+	  --env AHRARA_TEST_SERVER_URL --env AHRARA_TEST_SMTP_ADDRESS \
+	  --env AHRARA_TEST_TLS_CA --env AHRARA_TEST_SERVER_PUBLIC_KEY \
 	  mcr.microsoft.com/dotnet/sdk:10.0 sh -ec '
-	    if test -z "$${AHRARA_TEST_SERVER_PUBLIC_KEY:-}"; then
-	      AHRARA_TEST_SERVER_PUBLIC_KEY=$$(cat .dev/certs/transport-public.txt)
-	      export AHRARA_TEST_SERVER_PUBLIC_KEY
-	    fi
 	    mkdir -p src/sdks/dotnet/runtimes/linux-x64/native
 	    cp /ahrara-native/libahrara_native.so src/sdks/dotnet/runtimes/linux-x64/native/
 	    dotnet pack src/sdks/dotnet/src/Ahrara/Ahrara.csproj -p:PackageOutputPath=/repo/dist/sdks/dotnet --nologo
@@ -204,41 +210,13 @@ sdk-java-test: sdk-native
 	set -euo pipefail
 	repo="$$PWD"
 	native=$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}
-	test -f "$$native" || { echo 'Build the native Rust SDK library first.' >&2; exit 1; }
-
-	selenium_container=
-	cleanup() {
-	  if test -n "$$selenium_container"; then docker stop "$$selenium_container" >/dev/null; fi
-	}
-	trap cleanup EXIT
-	selenium_url=$${AHRARA_TEST_SELENIUM_URL:-}
-	if test -z "$$selenium_url"; then
-	  # Host networking lets the browser reach the test application's loopback port.
-	  selenium_container=$$(docker run -d --rm --network host --shm-size 2g \
-	    --env SE_ENABLE_TRACING=false --env SE_NODE_MAX_SESSIONS=1 \
-	    --env SE_BIND_HOST=true --env SE_HOST=127.0.0.1 \
-	    selenium/standalone-chromium:152.0.7977.82-chromedriver-152.0.7977.82-grid-4.49.0-20260909)
-	  selenium_url=http://127.0.0.1:4444
-	  ready=false
-	  for attempt in {1..45}; do
-	    if docker exec "$$selenium_container" python3 -c 'import json,urllib.request; response=urllib.request.urlopen("http://127.0.0.1:4444/status",timeout=2); raise SystemExit(not json.load(response)["value"]["ready"])' >/dev/null 2>&1; then ready=true; break; fi
-	    sleep 1
-	  done
-	  if [[ "$$ready" != true ]]; then echo 'Selenium did not become ready' >&2; exit 1; fi
-	fi
 
 	docker run --rm --network host --user "$$(id -u):$$(id -g)" \
 	  --volume "$$repo:/repo" --volume "$$native:/ahrara-native/libahrara_native.so:ro" --workdir /repo \
 	  --env MAVEN_CONFIG=/repo/.dev/maven \
-	  --env AHRARA_TEST_SERVER_URL="$${AHRARA_TEST_SERVER_URL:-wss://localhost:8443}" \
-	  --env AHRARA_TEST_SMTP_ADDRESS="$${AHRARA_TEST_SMTP_ADDRESS:-localhost:2525}" \
-	  --env AHRARA_TEST_TLS_CA="$${AHRARA_TEST_TLS_CA:-/repo/.dev/certs/ca.pem}" \
-	  --env AHRARA_TEST_SERVER_PUBLIC_KEY --env AHRARA_TEST_SELENIUM_URL="$$selenium_url" \
+	  --env AHRARA_TEST_SERVER_URL --env AHRARA_TEST_SMTP_ADDRESS \
+	  --env AHRARA_TEST_TLS_CA --env AHRARA_TEST_SERVER_PUBLIC_KEY \
 	  maven:3.9.11-eclipse-temurin-21 sh -ec '
-	    if test -z "$${AHRARA_TEST_SERVER_PUBLIC_KEY:-}"; then
-	      AHRARA_TEST_SERVER_PUBLIC_KEY=$$(cat .dev/certs/transport-public.txt)
-	      export AHRARA_TEST_SERVER_PUBLIC_KEY
-	    fi
 	    mkdir -p src/sdks/java/src/main/resources/native/linux-x86_64
 	    cp /ahrara-native/libahrara_native.so src/sdks/java/src/main/resources/native/linux-x86_64/
 	    mvn -B -q -Dmaven.repo.local=/repo/.dev/maven/repository -f src/sdks/java/pom.xml \
@@ -251,10 +229,6 @@ sdk-javascript-test: sdk-native
 	set -euo pipefail
 	project_root="$$PWD"
 	native_library="$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}"
-	if [[ ! -f "$$native_library" || "$$native_library" != /* ]]; then
-	  echo 'Build the native core first, or set AHRARA_NATIVE_LIBRARY to an absolute library path.' >&2
-	  exit 1
-	fi
 	docker run --rm --network host --shm-size=1g --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
 	  -v "$$project_root:/repo" -v "$$native_library:/native/libahrara_native.so:ro" \
 	  -w /repo/src/sdks/javascript \
@@ -271,6 +245,7 @@ sdk-javascript-test: sdk-native
 	    npm run test:playwright
 	    xvfb-run --auto-servernum --server-num=199 npm run test:cypress
 	    mkdir -p /repo/dist/javascript
+	    install -D /native/libahrara_native.so "native/$$(node -p process.platform)-$$(node -p process.arch)/libahrara_native.so"
 	    npm pack --pack-destination /repo/dist/javascript
 	    consumer=$$(mktemp -d)
 	    npm install --prefix "$$consumer" --silent /repo/dist/javascript/ahrara-sdk-0.1.0.tgz
@@ -283,10 +258,6 @@ sdk-python-test: sdk-native
 	set -euo pipefail
 	project_root="$$PWD"
 	native_library="$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}"
-	if [[ ! -f "$$native_library" || "$$native_library" != /* ]]; then
-	  echo 'Build the native core first, or set AHRARA_NATIVE_LIBRARY to an absolute library path.' >&2
-	  exit 1
-	fi
 	docker run --rm --network host --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
 	  -v "$$project_root:/repo" -v "$$native_library:/native/libahrara_native.so:ro" \
 	  -w /repo/src/sdks/python -e AHRARA_NATIVE_LIBRARY=/native/libahrara_native.so \
@@ -300,6 +271,7 @@ sdk-python-test: sdk-native
 	    mypy --strict --explicit-package-bases ahrara
 	    python -m pytest tests -q --tb=short
 	    python -m robot --outputdir /repo/.dev/robot tests/inbox.robot
+	    install -D /native/libahrara_native.so ahrara/native/libahrara_native.so
 	    python -m build --wheel --outdir /repo/dist/python
 	    pip install --quiet --force-reinstall /repo/dist/python/*.whl
 	    cp tests/package_smoke.py /tmp/ahrara-package-smoke.py
@@ -313,10 +285,6 @@ sdk-go-package: sdk-native
 	set -eu
 
 	# Run inside the Docker build image. No Rust compiler is needed by SDK consumers.
-	if [ "$$#" -ne 3 ]; then
-	  printf 'Usage: make sdk-go-package <compiled-library> <linux|darwin|windows> <amd64|arm64>\n' >&2
-	  exit 2
-	fi
 	case "$$2" in
 	  linux) library=libahrara_native.so ;;
 	  darwin) library=libahrara_native.dylib ;;
@@ -333,21 +301,11 @@ sdk-go-package: sdk-native
 	AHRARA_PACKAGE
 
 sdk-go-test: sdk-go-package
-	docker run --rm --network host -i -v "$$PWD:/work" -w /work --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e GOPATH=/work/.dev/go -e GOCACHE=/work/.dev/go-build -e GOFLAGS=-modcacherw -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
+	$(GO_DOCKER) <<'AHRARA_GO'
 	set -eu
 
-	# Docker-only entrypoint, invoked from the repository root.
-	repo=$$(pwd)
-	: "$${AHRARA_TEST_SERVER_URL:=wss://localhost:8443}"
-	: "$${AHRARA_TEST_TLS_CA:=$$repo/.dev/certs/ca.pem}"
-	: "$${AHRARA_TEST_SMTP_ADDRESS:=localhost:2525}"
-	if [ -z "$${AHRARA_TEST_SERVER_PUBLIC_KEY:-}" ]; then
-	  AHRARA_TEST_SERVER_PUBLIC_KEY=$$(cat "$$repo/.dev/certs/transport-public.txt")
-	fi
-	export AHRARA_TEST_SERVER_URL AHRARA_TEST_TLS_CA AHRARA_TEST_SMTP_ADDRESS AHRARA_TEST_SERVER_PUBLIC_KEY
-
 	# The integration suite deliberately exercises the embedded asset, without a
-	# loader override or a sidecar next to the temporary Go test executable.
+	# loader override.
 	unset AHRARA_NATIVE_LIBRARY
 	cd src/sdks/go
 	go vet ./...
@@ -355,20 +313,11 @@ sdk-go-test: sdk-go-package
 	AHRARA_GO
 
 sdk-k6-test: sdk-go-package
-	docker run --rm --network host -i -v "$$PWD:/work" -w /work --user "$$(id -u):$$(id -g)" -e HOME=/tmp -e GOPATH=/work/.dev/go -e GOCACHE=/work/.dev/go-build -e GOFLAGS=-modcacherw -e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY golang:1.27.1-bookworm sh -s <<'AHRARA_GO'
+	$(GO_DOCKER) <<'AHRARA_GO'
 	set -eu
 
 	# Run inside the Go Docker development image from the repository root.
 	repo=$$(pwd)
-	: "$${AHRARA_TEST_SERVER_URL:=wss://localhost:8443}"
-	: "$${AHRARA_TEST_TLS_CA:=$$repo/.dev/certs/ca.pem}"
-	: "$${AHRARA_TEST_SMTP_ADDRESS:=localhost:2525}"
-	if [ -z "$${AHRARA_TEST_SERVER_PUBLIC_KEY:-}" ]; then
-	  AHRARA_TEST_SERVER_PUBLIC_KEY=$$(cat "$$repo/.dev/certs/transport-public.txt")
-	fi
-	export AHRARA_TEST_SERVER_URL AHRARA_TEST_TLS_CA
-	export AHRARA_TEST_SMTP_ADDRESS AHRARA_TEST_SERVER_PUBLIC_KEY
-
 	unset AHRARA_NATIVE_LIBRARY
 
 	cd src/sdks/k6

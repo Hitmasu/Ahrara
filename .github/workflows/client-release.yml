@@ -40,14 +40,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Validate release configuration
         shell: bash
         run: |
           python3 - <<'PY'
-          import base64, json, os, re, tomllib
+          import base64, os, re, tomllib
           from pathlib import Path
           assert re.fullmatch(r'[0-9a-fA-F]{64}', os.environ['AHRARA_UPDATE_PUBLIC_KEY']), 'Configure the public release key first'
           assert os.environ['RELEASE_VERSION'] == tomllib.loads(Path('src/cli/Cargo.toml').read_text())['package']['version'], 'Version mismatch'
@@ -55,21 +52,13 @@ jobs:
           assert re.fullmatch(r'ahrara_server_v1_[A-Za-z0-9_-]{43}', pin), 'Configure the verified public relay transport key first'
           raw = base64.urlsafe_b64decode(pin.removeprefix('ahrara_server_v1_') + '=')
           assert len(raw) == 32 and base64.urlsafe_b64encode(raw).decode().rstrip('=') == pin.removeprefix('ahrara_server_v1_'), 'Invalid relay public key'
-          for file in ['plugin.json', 'package.json', 'gemini-extension.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json', '.devin-plugin/plugin.json', '.qoder-plugin/plugin.json']:
-              assert json.loads(Path(file).read_text())['version'] == os.environ['RELEASE_VERSION'], f'Plugin version mismatch: {file}'
-          assert re.search(r'^version: (.+)$', Path('plugin.yaml').read_text(), re.M)[1] == os.environ['RELEASE_VERSION'], 'Hermes plugin version mismatch'
           PY
       - name: Build client
         run: make release PLATFORM=${{ matrix.platform }} ARCH=${{ matrix.arch }}
+      # Includes the plugin tests, which check every plugin manifest against src/cli/Cargo.toml.
       - name: Validate updater and client on Linux
         if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
-        shell: bash
-        run: |
-          make cargo ARGS='fmt --all -- --check'
-          make cargo ARGS='clippy --locked --all-targets -- -D warnings'
-          make cargo ARGS='test --locked --lib --bin ahrara --test local --test web --test update_cli --test crypto_cli --test mcp_stdio'
-          AHRARA_TEST_BINARY="$PWD/.dev/target/debug/ahrara" node --test tests/plugin.test.mjs
-          python3 -B -m unittest discover -s tests -p 'test_release_manifest.py'
+        run: make client-lint client-test
       - uses: actions/upload-artifact@v4
         with:
           name: client-${{ matrix.platform }}-${{ matrix.arch }}
