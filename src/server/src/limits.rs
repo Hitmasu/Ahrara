@@ -1,4 +1,4 @@
-use crate::auth::Route;
+use crate::protocol::Route;
 use anyhow::{Result, anyhow};
 use std::{
     collections::HashMap,
@@ -74,30 +74,25 @@ impl RuntimeLimits {
             defaults.smtp_per_source.min(smtp_sessions),
             smtp_sessions,
         )?;
+        let mut secs = |key: &str, default: Duration| -> Result<Duration> {
+            Ok(Duration::from_secs(
+                number(key, default.as_secs() as usize, MAX_SETTING)? as u64,
+            ))
+        };
 
         Ok(Self {
             smtp_sessions,
             smtp_per_source,
-            offer_timeout: Duration::from_secs(number(
-                "AHRARA_SMTP_OFFER_TIMEOUT_SECONDS",
-                defaults.offer_timeout.as_secs() as usize,
-                MAX_SETTING,
-            )? as u64),
-            ack_timeout: Duration::from_secs(number(
-                "AHRARA_SMTP_ACK_TIMEOUT_SECONDS",
-                defaults.ack_timeout.as_secs() as usize,
-                MAX_SETTING,
-            )? as u64),
-            transaction_timeout: Duration::from_secs(number(
+            offer_timeout: secs("AHRARA_SMTP_OFFER_TIMEOUT_SECONDS", defaults.offer_timeout)?,
+            ack_timeout: secs("AHRARA_SMTP_ACK_TIMEOUT_SECONDS", defaults.ack_timeout)?,
+            transaction_timeout: secs(
                 "AHRARA_SMTP_TRANSACTION_TIMEOUT_SECONDS",
-                defaults.transaction_timeout.as_secs() as usize,
-                MAX_SETTING,
-            )? as u64),
-            command_timeout: Duration::from_secs(number(
+                defaults.transaction_timeout,
+            )?,
+            command_timeout: secs(
                 "AHRARA_SMTP_COMMAND_TIMEOUT_SECONDS",
-                defaults.command_timeout.as_secs() as usize,
-                MAX_SETTING,
-            )? as u64),
+                defaults.command_timeout,
+            )?,
         })
     }
 }

@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-mod auth;
 mod broker;
 mod data;
 mod limits;
@@ -8,7 +7,6 @@ mod routing;
 #[path = "../../core/src/secure.rs"]
 mod secure;
 mod smtp;
-mod sse;
 #[cfg(feature = "tunnel")]
 mod tunnel;
 // The envelope implementation is shared with the Rust client; no second wire format.
@@ -19,18 +17,16 @@ mod protocol;
 use anyhow::{Context, Result, ensure};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
+    extract::{State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
 use broker::Broker;
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use serde_json::{Value, json};
 use std::{
     env,
-    fs::File,
-    io::BufReader,
     net::SocketAddr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -95,16 +91,10 @@ async fn upgrade(
 }
 
 fn tls_config() -> Result<Arc<rustls::ServerConfig>> {
-    let certs = rustls_pemfile::certs(&mut BufReader::new(File::open(setting(
-        "AHRARA_TLS_CERT",
-        "/certs/server.pem",
-    ))?))
-    .collect::<std::io::Result<Vec<_>>>()?;
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(setting(
-        "AHRARA_TLS_KEY",
-        "/certs/server-key.pem",
-    ))?))?
-    .context("missing TLS private key")?;
+    let certs = CertificateDer::pem_file_iter(setting("AHRARA_TLS_CERT", "/certs/server.pem"))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let key = PrivateKeyDer::from_pem_file(setting("AHRARA_TLS_KEY", "/certs/server-key.pem"))
+        .context("missing TLS private key")?;
 
     Ok(Arc::new(
         rustls::ServerConfig::builder()
@@ -115,10 +105,7 @@ fn tls_config() -> Result<Arc<rustls::ServerConfig>> {
 
 async fn healthcheck() -> Result<()> {
     let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut BufReader::new(File::open(setting(
-        "AHRARA_TLS_CA",
-        "/certs/ca.pem",
-    ))?)) {
+    for cert in CertificateDer::pem_file_iter(setting("AHRARA_TLS_CA", "/certs/ca.pem"))? {
         roots.add(cert?)?;
     }
 
@@ -296,19 +283,10 @@ async fn run() -> Result<()> {
 
     #[cfg(feature = "tunnel")]
     let tunnel_configuration = tunnel::configuration()?;
-    #[cfg(feature = "tunnel")]
-    if tunnel_configuration.is_some() {
-        tunnel::install_diagnostics();
-    }
 
     let smtp_address = address(&setting("AHRARA_SMTP_BIND", ":2525"))?;
     let https_address = address(&setting("AHRARA_HTTPS_BIND", ":8443"))?;
     let tls = tls_config()?;
-    let sse_enabled = setting("AHRARA_ENABLE_SSE", "0") == "1";
-    let mut web_tls = tls.as_ref().clone();
-    if sse_enabled {
-        web_tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    }
 
     let smtp_socket = TcpListener::bind(smtp_address).await?;
     let transport_key = secure::load_key(std::path::Path::new(&setting(
@@ -319,19 +297,10 @@ async fn run() -> Result<()> {
     let broker = Broker::encrypted_with_limits(*transport_key, limits);
     drop(transport_key);
     let sweep = tokio::spawn(broker.clone().sweep());
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/", get(upgrade))
-        .route("/healthz", get(|| async { Json(json!({"status": "ok"})) }));
-    if sse_enabled {
-        router = router.route(
-            "/sse",
-            get(sse::open).post(sse::send).layer(DefaultBodyLimit::max(
-                protocol::MAX_CONTROL + 6 + secure::TAG_LEN,
-            )),
-        );
-    }
-
-    let router = router.with_state(broker.clone());
+        .route("/healthz", get(|| async { Json(json!({"status": "ok"})) }))
+        .with_state(broker.clone());
     #[cfg(unix)]
     let unix_listener = env::var("AHRARA_UNIX_SOCKET")
         .ok()
@@ -346,7 +315,7 @@ async fn run() -> Result<()> {
     let handle = axum_server::Handle::new();
     let mut https = axum_server::bind_rustls(
         https_address,
-        axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(web_tls)),
+        axum_server::tls_rustls::RustlsConfig::from_config(tls.clone()),
     )
     .map(|acceptor| acceptor.acceptor(axum_server::accept::NoDelayAcceptor::new()))
     .handle(handle.clone());
@@ -356,19 +325,6 @@ async fn run() -> Result<()> {
         .max_buf_size(16 * 1024)
         .timer(hyper_util::rt::TokioTimer::new())
         .header_read_timeout(Duration::from_secs(10));
-    if sse_enabled {
-        let streams = setting("AHRARA_HTTP2_MAX_STREAMS", "1024").parse::<u32>()?;
-        ensure!(
-            (1..=16384).contains(&streams),
-            "HTTP/2 stream limit must be 1..16384"
-        );
-
-        https
-            .http_builder()
-            .http2()
-            .max_concurrent_streams(streams)
-            .max_send_buf_size(128 * 1024);
-    }
 
     let mut web = JoinSet::new();
     let https_router = router.clone();
@@ -380,9 +336,7 @@ async fn run() -> Result<()> {
     });
     #[cfg(feature = "tunnel")]
     if let Some(configuration) = tunnel_configuration {
-        let tunnel_router = router.clone();
-        let tunnel_broker = broker.clone();
-        web.spawn(tunnel::serve(configuration, tunnel_router, tunnel_broker));
+        web.spawn(tunnel::serve(configuration, broker.clone()));
     }
     #[cfg(unix)]
     if let Some(listener) = unix_listener {

@@ -1,4 +1,4 @@
-use crate::auth;
+use crate::protocol;
 use anyhow::{Context, Result, ensure};
 use ipnet::IpNet;
 use mailparse::{MailAddr, MailHeaderMap};
@@ -35,7 +35,7 @@ impl Config {
                 address.is_some(),
                 "verification requires an Email Routing sink"
             );
-            Some(auth::address(verification_recipient)?.2)
+            Some(protocol::decode_address(verification_recipient)?.2)
         };
         Ok(Self {
             prefixes,
@@ -56,7 +56,7 @@ impl Config {
             );
             Ok(address.clone())
         } else {
-            Ok(auth::address(value)?.2)
+            Ok(protocol::decode_address(value)?.2)
         }
     }
 
@@ -90,7 +90,7 @@ impl Config {
                 && addresses.next().is_none(),
             "invalid forwarding chain"
         );
-        Ok(auth::address(original)?.2)
+        Ok(protocol::decode_address(original)?.2)
     }
 }
 
@@ -143,7 +143,7 @@ pub fn recipient(raw: &[u8]) -> Result<String> {
         let MailAddr::Single(address) = &addresses[0] else {
             anyhow::bail!("ambiguous forwarding recipient")
         };
-        let (_, _, canonical) = auth::address(&address.addr)?;
+        let (_, _, canonical) = protocol::decode_address(&address.addr)?;
         ensure!(
             recipient
                 .as_ref()

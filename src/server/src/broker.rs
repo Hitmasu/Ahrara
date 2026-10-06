@@ -1,11 +1,13 @@
 use crate::{
-    auth::{self, Route},
-    protocol as p, secure,
+    protocol::{self as p, Route},
+    secure,
 };
 use anyhow::{Context, Result, bail, ensure};
-use axum::extract::ws::{Message, WebSocket};
+use axum::{
+    body::Bytes,
+    extract::ws::{Message, WebSocket},
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use bytes::Bytes;
 use ed25519_dalek::{Signature, VerifyingKey};
 use futures_util::{
     SinkExt, StreamExt,
@@ -24,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{Mutex as AsyncMutex, mpsc, oneshot},
+    sync::{Mutex as AsyncMutex, oneshot},
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
@@ -32,7 +34,8 @@ use zeroize::Zeroizing;
 
 enum WireSink {
     WebSocket(SplitSink<WebSocket, Message>),
-    Sse(mpsc::Sender<Bytes>),
+    #[cfg(test)]
+    Channel(tokio::sync::mpsc::Sender<Bytes>),
     #[cfg(feature = "tunnel")]
     Tunnel(SplitSink<crate::tunnel::Socket, tokio_tungstenite::tungstenite::Message>),
 }
@@ -43,10 +46,11 @@ impl WireSink {
             Self::WebSocket(sink) => sink.send(message).await?,
             #[cfg(feature = "tunnel")]
             Self::Tunnel(sink) => sink.send(tunnel_message(message)).await?,
-            Self::Sse(sender) => match message {
+            #[cfg(test)]
+            Self::Channel(sender) => match message {
                 Message::Binary(frame) => sender.send(frame).await?,
                 Message::Pong(_) => {}
-                _ => bail!("unsupported SSE message"),
+                _ => bail!("unsupported channel message"),
             },
         }
 
@@ -56,7 +60,8 @@ impl WireSink {
 
 enum WireReader {
     WebSocket(SplitStream<WebSocket>),
-    Sse(mpsc::Receiver<Message>),
+    #[cfg(test)]
+    Channel(tokio::sync::mpsc::Receiver<Message>),
     #[cfg(feature = "tunnel")]
     Tunnel(SplitStream<crate::tunnel::Socket>),
 }
@@ -70,7 +75,8 @@ impl WireReader {
                 .next()
                 .await
                 .map(|value| value.map(from_tunnel_message).map_err(Into::into)),
-            Self::Sse(reader) => reader.recv().await.map(Ok),
+            #[cfg(test)]
+            Self::Channel(reader) => reader.recv().await.map(Ok),
         }
     }
 }
@@ -119,48 +125,24 @@ pub enum Connection {
     WebSocket(Box<WebSocket>),
     #[cfg(feature = "tunnel")]
     Tunnel(Box<crate::tunnel::Socket>),
-    Sse {
-        incoming: mpsc::Receiver<Message>,
-        outgoing: mpsc::Sender<Bytes>,
+    /// In-memory transport for broker tests.
+    #[cfg(test)]
+    Channel {
+        incoming: tokio::sync::mpsc::Receiver<Message>,
+        outgoing: tokio::sync::mpsc::Sender<Bytes>,
     },
 }
 
 impl Connection {
-    async fn recv(&mut self) -> Option<Result<Message>> {
-        match self {
-            Self::WebSocket(ws) => ws.recv().await.map(|value| value.map_err(Into::into)),
-            #[cfg(feature = "tunnel")]
-            Self::Tunnel(ws) => ws
-                .next()
-                .await
-                .map(|value| value.map(from_tunnel_message).map_err(Into::into)),
-            Self::Sse { incoming, .. } => incoming.recv().await.map(Ok),
-        }
-    }
-
-    async fn send(&mut self, message: Message) -> Result<()> {
-        match self {
-            Self::WebSocket(ws) => ws.send(message).await?,
-            #[cfg(feature = "tunnel")]
-            Self::Tunnel(ws) => ws.send(tunnel_message(message)).await?,
-            Self::Sse { outgoing, .. } => match message {
-                Message::Binary(frame) => outgoing.send(frame).await?,
-                Message::Pong(_) => {}
-                _ => bail!("unsupported SSE message"),
-            },
-        }
-
-        Ok(())
-    }
-
     fn split(self) -> (WireSink, WireReader) {
         match self {
             Self::WebSocket(ws) => {
                 let (sink, reader) = (*ws).split();
                 (WireSink::WebSocket(sink), WireReader::WebSocket(reader))
             }
-            Self::Sse { incoming, outgoing } => {
-                (WireSink::Sse(outgoing), WireReader::Sse(incoming))
+            #[cfg(test)]
+            Self::Channel { incoming, outgoing } => {
+                (WireSink::Channel(outgoing), WireReader::Channel(incoming))
             }
             #[cfg(feature = "tunnel")]
             Self::Tunnel(ws) => {
@@ -171,49 +153,13 @@ impl Connection {
     }
 }
 
-struct Session {
-    connection: Connection,
-    sender: secure::Sender,
-    receiver: secure::Receiver,
-    binding: [u8; 32],
-}
-
-impl Session {
-    async fn recv(&mut self) -> Option<Result<Message>> {
-        self.connection
-            .recv()
-            .await
-            .map(|message| message.and_then(|message| open(message, &mut self.receiver)))
-    }
-
-    async fn send(&mut self, message: Message) -> Result<()> {
-        self.connection.send(seal(message, &mut self.sender)?).await
-    }
-
-    fn split(self) -> (Sink, Reader) {
-        let (sink, reader) = self.connection.split();
-        (
-            Sink {
-                wire: sink,
-                secure: self.sender,
-            },
-            Reader {
-                wire: reader,
-                secure: self.receiver,
-            },
-        )
-    }
-}
-
-async fn handshake(
-    connection: &mut Connection,
-    key: &[u8; 32],
-) -> Result<(secure::Sender, secure::Receiver, [u8; 32])> {
+async fn handshake(connection: Connection, key: &[u8; 32]) -> Result<(Sink, Reader, [u8; 32])> {
+    let (mut sink, mut reader) = connection.split();
     let mut state = secure::responder(key)?;
     let message = loop {
-        match connection.recv().await.context("connection closed")?? {
+        match reader.next().await.context("connection closed")?? {
             Message::Binary(message) => break message,
-            Message::Ping(payload) => connection.send(Message::Pong(payload)).await?,
+            Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
             Message::Pong(_) => {}
             _ => bail!("expected secure handshake"),
         }
@@ -228,12 +174,21 @@ async fn handshake(
         "unexpected secure handshake payload"
     );
     let length = state.write_message(&[], &mut buffer)?;
-    connection
-        .send(Message::Binary(buffer[..length].to_vec().into()))
+    sink.send(Message::Binary(buffer[..length].to_vec().into()))
         .await?;
     let binding = state.get_handshake_hash().try_into()?;
     let (sender, receiver) = secure::into_session(state)?;
-    Ok((sender, receiver, binding))
+    Ok((
+        Sink {
+            wire: sink,
+            secure: sender,
+        },
+        Reader {
+            wire: reader,
+            secure: receiver,
+        },
+        binding,
+    ))
 }
 
 #[cfg(feature = "tunnel")]
@@ -287,7 +242,6 @@ pub struct Peer {
 
 pub struct Broker {
     pub admission: Arc<crate::limits::Admission>,
-    pub sse: crate::sse::Sessions,
     peers: RwLock<HashMap<Route, Arc<Peer>>>,
     started: Instant,
     pub stopped: CancellationToken,
@@ -310,7 +264,6 @@ impl Broker {
     pub fn encrypted_with_limits(key: [u8; 32], limits: crate::limits::RuntimeLimits) -> Arc<Self> {
         Arc::new(Self {
             admission: crate::limits::Admission::new(limits),
-            sse: crate::sse::Sessions::default(),
             peers: RwLock::new(HashMap::new()),
             started: Instant::now(),
             stopped: CancellationToken::new(),
@@ -376,7 +329,7 @@ impl Broker {
 
     pub async fn serve_connection(
         self: Arc<Self>,
-        mut connection: Connection,
+        connection: Connection,
         closed: CancellationToken,
     ) {
         // Keep the Noise handshake and authentication buffers out of the idle future.
@@ -384,16 +337,14 @@ impl Broker {
             _ = closed.cancelled() => return,
             _ = self.stopped.cancelled() => return,
             result = timeout(Duration::from_secs(15), Box::pin(async {
-                let (sender, receiver, binding) = handshake(&mut connection, &self.transport_key).await?;
-                let mut session = Session { connection, sender, receiver, binding };
-                let identity = authenticate(&mut session).await?;
-                Ok::<_, anyhow::Error>((session, identity))
+                let (mut sink, mut reader, binding) = handshake(connection, &self.transport_key).await?;
+                let identity = authenticate(&mut sink, &mut reader, &binding).await?;
+                Ok::<_, anyhow::Error>((sink, reader, identity))
             })) => result,
         };
-        let Ok(Ok((session, (route, fingerprint)))) = authenticated else {
+        let Ok(Ok((sink, mut reader, (route, fingerprint)))) = authenticated else {
             return;
         };
-        let (sink, mut reader) = session.split();
         let peer = Arc::new(Peer {
             sink: AsyncMutex::new(Some(sink)),
             pending: Mutex::new(Pending::default()),
@@ -591,22 +542,30 @@ impl Peer {
     }
 }
 
-async fn read<T: DeserializeOwned>(ws: &mut Session, expected: u8) -> Result<T> {
+async fn read<T: DeserializeOwned>(
+    sink: &mut Sink,
+    reader: &mut Reader,
+    expected: u8,
+) -> Result<T> {
     loop {
-        match ws.recv().await.context("disconnected")?? {
+        match reader.next().await.context("disconnected")?? {
             Message::Binary(raw) => {
                 let (kind, payload) = p::decode(&raw)?;
                 ensure!(kind == expected, "unexpected protocol frame");
                 return Ok(serde_json::from_slice(payload)?);
             }
-            Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
+            Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
             Message::Pong(_) => {}
             _ => bail!("binary frame required"),
         }
     }
 }
 
-async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
+async fn authenticate(
+    sink: &mut Sink,
+    reader: &mut Reader,
+    binding: &[u8; 32],
+) -> Result<(Route, String)> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Hello {
@@ -621,7 +580,9 @@ async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
 
     let mut failure_code = "invalid_hello";
     let result = async {
-        let hello: Hello = read(ws, p::HELLO).await.context("invalid_hello")?;
+        let hello: Hello = read(sink, reader, p::HELLO)
+            .await
+            .context("invalid_hello")?;
         failure_code = "invalid_public_key";
         let public: [u8; 32] = URL_SAFE_NO_PAD
             .decode(hello.public_key)?
@@ -631,7 +592,7 @@ async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
         failure_code = "authentication_failed";
         let mut challenge = [0; 32];
         OsRng.fill_bytes(&mut challenge);
-        ws.send(Message::Binary(
+        sink.send(Message::Binary(
             p::json(
                 p::CHALLENGE,
                 &json!({"challenge": URL_SAFE_NO_PAD.encode(challenge)}),
@@ -639,15 +600,18 @@ async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
             .into(),
         ))
         .await?;
-        let signed: Signed = read(ws, p::AUTHENTICATE).await?;
+        let signed: Signed = read(sink, reader, p::AUTHENTICATE).await?;
         let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(signed.signature)?)?;
-        let preimage = secure::auth_preimage(&public, &challenge, &ws.binding);
+        let preimage = secure::auth_preimage(&public, &challenge, binding);
         VerifyingKey::from_bytes(&public)?.verify_strict(&preimage, &signature)?;
-        Ok((auth::derive(&public), hex::encode(Sha256::digest(public))))
+        Ok((
+            p::derive_route(&public),
+            hex::encode(Sha256::digest(public)),
+        ))
     }
     .await;
     if result.is_err() {
-        let _ = ws
+        let _ = sink
             .send(Message::Binary(
                 p::json(p::FAILURE, &json!({"code": failure_code}))?.into(),
             ))
@@ -661,6 +625,7 @@ async fn authenticate(ws: &mut Session) -> Result<(Route, String)> {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+    use tokio::sync::mpsc;
 
     struct Client {
         send: mpsc::Sender<Message>,
@@ -727,7 +692,7 @@ mod tests {
         let (outgoing, mut receive) = mpsc::channel(1);
         let connection = broker
             .clone()
-            .serve_connection(Connection::Sse { incoming, outgoing }, closed);
+            .serve_connection(Connection::Channel { incoming, outgoing }, closed);
         eprintln!(
             "encrypted broker connection future bytes={}",
             std::mem::size_of_val(&connection)
@@ -776,7 +741,7 @@ mod tests {
 
             assert_eq!(
                 broker
-                    .lookup(&auth::derive(&key.verifying_key().to_bytes()))
+                    .lookup(&p::derive_route(&key.verifying_key().to_bytes()))
                     .is_some(),
                 valid
             );
@@ -797,7 +762,7 @@ mod tests {
             let key = SigningKey::from_bytes(&[8; 32]);
             client.login(&key, client.binding, p::READY).await;
             let peer = broker
-                .lookup(&auth::derive(&key.verifying_key().to_bytes()))
+                .lookup(&p::derive_route(&key.verifying_key().to_bytes()))
                 .unwrap();
             let id = "synthetic-transfer";
             let reply = p::json(p::ACK, &json!({"transfer_id": id})).unwrap();
@@ -872,7 +837,7 @@ mod tests {
         let (send, incoming) = mpsc::channel(1);
         let (outgoing, mut receive) = mpsc::channel(1);
         let task = tokio::spawn(broker.clone().serve_connection(
-            Connection::Sse { incoming, outgoing },
+            Connection::Channel { incoming, outgoing },
             CancellationToken::new(),
         ));
         send.send(Message::Binary(
@@ -936,7 +901,7 @@ mod tests {
             let (send, mut receive) = mpsc::channel(1);
             let (sender, mut receiver) = secure_pair();
             *peer.sink.lock().await = Some(Sink {
-                wire: WireSink::Sse(send),
+                wire: WireSink::Channel(send),
                 secure: sender,
             });
             if blocked_write {
@@ -999,7 +964,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sse_authentication_requires_signed_challenge_and_removes_disconnected_identity() {
+    async fn authentication_requires_signed_challenge_and_removes_disconnected_identity() {
         for (valid_signature, abort) in [(true, false), (false, false), (true, true)] {
             let closed = CancellationToken::new();
             let (broker, mut client, task) = encrypted_client(closed.clone()).await;
@@ -1024,7 +989,7 @@ mod tests {
                 .await;
 
             assert_eq!(
-                broker.lookup(&auth::derive(&public)).is_some(),
+                broker.lookup(&p::derive_route(&public)).is_some(),
                 valid_signature
             );
             if abort {
@@ -1040,7 +1005,7 @@ mod tests {
                 result.unwrap();
             }
 
-            assert!(broker.lookup(&auth::derive(&public)).is_none());
+            assert!(broker.lookup(&p::derive_route(&public)).is_none());
         }
     }
 }

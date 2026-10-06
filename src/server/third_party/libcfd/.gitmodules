@@ -1,3 +1,0 @@
-[submodule "cloudflared"]
-	path = research/cloudflared
-	url = https://github.com/cloudflare/cloudflared

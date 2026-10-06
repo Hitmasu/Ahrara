@@ -127,7 +127,10 @@ Both containers share `.dev/run` and run as `AHRARA_UID`/`AHRARA_GID` (default
 
 ## Experimental integrated Tunnel
 
-The optional `tunnel` Cargo feature embeds the community `libcfd` connector:
+The optional `tunnel` Cargo feature runs the named Tunnel inside the relay
+process, without a `cloudflared` sidecar. Its edge
+client is derived from [libcfd](https://github.com/apersomany/libcfd) by
+apersomany, whom we thank for the original connector; see [NOTICE](NOTICE).
 
 ```sh
 make cargo ARGS='build --locked --release --features tunnel --target x86_64-unknown-linux-musl --manifest-path /work/src/server/Cargo.toml'
@@ -146,16 +149,9 @@ start the separate `cloudflared` service for this deployment.
 The dashboard's origin service URL is ignored in this mode; clients still use
 `wss://ahrara.dev`.
 
-It is experimental; local tests do not establish public Tunnel capacity or
-failover behavior. See
-[vendored sources](third_party/README.md) for its patches and checks.
-
-## Optional SSE
-
-Set `AHRARA_ENABLE_SSE=1` and configure clients with `https://<relay-host>/sse`.
-SSE uses the same encrypted protocol and Identity authentication as WSS.
-`AHRARA_HTTP2_MAX_STREAMS` defaults to 1024 and accepts 1–16384.
-SSE is disabled by default.
+The connector speaks HTTP/2 to the edge and serves WebSocket upgrades on `/`
+and `GET /healthz`; other requests receive an error status. It is experimental;
+local tests do not establish public Tunnel capacity or failover behavior.
 
 ## Validation
 

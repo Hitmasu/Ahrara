@@ -1,11 +1,11 @@
 use crate::{
-    auth::{self, Route},
     broker::{Broker, Peer},
     data::Decoder,
-    protocol as p, routing,
+    protocol::{self as p, Route},
+    routing,
 };
 use anyhow::{Result, bail};
-use bytes::Bytes;
+use axum::body::Bytes;
 use futures_util::future::join_all;
 use rand::{RngCore, rngs::OsRng};
 use serde_json::json;
@@ -112,7 +112,7 @@ impl Transfer {
         address: &str,
     ) -> std::result::Result<(), &'static str> {
         let (route, alias, recipient) =
-            auth::address(address).map_err(|_| "550 5.1.1 Mailbox unavailable")?;
+            p::decode_address(address).map_err(|_| "550 5.1.1 Mailbox unavailable")?;
         if self.recipients.contains(&recipient) {
             return Ok(());
         }

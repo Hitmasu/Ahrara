@@ -1,4 +1,4 @@
-//! Edge discovery for tunnel connections.
+//! Edge discovery, derived from libcfd 0.2.0 (Apache-2.0, see `LICENSE`).
 //!
 //! Mirrors cloudflared: look up the `_v2-origintunneld._tcp.argotunnel.com`
 //! SRV record (region-prefixed when a region is set), resolve each target to
@@ -8,64 +8,41 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use crate::error::{Error, Result};
-
 const SRV_SERVICE: &str = "v2-origintunneld";
 const SRV_PROTO: &str = "tcp";
 const SRV_NAME: &str = "argotunnel.com";
 const FALLBACK_EDGE_PORT: u16 = 7844;
 const FALLBACK_EDGES: &[&str] = &["region1.v2.argotunnel.com", "region2.v2.argotunnel.com"];
 
-/// One resolved edge address.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EdgeAddress {
-    pub address: SocketAddr,
-}
-
 /// Resolves the edge addresses for a connection, preferring the regional SRV
 /// records used by cloudflared and falling back to well-known hostnames.
-pub(crate) async fn discover_edges(
-    region: Option<&str>,
-    connection_index: u8,
-) -> Result<Vec<EdgeAddress>> {
+/// An empty result is retried by the connector like any failed attempt.
+pub(super) async fn edges(region: Option<&str>, connection_index: u8) -> Vec<SocketAddr> {
     let service = match region {
         Some(r) if !r.is_empty() => format!("{r}-{SRV_SERVICE}"),
         _ => SRV_SERVICE.to_string(),
     };
+    let records = match srv_lookup(&service, SRV_PROTO, SRV_NAME).await {
+        Ok(records) if !records.is_empty() => records,
+        _ => FALLBACK_EDGES
+            .iter()
+            .map(|host| (host.to_string(), FALLBACK_EDGE_PORT))
+            .collect(),
+    };
     let mut groups = Vec::new();
-    match srv_lookup(&service, SRV_PROTO, SRV_NAME).await {
-        Ok(records) if !records.is_empty() => {
-            for (host, port) in records {
-                let mut group = Vec::new();
-                for ip in resolve_host(&host).await {
-                    group.push(EdgeAddress {
-                        address: SocketAddr::new(ip, port),
-                    });
-                }
-                groups.push(group);
-            }
-        }
-        _ => {
-            tracing::debug!("SRV lookup unavailable, using fallback edge hostnames");
-            for host in FALLBACK_EDGES {
-                let mut group = Vec::new();
-                for ip in resolve_host(host).await {
-                    group.push(EdgeAddress {
-                        address: SocketAddr::new(ip, FALLBACK_EDGE_PORT),
-                    });
-                }
-                groups.push(group);
-            }
-        }
+    for (host, port) in records {
+        let group = resolve_host(&host).await;
+        groups.push(
+            group
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect(),
+        );
     }
-    let edges = order_edges(&groups, connection_index);
-    if edges.is_empty() {
-        return Err(Error::edge_discovery("no edge addresses could be resolved"));
-    }
-    Ok(edges)
+    order_edges(&groups, connection_index)
 }
 
-fn order_edges(groups: &[Vec<EdgeAddress>], connection_index: u8) -> Vec<EdgeAddress> {
+fn order_edges(groups: &[Vec<SocketAddr>], connection_index: u8) -> Vec<SocketAddr> {
     let mut edges = Vec::new();
     // Alternate DNS targets so failure in one group does not delay trying another.
     for offset in 0..groups.iter().map(Vec::len).max().unwrap_or(0) {
@@ -73,7 +50,7 @@ fn order_edges(groups: &[Vec<EdgeAddress>], connection_index: u8) -> Vec<EdgeAdd
             if let Some(edge) = group.get(offset)
                 && !edges.contains(edge)
             {
-                edges.push(edge.clone());
+                edges.push(*edge);
             }
         }
     }
@@ -102,10 +79,10 @@ async fn resolve_host(host: &str) -> Vec<IpAddr> {
 async fn srv_lookup(service: &str, proto: &str, name: &str) -> io::Result<Vec<(String, u16)>> {
     let resolver = resolver_address().await;
     for address in resolver {
-        match query_srv(address, service, proto, name).await {
-            Ok(records) if !records.is_empty() => return Ok(records),
-            Ok(_) => continue,
-            Err(e) => tracing::debug!(%address, "srv query failed: {e}"),
+        if let Ok(records) = query_srv(address, service, proto, name).await
+            && !records.is_empty()
+        {
+            return Ok(records);
         }
     }
     Ok(Vec::new())
@@ -140,7 +117,7 @@ async fn query_srv(
     encode_name(&mut qname, name)?;
     qname.push(0);
 
-    let identifier: u16 = random16();
+    let identifier: u16 = rand::random();
     let mut query = Vec::with_capacity(12 + qname.len() + 4);
     query.extend_from_slice(&identifier.to_be_bytes());
     query.extend_from_slice(&[0x01, 0x00]); // RD
@@ -310,20 +287,12 @@ fn encode_name(out: &mut Vec<u8>, name: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn random16() -> u16 {
-    let mut buffer = [0u8; 2];
-    let _ = getrandom::fill(&mut buffer);
-    u16::from_be_bytes(buffer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn address(last_octet: u8) -> EdgeAddress {
-        EdgeAddress {
-            address: SocketAddr::from(([192, 0, 2, last_octet], FALLBACK_EDGE_PORT)),
-        }
+    fn address(last_octet: u8) -> SocketAddr {
+        SocketAddr::from(([192, 0, 2, last_octet], FALLBACK_EDGE_PORT))
     }
 
     #[test]

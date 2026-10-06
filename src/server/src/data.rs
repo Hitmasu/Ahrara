@@ -33,7 +33,7 @@ impl Decoder {
         if self.line_limit == 0 {
             return Ok(());
         }
-        while let Some(end) = memchr::memchr(b'\n', bytes) {
+        while let Some(end) = bytes.iter().position(|&byte| byte == b'\n') {
             if self.line_length + end > self.line_limit {
                 bail!("SMTP DATA line too long");
             }
@@ -65,7 +65,10 @@ impl Decoder {
             }
             if self.state == State::Data {
                 let available = input.len().min(out.len() - written);
-                let count = memchr::memchr(b'\r', &input[..available]).unwrap_or(available);
+                let count = input[..available]
+                    .iter()
+                    .position(|&byte| byte == b'\r')
+                    .unwrap_or(available);
                 if count > 0 {
                     self.check_lines(&input[..count])?;
                     out[written..written + count].copy_from_slice(&input[..count]);

@@ -1,3 +1,20 @@
+The Cloudflare Tunnel edge client in src/tunnel/ is derived from libcfd 0.2.0
+by apersomany (https://github.com/apersomany/libcfd), packaged revision
+427093dbf2ee719313286c13ad5347d46e300c93, licensed under the Apache License,
+Version 2.0. The license text is in src/tunnel/LICENSE. Ahrara changed it:
+
+- Reduced it to the named-Tunnel HTTP/2 transport, with WebSocket streams handed
+  directly to the relay; quick tunnels, QUIC, HTTP/TCP proxying and the public
+  library API were removed, and the code moved into this crate.
+- Smaller stream buffers, prompt cancellation and task reaping, bidirectional
+  cleanup, END_STREAM on stream drop so queued frames reach the edge.
+- Multiple registration indices, edge rotation across DNS groups, bounded retry
+  backoff and concurrent registration handling.
+- Correct HTTP/2 response headers, low-latency TCP connections, correct DNS SRV
+  labels and bounded DNS name parsing.
+- Connection diagnostics limited to numeric phases, without addresses, error
+  text or credentials.
+
 The SMTP DATA decoder in src/data.rs is adapted from emersion/go-smtp v0.25.0,
 commit 642c374442498d8e36bc67c27391b5700ac66b89. Its license follows.
 
