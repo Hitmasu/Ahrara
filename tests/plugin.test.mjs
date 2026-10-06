@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import { checkBinary, install, platform, release } from '../src/plugin/ahrara.mjs';
+import { checkBinary, command, install, platform, release } from '../src/plugin/ahrara.mjs';
 import opencode from '../.opencode/plugins/ahrara.mjs';
 
 function fixture(version = '0.1.0', expires = Math.floor(Date.now() / 1000) + 3600) {
@@ -66,6 +66,18 @@ test('concurrent installs publish complete binaries, reuse offline and reject co
     await assert.rejects(install(options), /checksum/);
     assert.equal(downloads, before);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+test('the installed CLI is found only through absolute PATH entries', async () => {
+  const directory = await fs.mkdtemp(path.join(tmpdir(), 'ahrara-path-'));
+  const file = path.join(directory, process.platform === 'win32' ? 'ahrara.exe' : 'ahrara');
+  await fs.writeFile(file, '', { mode: 0o700 });
+  // Like the current directory, relative entries depend on where the agent started.
+  const relative = ['', '.', path.relative(process.cwd(), directory)].join(path.delimiter);
+
+  assert.equal(await command('ahrara', relative), undefined);
+  assert.equal(await command('ahrara', [relative, directory].join(path.delimiter)), file);
+  await fs.rm(directory, { recursive: true });
 });
 
 test('failed verification never publishes an executable or installation index', async () => {

@@ -2,7 +2,7 @@
 // Shared installer and launcher. Node built-ins only; no package installation hooks.
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import { get } from 'node:https';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -109,6 +109,19 @@ export function download(value, limit, redirects = 0) {
   });
 }
 
+// Spawning a bare name on Windows runs a planted ahrara.exe from the current
+// directory before PATH, and agents often start in an untrusted repository.
+// Resolve absolute PATH entries only.
+export async function command(name, search = process.env.PATH ?? '') {
+  const file = process.platform === 'win32' ? `${name}.exe` : name;
+  for (const directory of search.split(path.delimiter).filter((entry) => path.isAbsolute(entry))) {
+    try {
+      await fs.access(path.join(directory, file), constants.X_OK);
+      return path.join(directory, file);
+    } catch {}
+  }
+}
+
 async function compatible(binary) {
   try {
     const { stdout } = await execute(binary, ['mcp', '--help'], { timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true });
@@ -184,10 +197,9 @@ async function main(args) {
   let binary = process.env.AHRARA_BINARY;
   if (binary) {
     if (!path.isAbsolute(binary) || !await compatible(binary)) throw new Error('AHRARA_BINARY must name an absolute path to an Ahrara binary with stdio support.');
-  } else if (args[0] !== '--update' && await compatible('ahrara')) {
-    binary = 'ahrara';
   } else {
-    binary = await install({ update: args[0] === '--update' });
+    const local = args[0] === '--update' ? undefined : await command('ahrara');
+    binary = local && await compatible(local) ? local : await install({ update: args[0] === '--update' });
   }
   if (['--install', '--update'].includes(args[0])) {
     console.log(binary);
