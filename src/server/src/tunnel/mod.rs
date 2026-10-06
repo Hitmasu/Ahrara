@@ -8,11 +8,13 @@ mod io;
 
 use crate::{
     broker::{Broker, Connection},
+    limits::ClientPermit,
     protocol as p,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use axum::http::{Method, StatusCode, request::Parts};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::FutureExt;
 use std::{env, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_tungstenite::{
@@ -135,21 +137,27 @@ fn handshake(request: &Parts) -> Result<String, StatusCode> {
 }
 
 /// Hands the edge stream to the broker without proxy buffers.
-async fn serve_stream(broker: Arc<Broker>, stream: io::H2Stream) {
+fn serve_stream(
+    broker: Arc<Broker>,
+    stream: io::H2Stream,
+    client: ClientPermit,
+) -> impl Future<Output = ()> {
     let config = WebSocketConfig::default()
-        .read_buffer_size(512)
+        .read_buffer_size(crate::WEBSOCKET_READ_BUFFER)
         .write_buffer_size(0)
         .max_write_buffer_size(p::MAX_FRAME * 2)
         .max_message_size(Some(p::MAX_CONTROL + 6 + crate::secure::TAG_LEN))
         .max_frame_size(Some(p::MAX_CONTROL + 6 + crate::secure::TAG_LEN));
-    let socket =
-        WebSocketStream::from_raw_socket(stream.compat(), Role::Server, Some(config)).await;
-    broker
-        .serve_connection(
-            Connection::Tunnel(Box::new(socket)),
-            CancellationToken::new(),
-        )
-        .await;
+    // Wrapping a raw stream completes on its first poll; building it here keeps
+    // that future out of the long-lived session task.
+    let socket = WebSocketStream::from_raw_socket(stream.compat(), Role::Server, Some(config))
+        .now_or_never()
+        .expect("a raw WebSocket needs no handshake");
+    broker.serve_connection(
+        Connection::Tunnel(Box::new(socket)),
+        CancellationToken::new(),
+        client,
+    )
 }
 
 pub async fn serve(config: Configuration, broker: Arc<Broker>) -> Result<()> {

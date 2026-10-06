@@ -16,8 +16,8 @@ mod protocol;
 
 use anyhow::{Context, Result, ensure};
 use axum::{
-    Json, Router,
-    extract::{State, WebSocketUpgrade},
+    Extension, Json, Router,
+    extract::{ConnectInfo, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -27,7 +27,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObjec
 use serde_json::{Value, json};
 use std::{
     env,
-    net::SocketAddr,
+    io::Write,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -38,6 +39,10 @@ use tokio::{
     time::timeout,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+/// Per-connection WebSocket read buffer. It fits every client frame, the largest
+/// being an authentication or delivery reply of under 200 bytes, so it never grows.
+pub const WEBSOCKET_READ_BUFFER: usize = 256;
 
 pub fn event(name: &str, fields: Value) {
     let mut fields = fields.as_object().cloned().unwrap_or_default();
@@ -53,7 +58,8 @@ pub fn event(name: &str, fields: Value) {
         ),
     );
 
-    eprintln!("{}", Value::Object(fields));
+    // A closed or failing log pipe must not panic a connection task.
+    let _ = writeln!(std::io::stderr(), "{}", Value::Object(fields));
 }
 
 fn setting(key: &str, default: &str) -> String {
@@ -73,21 +79,36 @@ fn address(value: &str) -> Result<SocketAddr> {
     value.parse().context("invalid listener address")
 }
 
+/// The client address Cloudflare forwards. Trust it only where only Cloudflare
+/// connects: the integrated Tunnel and cloudflared's private Unix socket.
+pub fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers.get("cf-connecting-ip")?.to_str().ok()?.parse().ok()
+}
+
 async fn upgrade(
     State(broker): State<Arc<Broker>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
     if headers.get("origin").is_some_and(|value| !value.is_empty()) {
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
+    // Only the TLS listener has a TCP peer; the Unix socket is cloudflared's.
+    let source = match peer {
+        Some(Extension(ConnectInfo(peer))) => Some(peer.ip()),
+        None => client_ip(&headers),
+    };
+    let Some(client) = broker.admission.try_client(source) else {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
+    };
 
-    ws.read_buffer_size(512)
+    ws.read_buffer_size(WEBSOCKET_READ_BUFFER)
         .write_buffer_size(0)
         .max_write_buffer_size(protocol::MAX_FRAME * 2)
         .max_message_size(protocol::MAX_CONTROL + 6 + secure::TAG_LEN)
         .max_frame_size(protocol::MAX_CONTROL + 6 + secure::TAG_LEN)
-        .on_upgrade(move |socket| broker.serve(socket))
+        .on_upgrade(move |socket| broker.serve(socket, client))
 }
 
 fn tls_config() -> Result<Arc<rustls::ServerConfig>> {
@@ -137,6 +158,15 @@ async fn healthcheck() -> Result<()> {
     Ok(())
 }
 
+/// Replies and closes without creating a TLS task or waiting for a slot. Tokio's
+/// `try_write` skips a socket the reactor has not yet seen writable, so write the
+/// fresh socket's empty send buffer directly.
+fn refuse(tcp: TcpStream, reply: &[u8]) {
+    if let Ok(mut tcp) = tcp.into_std() {
+        let _ = tcp.write_all(reply);
+    }
+}
+
 async fn smtp_listener(
     listener: TcpListener,
     broker: Arc<Broker>,
@@ -158,10 +188,13 @@ async fn smtp_listener(
                         continue;
                     }
                 };
+                if forwarding.refuses(address.ip()) {
+                    refuse(tcp, b"554 5.7.1 Delivery only through Email Routing\r\n");
+                    continue;
+                }
                 let trusted = forwarding.trusted(address.ip());
                 let Some(permit) = broker.admission.try_source(address.ip(), trusted) else {
-                    // A rejected connection never creates a TLS task or waits for a slot.
-                    let _ = tcp.try_write(b"421 4.3.2 Server busy, retry later\r\n");
+                    refuse(tcp, b"421 4.3.2 Server busy, retry later\r\n");
                     continue;
                 };
                 let broker = broker.clone();
@@ -330,7 +363,7 @@ async fn run() -> Result<()> {
     let https_router = router.clone();
     web.spawn(async move {
         https
-            .serve(https_router.into_make_service())
+            .serve(https_router.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .map_err(anyhow::Error::from)
     });
@@ -391,27 +424,64 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    #[tokio::test]
-    async fn smtp_admission_rejects_excess_sessions_and_idle_timeout_releases_slots() {
-        async fn connect(address: SocketAddr, source: &str) -> TcpStream {
-            let socket = tokio::net::TcpSocket::new_v4().unwrap();
-            socket.bind(format!("{source}:0").parse().unwrap()).unwrap();
-            socket.connect(address).await.unwrap()
-        }
+    async fn connect(address: SocketAddr, source: &str) -> TcpStream {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(format!("{source}:0").parse().unwrap()).unwrap();
+        socket.connect(address).await.unwrap()
+    }
 
-        async fn greeting(stream: &mut TcpStream) -> String {
-            let mut line = String::new();
-            timeout(
-                Duration::from_secs(2),
-                tokio::io::BufReader::new(stream).read_line(&mut line),
-            )
+    async fn greeting(stream: &mut TcpStream) -> String {
+        let mut line = String::new();
+        timeout(
+            Duration::from_secs(2),
+            tokio::io::BufReader::new(stream).read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        line
+    }
+
+    fn tls() -> TlsAcceptor {
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
+        TlsAcceptor::from(Arc::new(tls))
+    }
+
+    #[tokio::test]
+    async fn email_routing_sink_refuses_direct_smtp_from_untrusted_sources() {
+        let broker = Broker::encrypted([1; 32]);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let forwarding = routing::Config::new("127.0.0.2/32", "relay@ingest.example.test", "");
+        let task = tokio::spawn(smtp_listener(
+            listener,
+            broker.clone(),
+            tls(),
+            Arc::new(forwarding.unwrap()),
+        ));
+        let mut provider = connect(address, "127.0.0.2").await;
+
+        assert!(greeting(&mut provider).await.starts_with("220 "));
+        let mut direct = connect(address, "127.0.0.3").await;
+
+        assert!(greeting(&mut direct).await.starts_with("554 "));
+        broker.stopped.cancel();
+        timeout(Duration::from_secs(2), task)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
+    }
 
-            line
-        }
-
+    #[tokio::test]
+    async fn smtp_admission_rejects_excess_sessions_and_idle_timeout_releases_slots() {
         let broker = Broker::encrypted_with_limits(
             [1; 32],
             limits::RuntimeLimits {
@@ -423,17 +493,10 @@ mod tests {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_no_client_auth()
-        .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
         let task = tokio::spawn(smtp_listener(
             listener,
             broker.clone(),
-            TlsAcceptor::from(Arc::new(tls)),
+            tls(),
             Arc::new(routing::Config::new("", "", "").unwrap()),
         ));
         let mut first = connect(address, "127.0.0.2").await;
@@ -441,13 +504,13 @@ mod tests {
         assert!(greeting(&mut first).await.starts_with("220 "));
         let mut same_source = connect(address, "127.0.0.2").await;
 
-        assert!(!greeting(&mut same_source).await.starts_with("220 "));
+        assert!(greeting(&mut same_source).await.starts_with("421 "));
         let mut other = connect(address, "127.0.0.3").await;
 
         assert!(greeting(&mut other).await.starts_with("220 "));
         let mut full = connect(address, "127.0.0.4").await;
 
-        assert!(!greeting(&mut full).await.starts_with("220 "));
+        assert!(greeting(&mut full).await.starts_with("421 "));
         assert!(
             greeting(&mut first).await.is_empty(),
             "idle session did not expire"

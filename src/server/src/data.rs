@@ -79,6 +79,14 @@ impl Decoder {
             }
 
             let ch = input[0];
+            if self.state == State::DotCr && ch != b'\n' {
+                // The CR held back after a leading dot was data; `ch` now follows a CR.
+                self.state = State::Cr;
+                out[written] = b'\r';
+                written += 1;
+                continue;
+            }
+
             self.check_lines(&[ch])?;
             reader.consume(1);
             match self.state {
@@ -93,12 +101,13 @@ impl Decoder {
                     continue;
                 }
                 State::Dot => self.state = State::Data,
-                State::DotCr if ch == b'\n' => {
+                State::DotCr => {
                     self.state = State::End;
                     continue;
                 }
-                State::DotCr => self.state = State::Data,
                 State::Cr if ch == b'\n' => self.state = State::Begin,
+                // A repeated CR may still start the line ending.
+                State::Cr if ch == b'\r' => {}
                 State::Cr => self.state = State::Data,
                 State::Data if ch == b'\r' => self.state = State::Cr,
                 _ => {}
@@ -138,6 +147,8 @@ mod tests {
             ".\r\n".into(),
             "a\r\n.\r\n..x\r\n".into(),
             "bare\n.dot\r\n".into(),
+            "carriage\r\r\n".into(),
+            "a\r\r\n.b\r\n".into(),
             format!("{}\r\n.end\r\n", "x".repeat(65535)),
         ] {
             let mut wire = raw.replace("\r\n.", "\r\n..");
@@ -180,5 +191,34 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn carriage_return_after_a_leading_dot_is_message_data() {
+        // RFC 5321 removes the first dot of any longer line, even when unstuffed.
+        for (wire, raw) in [(".\rX\r\n", "\rX\r\n"), (".\r\r\n", "\r\r\n")] {
+            for size in [1, 2, 64] {
+                let wire = format!("{wire}.\r\nNOOP\r\n");
+                let mut input = BufReader::new(wire.as_bytes());
+                let mut decoder = Decoder::default();
+                let mut got = Vec::new();
+                let mut out = vec![0; size];
+
+                loop {
+                    let count = decoder.read(&mut input, &mut out).await.unwrap();
+                    if count == 0 {
+                        break;
+                    }
+
+                    got.extend_from_slice(&out[..count]);
+                }
+
+                assert_eq!(got, raw.as_bytes());
+                let mut tail = String::new();
+                input.read_to_string(&mut tail).await.unwrap();
+
+                assert_eq!(tail, "NOOP\r\n");
+            }
+        }
     }
 }

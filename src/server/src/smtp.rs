@@ -30,8 +30,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 type Socket = BufReader<Box<dyn Stream>>;
 
-// The envelope and transfer metadata also occupy the authenticated Noise record.
-const SEND_CHUNK_SIZE: usize = crate::secure::MAX_PLAINTEXT - 26;
+/// Email bytes per CHUNK frame; the protocol allows up to `MAX_PLAINTEXT - 26`.
+/// tungstenite keeps a connection's write buffer at its largest frame until the
+/// connection closes, so every client that received mail retains about this much.
+const SEND_CHUNK_SIZE: usize = 4 * 1024;
 
 #[derive(Clone, Default)]
 struct ChunkBuffer(Arc<Zeroizing<Vec<u8>>>);
@@ -50,7 +52,7 @@ impl ChunkBuffer {
         }
 
         let bytes = Arc::get_mut(&mut self.0).unwrap();
-        bytes.resize(p::MAX_FRAME, 0);
+        bytes.resize(26 + SEND_CHUNK_SIZE, 0);
         bytes.as_mut_slice()
     }
 

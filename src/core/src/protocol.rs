@@ -63,6 +63,27 @@ pub fn decode(frame: &[u8]) -> Result<(u8, &[u8])> {
     Ok((frame[1], &frame[6..]))
 }
 
+/// Clients refuse a harder proof of work: it could not finish within the
+/// authentication timeout on slow machines.
+pub const MAX_WORK: u8 = 24;
+
+/// Leading zero bits of the proof of work over one authentication challenge.
+pub fn work(challenge: &[u8; 32], nonce: u64) -> u32 {
+    let digest = Sha256::new()
+        .chain_update(b"ahrara-work-v1\0")
+        .chain_update(challenge)
+        .chain_update(nonce.to_be_bytes())
+        .finalize();
+    u128::from_be_bytes(digest[..16].try_into().expect("16 bytes")).leading_zeros()
+}
+
+/// Finds a nonce with `bits` leading zero bits: about 2^bits SHA-256 hashes.
+pub fn solve_work(challenge: &[u8; 32], bits: u8) -> u64 {
+    (0..)
+        .find(|&nonce| work(challenge, nonce) >= u32::from(bits))
+        .expect("a nonce exists")
+}
+
 pub type Route = [u8; 16];
 
 pub fn derive_route(public: &[u8; 32]) -> Route {
@@ -95,6 +116,20 @@ pub fn decode_address(value: &str) -> Result<(Route, [u8; 8], String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_of_work_is_bound_to_its_challenge() {
+        let challenge = [7; 32];
+        let nonce = solve_work(&challenge, 12);
+
+        assert!(work(&challenge, nonce) >= 12);
+        assert!((0..nonce).all(|earlier| work(&challenge, earlier) < 12));
+        assert_eq!(solve_work(&challenge, 0), 0);
+        assert!(
+            work(&[8; 32], nonce) < 12,
+            "work proven for another challenge"
+        );
+    }
 
     #[test]
     fn address_roundtrip_and_canonical_domain() {

@@ -363,19 +363,24 @@ async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
             bail!("authentication_failed")
         }
 
-        let challenge: Value = serde_json::from_slice(payload)?;
-        let challenge = URL_SAFE_NO_PAD.decode(
-            challenge["challenge"]
-                .as_str()
-                .context("missing challenge")?,
-        )?;
+        let request: Value = serde_json::from_slice(payload)?;
+        let challenge =
+            URL_SAFE_NO_PAD.decode(request["challenge"].as_str().context("missing challenge")?)?;
         let signature = core.identity.sign_bound(&challenge, &binding)?;
-        send(
-            socket,
-            AUTHENTICATE,
-            &value!({"signature":URL_SAFE_NO_PAD.encode(signature)}),
-        )
-        .await?;
+        let mut reply = value!({"signature":URL_SAFE_NO_PAD.encode(signature)});
+        // A source holding many connections must prove work for each new one.
+        if let Some(work) = request["work"].as_u64() {
+            let work = u8::try_from(work)
+                .ok()
+                .filter(|work| *work <= MAX_WORK)
+                .context("unreasonable proof of work")?;
+            let challenge: [u8; 32] = challenge.as_slice().try_into()?;
+            reply["work"] = tokio::task::spawn_blocking(move || solve_work(&challenge, work))
+                .await?
+                .into();
+        }
+
+        send(socket, AUTHENTICATE, &reply).await?;
         let frame = receive(socket, &mut heartbeat).await?;
         let (kind, payload) = decode(&frame)?;
         let response: Value = serde_json::from_slice(payload)?;

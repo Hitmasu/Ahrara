@@ -55,8 +55,10 @@ requires updating client pins.
 
 Direct SMTP is routed by `RCPT TO`. Mail from trusted forwarding sources is
 routed by its forwarding headers; with `AHRARA_EMAIL_ROUTING_ADDRESS`, only mail
-forwarded to that sink is accepted. Bcc recipients are supported. Restrict SMTP
-ingress to the provider before enabling its CIDR allowlist.
+forwarded to that sink is accepted and other sources are refused before TLS.
+Bcc recipients are supported. Restrict SMTP ingress to the provider before
+enabling its CIDR allowlist; Docker-published ports bypass host firewalls such
+as UFW, so filter in the `DOCKER-USER` chain or the provider's firewall.
 
 ### Cloudflare Email Routing to a VPS
 
@@ -75,7 +77,7 @@ The forwarding destination uses a separate subdomain, for example:
    renewal, and set `AHRARA_HEALTHCHECK_SERVER_NAME=smtp.ahrara.dev`. Reload the
    container after renewal; certificates are loaded at startup.
 3. Set `AHRARA_EMAIL_ROUTING_ADDRESS=relay@ingest.ahrara.dev`. Trusted SMTP
-   peers may deliver only to this exact sink.
+   peers may deliver only to this exact sink; the relay refuses other sources.
 4. To verify the destination, create a temporary Ahrara address and keep its
    client connected. Set `AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT` to that
    address and restart the relay. During this temporary setup mode, sink mail
@@ -104,6 +106,23 @@ global session cap, and trusted forwarding sources are exempt from it.
 | `AHRARA_SMTP_ACK_TIMEOUT_SECONDS` | 30 | Wait for the client to confirm it saved a message |
 | `AHRARA_SMTP_TRANSACTION_TIMEOUT_SECONDS` | 300 | Time a session has to deliver each message |
 | `AHRARA_SMTP_COMMAND_TIMEOUT_SECONDS` | 120 | Idle time between SMTP commands |
+
+### Client limits
+
+`AHRARA_MAX_CLIENTS_PER_SOURCE` (default 100, up to 100000) caps the WebSocket
+connections of one source, counting unauthenticated ones; beyond it the relay
+answers HTTP 429. A source is an IPv4 address or an IPv6 /64: the TCP peer on the
+TLS listener, and Cloudflare's `cf-connecting-ip` on the integrated Tunnel and the
+Unix socket, which only cloudflared reaches. Keep that header: if a Cloudflare
+Transform Rule removes it, connections have no source and are not limited, and the
+relay logs `client_source_unknown` once.
+
+The first quarter of a source's connections is free. Each further connection must
+prove work before authenticating: a SHA-256 hash over its login challenge with 12
+to 20 leading zero bits, about 4 thousand to 1 million attempts, rising toward the
+cap. Clients solve it automatically; it costs a legitimate user nothing until one
+address holds many connections. Clients without this support are disconnected
+without an error and reconnect later.
 
 ## Cloudflare Tunnel with WSS and Unix
 

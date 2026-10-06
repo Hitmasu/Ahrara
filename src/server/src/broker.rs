@@ -1,4 +1,5 @@
 use crate::{
+    limits::ClientPermit,
     protocol::{self as p, Route},
     secure,
 };
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
@@ -320,143 +321,161 @@ impl Broker {
         }
     }
 
-    pub fn serve(self: Arc<Self>, ws: WebSocket) -> impl std::future::Future<Output = ()> {
+    pub fn serve(
+        self: Arc<Self>,
+        ws: WebSocket,
+        client: ClientPermit,
+    ) -> impl std::future::Future<Output = ()> {
         self.serve_connection(
             Connection::WebSocket(Box::new(ws)),
             CancellationToken::new(),
+            client,
         )
     }
 
-    pub async fn serve_connection(
+    /// Serves one client connection; `client` holds its source's slot until it ends.
+    #[allow(clippy::manual_async_fn)]
+    pub fn serve_connection(
         self: Arc<Self>,
         connection: Connection,
         closed: CancellationToken,
-    ) {
-        // Keep the Noise handshake and authentication buffers out of the idle future.
-        let authenticated = tokio::select! {
-            _ = closed.cancelled() => return,
-            _ = self.stopped.cancelled() => return,
-            result = timeout(Duration::from_secs(15), Box::pin(async {
-                let (mut sink, mut reader, binding) = handshake(connection, &self.transport_key).await?;
-                let identity = authenticate(&mut sink, &mut reader, &binding).await?;
-                Ok::<_, anyhow::Error>((sink, reader, identity))
-            })) => result,
-        };
-        let Ok(Ok((sink, mut reader, (route, fingerprint)))) = authenticated else {
-            return;
-        };
-        let peer = Arc::new(Peer {
-            sink: AsyncMutex::new(Some(sink)),
-            pending: Mutex::new(Pending::default()),
-            closed,
-            last_ping: AtomicU64::new(self.started.elapsed().as_secs()),
-        });
-        let inserted = {
-            let mut peers = self.peers.write().unwrap();
-            if self.stopped.is_cancelled() || peers.contains_key(&route) {
-                false
-            } else {
-                peers.insert(route, peer.clone());
-                true
-            }
-        };
-        if !inserted {
-            let _ = peer
-                .send(p::FAILURE, &json!({"code": "identity_in_use"}))
-                .await;
-
-            return;
-        }
-
-        // Edge loss aborts stream futures: retain cleanup even when this task is dropped.
-        struct Identity {
-            broker: Arc<Broker>,
-            route: Route,
-            peer: Arc<Peer>,
-        }
-
-        impl Drop for Identity {
-            fn drop(&mut self) {
-                self.peer.closed.cancel();
-                let mut peers = self.broker.peers.write().unwrap();
-                if peers
-                    .get(&self.route)
-                    .is_some_and(|peer| Arc::ptr_eq(peer, &self.peer))
-                {
-                    peers.remove(&self.route);
+        client: ClientPermit,
+    ) -> impl std::future::Future<Output = ()> {
+        // An async fn stores its arguments twice; a block capturing them stores them once.
+        async move {
+            // Every idle connection stores this future, sized by its largest await. Rare
+            // steps are boxed: handshake, authentication, their timers and every send.
+            let Some((sink, mut reader, (route, fingerprint))) = Box::pin(async {
+                tokio::select! {
+                    _ = closed.cancelled() => None,
+                    _ = self.stopped.cancelled() => None,
+                    result = timeout(Duration::from_secs(15), async {
+                        let (mut sink, mut reader, binding) = handshake(connection, &self.transport_key).await?;
+                        let identity = authenticate(&mut sink, &mut reader, &binding, client.work).await?;
+                        Ok::<_, anyhow::Error>((sink, reader, identity))
+                    }) => result.ok().and_then(Result::ok),
                 }
+            })
+            .await
+            else {
+                return;
+            };
+            let peer = Arc::new(Peer {
+                sink: AsyncMutex::new(Some(sink)),
+                pending: Mutex::new(Pending::default()),
+                closed,
+                last_ping: AtomicU64::new(self.started.elapsed().as_secs()),
+            });
+            // `entry` copies the route; a borrow would keep it in every idle future.
+            let inserted = match self.peers.write().unwrap().entry(route) {
+                Entry::Vacant(slot) if !self.stopped.is_cancelled() => {
+                    slot.insert(peer.clone());
+                    true
+                }
+                _ => false,
+            };
+            if !inserted {
+                let _ = Box::pin(peer.send(p::FAILURE, &json!({"code": "identity_in_use"}))).await;
 
-                crate::event("identity_disconnected", json!({}));
+                return;
             }
-        }
 
-        let _identity = Identity {
-            broker: self.clone(),
-            route,
-            peer: peer.clone(),
-        };
-        crate::event("identity_connected", json!({}));
-        if peer
-            .send(
+            // Edge loss aborts stream futures: retain cleanup even when this task is dropped.
+            struct Identity {
+                broker: Arc<Broker>,
+                route: Route,
+                peer: Arc<Peer>,
+            }
+
+            impl Drop for Identity {
+                fn drop(&mut self) {
+                    self.peer.closed.cancel();
+                    let mut peers = self.broker.peers.write().unwrap();
+                    if peers
+                        .get(&self.route)
+                        .is_some_and(|peer| Arc::ptr_eq(peer, &self.peer))
+                    {
+                        peers.remove(&self.route);
+                    }
+
+                    // Never log while holding the lock every login and delivery needs.
+                    drop(peers);
+                    crate::event("identity_disconnected", json!({}));
+                }
+            }
+
+            let _identity = Identity {
+                broker: self.clone(),
+                route,
+                peer: peer.clone(),
+            };
+            crate::event("identity_connected", json!({}));
+            if Box::pin(peer.send(
                 p::READY,
                 &json!({
                     "route_id": hex::encode(route),
-                    "fingerprint": fingerprint
+                    "fingerprint": hex::encode(fingerprint)
                 }),
-            )
+            ))
             .await
             .is_ok()
-        {
-            loop {
-                let frame = tokio::select! {
-                    _ = peer.closed.cancelled() => break,
-                    value = reader.next() => value,
-                };
+            {
+                loop {
+                    let frame = tokio::select! {
+                        _ = peer.closed.cancelled() => break,
+                        value = reader.next() => value,
+                    };
 
-                match frame {
-                    Some(Ok(Message::Binary(raw))) => {
-                        let Ok((kind, payload)) = p::decode(&raw) else {
-                            break;
-                        };
-                        if ![p::ACCEPT, p::REJECT, p::ACK, p::NACK].contains(&kind) {
-                            break;
+                    match frame {
+                        Some(Ok(Message::Binary(raw))) => {
+                            let Ok((kind, payload)) = p::decode(&raw) else {
+                                break;
+                            };
+                            if ![p::ACCEPT, p::REJECT, p::ACK, p::NACK].contains(&kind) {
+                                break;
+                            }
+
+                            let Ok(mut reply) = serde_json::from_slice::<Reply>(payload) else {
+                                break;
+                            };
+                            reply.kind = kind;
+                            let waiter = peer
+                                .pending
+                                .lock()
+                                .unwrap()
+                                .replies
+                                .remove(&format!("{}:{}", reply.transfer_id, reply.recipient));
+
+                            if let Some(waiter) = waiter {
+                                let _ = waiter.send(reply);
+                            }
                         }
-
-                        let Ok(mut reply) = serde_json::from_slice::<Reply>(payload) else {
-                            break;
-                        };
-                        reply.kind = kind;
-                        let waiter = peer
-                            .pending
-                            .lock()
-                            .unwrap()
-                            .replies
-                            .remove(&format!("{}:{}", reply.transfer_id, reply.recipient));
-
-                        if let Some(waiter) = waiter {
-                            let _ = waiter.send(reply);
-                        }
-                    }
-                    Some(Ok(Message::Ping(payload))) => {
-                        peer.last_ping
-                            .store(self.started.elapsed().as_secs(), Ordering::Relaxed);
-                        // Flush the native PONG even if no email is being written.
-                        if !matches!(
-                            timeout(Duration::from_secs(5), peer.message(Message::Pong(payload)))
+                        Some(Ok(Message::Ping(payload))) => {
+                            peer.last_ping
+                                .store(self.started.elapsed().as_secs(), Ordering::Relaxed);
+                            // Flush the native PONG even if no email is being written.
+                            if !matches!(
+                                Box::pin(timeout(
+                                    Duration::from_secs(5),
+                                    peer.message(Message::Pong(payload))
+                                ))
                                 .await,
-                            Ok(Ok(()))
-                        ) {
-                            break;
+                                Ok(Ok(()))
+                            ) {
+                                break;
+                            }
                         }
+                        Some(Ok(Message::Pong(_))) => {}
+                        _ => break,
                     }
-                    Some(Ok(Message::Pong(_))) => {}
-                    _ => break,
                 }
             }
-        }
 
-        peer.closed.cancel();
-        peer.sink.lock().await.take();
+            peer.closed.cancel();
+            Box::pin(peer.sink.lock()).await.take();
+            // Moving the whole permit in, not just its `work`, holds the slot until here.
+            drop(client);
+        }
     }
 }
 
@@ -561,11 +580,14 @@ async fn read<T: DeserializeOwned>(
     }
 }
 
+/// Returns the route and fingerprint of the Identity proven for this secure session.
+/// A `work` above zero also requires that much proof of work over the challenge.
 async fn authenticate(
     sink: &mut Sink,
     reader: &mut Reader,
     binding: &[u8; 32],
-) -> Result<(Route, String)> {
+    work: u8,
+) -> Result<(Route, [u8; 32])> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Hello {
@@ -576,44 +598,49 @@ async fn authenticate(
     #[serde(deny_unknown_fields)]
     struct Signed {
         signature: String,
+        #[serde(default)]
+        work: u64,
     }
 
-    let mut failure_code = "invalid_hello";
+    let mut failure_code = Some("invalid_hello");
     let result = async {
         let hello: Hello = read(sink, reader, p::HELLO)
             .await
             .context("invalid_hello")?;
-        failure_code = "invalid_public_key";
+        failure_code = Some("invalid_public_key");
         let public: [u8; 32] = URL_SAFE_NO_PAD
             .decode(hello.public_key)?
             .as_slice()
             .try_into()
             .context("invalid_public_key")?;
-        failure_code = "authentication_failed";
+        failure_code = Some("authentication_failed");
         let mut challenge = [0; 32];
         OsRng.fill_bytes(&mut challenge);
-        sink.send(Message::Binary(
-            p::json(
-                p::CHALLENGE,
-                &json!({"challenge": URL_SAFE_NO_PAD.encode(challenge)}),
-            )?
-            .into(),
-        ))
-        .await?;
+        let mut request = json!({"challenge": URL_SAFE_NO_PAD.encode(challenge)});
+        if work > 0 {
+            request["work"] = work.into();
+        }
+
+        sink.send(Message::Binary(p::json(p::CHALLENGE, &request)?.into()))
+            .await?;
         let signed: Signed = read(sink, reader, p::AUTHENTICATE).await?;
+        // Clients without proof of work treat any FAILURE as final; closing lets them retry later.
+        failure_code = None;
+        ensure!(
+            p::work(&challenge, signed.work) >= u32::from(work),
+            "proof of work required"
+        );
+        failure_code = Some("authentication_failed");
         let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(signed.signature)?)?;
         let preimage = secure::auth_preimage(&public, &challenge, binding);
         VerifyingKey::from_bytes(&public)?.verify_strict(&preimage, &signature)?;
-        Ok((
-            p::derive_route(&public),
-            hex::encode(Sha256::digest(public)),
-        ))
+        Ok((p::derive_route(&public), Sha256::digest(public).into()))
     }
     .await;
-    if result.is_err() {
+    if let (Err(_), Some(code)) = (&result, failure_code) {
         let _ = sink
             .send(Message::Binary(
-                p::json(p::FAILURE, &json!({"code": failure_code}))?.into(),
+                p::json(p::FAILURE, &json!({"code": code}))?.into(),
             ))
             .await;
     }
@@ -663,36 +690,61 @@ mod tests {
                 &json!({"public_key": URL_SAFE_NO_PAD.encode(public)}),
             )
             .await;
-            let challenge = self.receive(p::CHALLENGE).await;
+            self.authenticate(key, binding, true).await;
+            self.receive(expected).await;
+        }
+
+        /// Answers the challenge, solving any requested proof of work if `prove`.
+        async fn authenticate(&mut self, key: &SigningKey, binding: [u8; 32], prove: bool) {
+            let public = key.verifying_key().to_bytes();
+            let request = self.receive(p::CHALLENGE).await;
             let challenge: [u8; 32] = URL_SAFE_NO_PAD
-                .decode(challenge["challenge"].as_str().unwrap())
+                .decode(request["challenge"].as_str().unwrap())
                 .unwrap()
                 .try_into()
                 .unwrap();
             let signature = key.sign(&secure::auth_preimage(&public, &challenge, &binding));
-            self.send(
-                p::AUTHENTICATE,
-                &json!({"signature": URL_SAFE_NO_PAD.encode(signature.to_bytes())}),
-            )
-            .await;
+            let mut reply = json!({"signature": URL_SAFE_NO_PAD.encode(signature.to_bytes())});
+            if let Some(work) = request["work"].as_u64().filter(|_| prove) {
+                reply["work"] = p::solve_work(&challenge, work as u8).into();
+            }
 
-            self.receive(expected).await;
+            self.send(p::AUTHENTICATE, &reply).await;
         }
     }
 
+    const SOURCE: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 9));
+
     async fn encrypted_client(
         closed: CancellationToken,
+    ) -> (Arc<Broker>, Client, tokio::task::JoinHandle<()>) {
+        encrypted_client_with_work(closed, 0).await
+    }
+
+    async fn encrypted_client_with_work(
+        closed: CancellationToken,
+        work: u8,
     ) -> (Arc<Broker>, Client, tokio::task::JoinHandle<()>) {
         let key = snow::Builder::new(secure::PATTERN.parse().unwrap())
             .generate_keypair()
             .unwrap();
         let private = Zeroizing::new(key.private);
-        let broker = Broker::encrypted(private.as_slice().try_into().unwrap());
+        let broker = Broker::encrypted_with_limits(
+            private.as_slice().try_into().unwrap(),
+            crate::limits::RuntimeLimits {
+                clients_per_source: 1,
+                ..crate::limits::RuntimeLimits::default()
+            },
+        );
         let (send, incoming) = mpsc::channel(1);
         let (outgoing, mut receive) = mpsc::channel(1);
-        let connection = broker
-            .clone()
-            .serve_connection(Connection::Channel { incoming, outgoing }, closed);
+        let mut client = broker.admission.try_client(Some(SOURCE)).unwrap();
+        client.work = work;
+        let connection = broker.clone().serve_connection(
+            Connection::Channel { incoming, outgoing },
+            closed,
+            client,
+        );
         eprintln!(
             "encrypted broker connection future bytes={}",
             std::mem::size_of_val(&connection)
@@ -832,6 +884,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn requested_proof_of_work_gates_login_and_its_absence_closes_without_failure() {
+        for prove in [true, false] {
+            let (broker, mut client, task) =
+                encrypted_client_with_work(CancellationToken::new(), 12).await;
+            let key = SigningKey::from_bytes(&[9; 32]);
+            client
+                .send(
+                    p::HELLO,
+                    &json!({"public_key": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes())}),
+                )
+                .await;
+            client.authenticate(&key, client.binding, prove).await;
+            if prove {
+                client.receive(p::READY).await;
+                drop(client);
+            } else {
+                // Older clients take any FAILURE as final, so the relay only closes.
+                let closed = timeout(Duration::from_secs(1), client.receive.recv()).await;
+
+                assert!(closed.unwrap().is_none());
+            }
+
+            timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap();
+
+            assert!(broker.peers.read().unwrap().is_empty());
+            assert!(
+                broker.admission.try_client(Some(SOURCE)).is_some(),
+                "the source's only slot was not released"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn encrypted_connection_rejects_plaintext_hello_without_exposing_challenge() {
         let broker = Broker::encrypted([7; 32]);
         let (send, incoming) = mpsc::channel(1);
@@ -839,6 +927,7 @@ mod tests {
         let task = tokio::spawn(broker.clone().serve_connection(
             Connection::Channel { incoming, outgoing },
             CancellationToken::new(),
+            broker.admission.try_client(None).unwrap(),
         ));
         send.send(Message::Binary(
             p::json(

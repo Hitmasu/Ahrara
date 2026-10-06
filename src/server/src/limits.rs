@@ -3,18 +3,20 @@ use anyhow::{Result, anyhow};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv6Addr},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Once},
     time::Duration,
 };
 use tokio::time::Instant;
 
 const MAX_SETTING: usize = 1024;
+const MAX_CLIENTS_PER_SOURCE: usize = 100_000;
 const MAX_PENALTIES: usize = 4096;
 const FAILURE_WINDOW: Duration = Duration::from_secs(300);
 const COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeLimits {
+    pub clients_per_source: usize,
     pub smtp_sessions: usize,
     pub smtp_per_source: usize,
     pub offer_timeout: Duration,
@@ -26,6 +28,7 @@ pub struct RuntimeLimits {
 impl Default for RuntimeLimits {
     fn default() -> Self {
         Self {
+            clients_per_source: 100,
             smtp_sessions: 256,
             smtp_per_source: 16,
             offer_timeout: Duration::from_secs(5),
@@ -74,6 +77,11 @@ impl RuntimeLimits {
             defaults.smtp_per_source.min(smtp_sessions),
             smtp_sessions,
         )?;
+        let clients_per_source = number(
+            "AHRARA_MAX_CLIENTS_PER_SOURCE",
+            defaults.clients_per_source,
+            MAX_CLIENTS_PER_SOURCE,
+        )?;
         let mut secs = |key: &str, default: Duration| -> Result<Duration> {
             Ok(Duration::from_secs(
                 number(key, default.as_secs() as usize, MAX_SETTING)? as u64,
@@ -81,6 +89,7 @@ impl RuntimeLimits {
         };
 
         Ok(Self {
+            clients_per_source,
             smtp_sessions,
             smtp_per_source,
             offer_timeout: secs("AHRARA_SMTP_OFFER_TIMEOUT_SECONDS", defaults.offer_timeout)?,
@@ -165,6 +174,7 @@ fn source_key(ip: IpAddr) -> IpAddr {
 pub struct Admission {
     settings: RuntimeLimits,
     sources: Mutex<Sources>,
+    clients: Mutex<HashMap<IpAddr, usize>>,
     penalties: Mutex<HashMap<Route, Penalty>>,
 }
 
@@ -173,7 +183,37 @@ impl Admission {
         Arc::new(Self {
             settings,
             sources: Mutex::new(Sources::default()),
+            clients: Mutex::new(HashMap::new()),
             penalties: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Admits a client connection, refusing its source at the limit.
+    pub fn try_client(self: &Arc<Self>, source: Option<IpAddr>) -> Option<ClientPermit> {
+        let Some(source) = source.map(source_key) else {
+            // Only a Cloudflare rule removing cf-connecting-ip hides the source. One
+            // shared quota would then refuse almost every client, so do not limit.
+            static UNKNOWN: Once = Once::new();
+            UNKNOWN.call_once(|| crate::event("client_source_unknown", serde_json::json!({})));
+            return Some(ClientPermit {
+                admission: self.clone(),
+                source: None,
+                work: 0,
+            });
+        };
+        let limit = self.settings.clients_per_source;
+        let mut clients = self.clients.lock().unwrap();
+        let active = clients.entry(source).or_default();
+        if *active >= limit {
+            return None;
+        }
+
+        let work = work_bits(*active, limit);
+        *active += 1;
+        Some(ClientPermit {
+            admission: self.clone(),
+            source: Some(source),
+            work,
         })
     }
 
@@ -252,6 +292,39 @@ impl Admission {
         let mut penalties = self.penalties.lock().unwrap();
         let now = Instant::now();
         penalties.retain(|_, penalty| penalty.live(now));
+    }
+}
+
+/// Proof of work for a source's next connection: none for the first quarter of
+/// its slots, then 12 to 20 bits (4 thousand to 1 million SHA-256 hashes).
+fn work_bits(active: usize, limit: usize) -> u8 {
+    let free = limit / 4;
+    if active < free {
+        return 0;
+    }
+
+    (12 + 8 * (active - free) / (limit - free - 1).max(1)) as u8
+}
+
+/// One client connection slot of a source, held until the connection ends.
+pub struct ClientPermit {
+    admission: Arc<Admission>,
+    source: Option<IpAddr>,
+    /// Leading zero bits this connection must prove before authenticating.
+    pub work: u8,
+}
+
+impl Drop for ClientPermit {
+    fn drop(&mut self) {
+        let Some(source) = self.source else {
+            return;
+        };
+        let mut clients = self.admission.clients.lock().unwrap();
+        let active = clients.get_mut(&source).unwrap();
+        *active -= 1;
+        if *active == 0 {
+            clients.remove(&source);
+        }
     }
 }
 
@@ -338,6 +411,52 @@ mod tests {
             ])
             .is_err()
         );
+        let clients = configured(&[("AHRARA_MAX_CLIENTS_PER_SOURCE", "100000")]).unwrap();
+
+        assert_eq!(clients.clients_per_source, 100_000);
+        for value in ["0", "100001", "-1", "forever", ""] {
+            assert!(configured(&[("AHRARA_MAX_CLIENTS_PER_SOURCE", value)]).is_err());
+        }
+    }
+
+    #[test]
+    fn client_sources_prove_rising_work_until_their_limit() {
+        let admission = Admission::new(RuntimeLimits {
+            clients_per_source: 8,
+            ..RuntimeLimits::default()
+        });
+        let source = Some(ip("2001:db8::1"));
+        let mut held: Vec<_> = (0..8)
+            .map(|_| admission.try_client(source).unwrap())
+            .collect();
+
+        assert_eq!(
+            held.iter().map(|client| client.work).collect::<Vec<_>>(),
+            [0, 0, 12, 13, 15, 16, 18, 20]
+        );
+        assert!(
+            admission.try_client(Some(ip("2001:db8::ffff"))).is_none(),
+            "one IPv6 /64 is one source"
+        );
+        assert_eq!(admission.try_client(Some(ip("192.0.2.1"))).unwrap().work, 0);
+        held.pop();
+
+        assert_eq!(admission.try_client(source).unwrap().work, 20);
+        drop(held);
+
+        assert!(admission.clients.lock().unwrap().is_empty());
+        let unknown: Vec<_> = (0..9)
+            .map(|_| admission.try_client(None).unwrap())
+            .collect();
+
+        assert!(unknown.iter().all(|client| client.work == 0));
+        drop(unknown);
+        assert!(admission.clients.lock().unwrap().is_empty());
+        let limit = RuntimeLimits::default().clients_per_source;
+
+        assert_eq!(work_bits(limit / 4 - 1, limit), 0);
+        assert_eq!(work_bits(limit - 1, limit), 20);
+        assert!(work_bits(limit - 1, limit) <= crate::protocol::MAX_WORK);
     }
 
     #[test]

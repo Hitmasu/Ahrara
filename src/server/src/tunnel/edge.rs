@@ -181,7 +181,9 @@ async fn serve(
                         None => reply(respond, StatusCode::BAD_REQUEST, None),
                     },
                     Kind::WebSocket => {
-                        streams.spawn(websocket(request, respond, broker.clone()));
+                        if let Some(session) = websocket(request, respond, broker.clone()) {
+                            streams.spawn(session);
+                        }
                     }
                     Kind::Configuration => {
                         streams.spawn(configuration(request, respond));
@@ -376,15 +378,27 @@ fn options(origin_local_ip: Vec<u8>, attempt: u32) -> ConnectionOptions {
     }
 }
 
-async fn websocket(
+/// Answers a WebSocket upgrade and returns its session. The request headers are
+/// dropped here, so the long-lived session task never stores them.
+fn websocket(
     request: Request<RecvStream>,
     mut respond: SendResponse<Bytes>,
     broker: Arc<Broker>,
-) {
+) -> Option<impl Future<Output = ()>> {
     let (parts, body) = request.into_parts();
     let accept = match super::handshake(&parts) {
         Ok(accept) => accept,
-        Err(status) => return reply(respond, status, None),
+        Err(status) => {
+            reply(respond, status, None);
+            return None;
+        }
+    };
+    let Some(client) = broker
+        .admission
+        .try_client(crate::client_ip(&parts.headers))
+    else {
+        reply(respond, StatusCode::TOO_MANY_REQUESTS, None);
+        return None;
     };
     let head = head(
         StatusCode::SWITCHING_PROTOCOLS,
@@ -394,9 +408,12 @@ async fn websocket(
             ("sec-websocket-accept", &accept),
         ],
     );
-    if let Ok(send) = respond.send_response(head, false) {
-        super::serve_stream(broker, H2Stream::new(body, send)).await;
-    }
+    let send = respond.send_response(head, false).ok()?;
+    Some(super::serve_stream(
+        broker,
+        H2Stream::new(body, send),
+        client,
+    ))
 }
 
 /// Acknowledges remote configuration pushes; the relay has no ingress rules to apply.
@@ -503,6 +520,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn websocket_admission_counts_cloudflare_client_addresses() {
+        let broker = Broker::encrypted_with_limits(
+            [7; 32],
+            crate::limits::RuntimeLimits {
+                clients_per_source: 1,
+                ..crate::limits::RuntimeLimits::default()
+            },
+        );
+        let (edge_io, relay_io) = tokio::io::duplex(64 * 1024);
+        let (edge, relay) = tokio::join!(
+            h2::client::handshake(edge_io),
+            h2::server::handshake(relay_io)
+        );
+        let (mut edge, edge_link) = edge.unwrap();
+        tokio::spawn(edge_link);
+        let mut relay = relay.unwrap();
+        let relay_broker = broker.clone();
+        tokio::spawn(async move {
+            let mut streams = JoinSet::new();
+            while let Some(Ok((request, respond))) = relay.accept().await {
+                if let Some(session) = websocket(request, respond, relay_broker.clone()) {
+                    streams.spawn(session);
+                }
+            }
+        });
+        let mut held = Vec::new();
+
+        for (client, status) in [
+            ("192.0.2.1", StatusCode::OK),
+            ("192.0.2.1", StatusCode::TOO_MANY_REQUESTS),
+            ("192.0.2.2", StatusCode::OK),
+        ] {
+            let request = Request::get("https://ahrara.dev/")
+                .header(UPGRADE, "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==") // gitleaks:allow: RFC 6455 example nonce.
+                .header("cf-connecting-ip", client)
+                .body(())
+                .unwrap();
+            let (response, send) = edge.send_request(request, false).unwrap();
+
+            assert_eq!(response.await.unwrap().status(), status, "{client}");
+            // Open streams keep their sessions, and so their slots, alive.
+            held.push(send);
+        }
+    }
+
+    #[tokio::test]
     async fn websocket_stream_requires_signed_authentication_and_cleans_up_on_edge_loss() {
         let transport = snow::Builder::new(secure::PATTERN.parse().unwrap())
             .generate_keypair()
@@ -523,7 +588,9 @@ mod tests {
                 let mut streams = JoinSet::new();
                 while let Some(Ok((request, respond))) = relay.accept().await {
                     assert_eq!(classify(request.headers()), Kind::WebSocket);
-                    streams.spawn(websocket(request, respond, relay_broker.clone()));
+                    if let Some(session) = websocket(request, respond, relay_broker.clone()) {
+                        streams.spawn(session);
+                    }
                 }
             });
             let request = Request::get("https://ahrara.dev/")

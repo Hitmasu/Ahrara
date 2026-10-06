@@ -48,6 +48,12 @@ impl Config {
         trusted(peer, &self.prefixes)
     }
 
+    /// With an Email Routing sink, only the provider may deliver: direct SMTP would
+    /// bypass its filtering and could hold recipients reserved.
+    pub fn refuses(&self, peer: IpAddr) -> bool {
+        self.address.is_some() && !self.trusted(peer)
+    }
+
     pub fn envelope(&self, value: &str) -> Result<String> {
         if let Some(address) = &self.address {
             ensure!(

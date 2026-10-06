@@ -53,6 +53,10 @@ impl AsyncRead for H2Stream {
         let size = buffer.len().min(self.chunk.len());
         buffer[..size].copy_from_slice(&self.chunk[..size]);
         self.chunk.advance(size);
+        if self.chunk.is_empty() {
+            // An empty slice would still pin the shared h2 read buffer it came from.
+            self.chunk = Bytes::new();
+        }
         // Reopen the window only for consumed bytes, bounding what the edge may buffer here.
         self.receive
             .flow_control()
