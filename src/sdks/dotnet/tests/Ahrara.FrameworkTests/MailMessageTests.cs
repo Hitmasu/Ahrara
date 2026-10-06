@@ -4,7 +4,6 @@ using AhraraSdk;
 using MimeKit;
 using Client = AhraraSdk.Ahrara;
 using Xunit;
-using Assert = Xunit.Assert;
 
 namespace Ahrara.FrameworkTests;
 

@@ -38,10 +38,8 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
 
     /// <summary>Waits for and consumes the next matching email, including buffered mail.</summary>
     /// <param name="timeout">An optional positive timeout. Null waits indefinitely until mail, cancellation, disposal, or an error.</param>
-    /// <param name="subject">Optional subject substring filter.</param>
-    /// <param name="from">Optional sender substring filter.</param>
+    /// <param name="filter">Optional AND conditions. Nonmatching messages remain available.</param>
     /// <param name="cancellationToken">Cancels only this wait; the inbox remains usable.</param>
-    /// <param name="filter">Additional AND conditions. Nonmatching messages remain available.</param>
     /// <returns>The next matching message, owned by the caller. Dispose it after use. Other messages remain available.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The timeout is not positive.</exception>
     /// <exception cref="TimeoutException">The supplied timeout expires.</exception>
@@ -50,24 +48,22 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
     /// <exception cref="AhraraException">Reception fails in the native core.</exception>
     public async Task<MailMessage> WaitForEmailAsync(
         TimeSpan? timeout = null,
-        string? subject = null,
-        string? from = null,
-        CancellationToken cancellationToken = default,
-        EmailFilter? filter = null)
+        EmailFilter? filter = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await WaitForResultAsync(timeout, cancellationToken, timeoutMs => new
-        {
-            op = "wait",
-            format = "mail_message",
-            handle = _handle.Id,
-            timeout_ms = timeoutMs,
-            subject,
-            from,
-            filter
-        }).ConfigureAwait(false);
-
+        var result = await WaitForResultAsync(timeout, cancellationToken, WaitRequest(filter))
+            .ConfigureAwait(false);
         return _messages.ToMailMessage(result.GetProperty("email"));
     }
+
+    private Func<uint, object> WaitRequest(EmailFilter? filter) => timeoutMs => new
+    {
+        op = "wait",
+        format = "mail_message",
+        handle = _handle.Id,
+        timeout_ms = timeoutMs,
+        filter
+    };
 
     private async Task<JsonElement> WaitForResultAsync(
         TimeSpan? timeout,
@@ -118,56 +114,28 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
 
     /// <summary>Lazily receives matching emails until cancellation, an optional total duration, or an early break.</summary>
     /// <param name="duration">Optional positive total receiving duration, measured from first enumeration and including consumer processing time.</param>
-    /// <param name="subject">Optional subject substring filter.</param>
-    /// <param name="from">Optional sender substring filter.</param>
+    /// <param name="filter">Optional AND conditions that retain nonmatching mail.</param>
     /// <param name="cancellationToken">Cancels enumeration. Supports <c>WithCancellation</c>.</param>
-    /// <param name="filter">Additional AND conditions that retain nonmatching mail.</param>
     /// <returns>A sequence with no background queue. The caller owns and must dispose each message. Ending enumeration leaves the inbox connected.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The duration is not positive.</exception>
     /// <exception cref="OperationCanceledException">Enumeration is cancelled.</exception>
     /// <exception cref="ObjectDisposedException">The inbox is disposed.</exception>
     /// <exception cref="AhraraException">Reception fails in the native core.</exception>
-    public async IAsyncEnumerable<MailMessage> WaitForEmailsAsync(
+    public IAsyncEnumerable<MailMessage> WaitForEmailsAsync(
         TimeSpan? duration = null,
-        string? subject = null,
-        string? from = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default,
-        EmailFilter? filter = null)
-    {
-        ValidateDuration(duration, nameof(duration));
-        var timer = Stopwatch.StartNew();
-
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var remaining = duration - timer.Elapsed;
-            if (remaining <= TimeSpan.Zero)
-            {
-                yield break;
-            }
-
-            MailMessage email;
-            try
-            {
-                email = await WaitForEmailAsync(remaining, subject, from, cancellationToken, filter)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                yield break;
-            }
-
-            yield return email;
-        }
-    }
+        EmailFilter? filter = null,
+        CancellationToken cancellationToken = default) =>
+        SearchResultsAsync<MailMessage>(
+            WaitRequest(filter),
+            result => [_messages.ToMailMessage(result.GetProperty("email"))],
+            duration,
+            cancellationToken);
 
     /// <summary>Receives emails and awaits each callback sequentially.</summary>
     /// <param name="handler">The asynchronous handler owns each message and must dispose it. Handler failures propagate; delivered mail remains consumed.</param>
     /// <param name="duration">Optional positive total duration, including handler time. A running handler is awaited before return.</param>
-    /// <param name="subject">Optional subject substring filter.</param>
-    /// <param name="from">Optional sender substring filter.</param>
+    /// <param name="filter">Optional AND conditions that retain nonmatching mail.</param>
     /// <param name="cancellationToken">Cancels receiving and is passed to the handler.</param>
-    /// <param name="filter">Additional AND conditions that retain nonmatching mail.</param>
     /// <returns>A task completing after receiving stops and the current handler finishes. The inbox remains connected.</returns>
     /// <exception cref="ArgumentNullException">The handler is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The duration is not positive.</exception>
@@ -177,13 +145,11 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
     public async Task ReceiveEmailsAsync(
         Func<MailMessage, CancellationToken, Task> handler,
         TimeSpan? duration = null,
-        string? subject = null,
-        string? from = null,
-        CancellationToken cancellationToken = default,
-        EmailFilter? filter = null)
+        EmailFilter? filter = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        await foreach (var email in WaitForEmailsAsync(duration, subject, from, cancellationToken, filter)
+        await foreach (var email in WaitForEmailsAsync(duration, filter, cancellationToken)
             .ConfigureAwait(false))
         {
             await handler(email, cancellationToken).ConfigureAwait(false);
@@ -234,8 +200,11 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
-        return SearchResultsAsync<RegexMatch>(
-            query.ToNative(true), "matches", duration, filter, cancellationToken);
+        return SearchResultsAsync(
+            SearchRequest(query.ToNative(true), filter),
+            result => result.GetProperty("matches").EnumerateArray().Select(Native.Deserialize<RegexMatch>),
+            duration,
+            cancellationToken);
     }
 
     /// <summary>Waits for the first XPath value in one matching email.</summary>
@@ -281,8 +250,11 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        return SearchResultsAsync<string>(
-            new { kind = "xpath", expression, all = true }, "values", duration, filter, cancellationToken);
+        return SearchResultsAsync(
+            SearchRequest(new { kind = "xpath", expression, all = true }, filter),
+            result => result.GetProperty("values").EnumerateArray().Select(Native.Deserialize<string>),
+            duration,
+            cancellationToken);
     }
 
 
@@ -324,20 +296,22 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
 
     private Task<JsonElement> SearchOnceAsync(
         object query, TimeSpan? timeout, EmailFilter? filter, CancellationToken cancellationToken) =>
-        WaitForResultAsync(timeout, cancellationToken, timeoutMs => new
-        {
-            op = "search",
-            handle = _handle.Id,
-            timeout_ms = timeoutMs,
-            filter,
-            query
-        });
+        WaitForResultAsync(timeout, cancellationToken, SearchRequest(query, filter));
 
+    private Func<uint, object> SearchRequest(object query, EmailFilter? filter) => timeoutMs => new
+    {
+        op = "search",
+        handle = _handle.Id,
+        timeout_ms = timeoutMs,
+        filter,
+        query
+    };
+
+    // Yields every extracted item of each matched result until the total duration expires.
     private async IAsyncEnumerable<T> SearchResultsAsync<T>(
-        object query,
-        string resultField,
+        Func<uint, object> request,
+        Func<JsonElement, IEnumerable<T>> extract,
         TimeSpan? duration,
-        EmailFilter? filter,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ValidateDuration(duration, nameof(duration));
@@ -352,20 +326,20 @@ public sealed class Inbox : IDisposable, IAsyncDisposable
             JsonElement result;
             try
             {
-                result = await SearchOnceAsync(query, remaining, filter, cancellationToken)
-                    .ConfigureAwait(false);
+                result = await WaitForResultAsync(remaining, cancellationToken, request).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
                 yield break;
             }
 
-            foreach (var value in result.GetProperty(resultField).EnumerateArray())
+            // A received item is always yielded; the limits apply before the next one.
+            foreach (var value in extract(result))
             {
+                yield return value;
+
                 cancellationToken.ThrowIfCancellationRequested();
                 if (duration is { } limit && timer.Elapsed >= limit) yield break;
-
-                yield return Native.Deserialize<T>(value);
             }
         }
     }

@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace AhraraSdk;
 
 /// <summary>Contains the secret identity key and address needed to reconnect an inbox.</summary>
@@ -19,11 +17,9 @@ public sealed class InboxCredentials
     }
 
     /// <summary>Gets the address restored with this identity.</summary>
-    [JsonPropertyName("address")]
     public string Address { get; }
 
     /// <summary>Gets the secret recovery key. It grants access to the identity.</summary>
-    [JsonPropertyName("recovery_key")]
     public string RecoveryKey { get; }
 
     /// <summary>Returns a redacted representation suitable for diagnostics.</summary>

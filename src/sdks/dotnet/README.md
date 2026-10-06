@@ -24,7 +24,8 @@ timeout when appropriate:
 
 ```csharp
 using var email = await inbox.WaitForEmailAsync(
-    timeout: TimeSpan.FromSeconds(30), subject: "Verification",
+    timeout: TimeSpan.FromSeconds(30),
+    filter: new EmailFilter { Subject = "Verification" },
     cancellationToken: cancellationToken);
 ```
 
@@ -132,10 +133,9 @@ to interpret all string conditions as case-insensitive Rust regex patterns,
 including header values. Recipient, envelope sender, and Message-ID patterns must
 match the whole value; other patterns match anywhere, so use `^` / `$` for a full
 match. Use `(?-i)` for case sensitivity; `RegexQuery` is case-sensitive unless
-`IgnoreCase` is set. Header names and the `subject`/`from` wait parameters stay
-literal. Patterns use the shared Rust engine, not
-`System.Text.RegularExpressions.Regex`. Omitting `Regex` preserves literal
-matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+`IgnoreCase` is set. Header names stay literal. Patterns use the shared Rust
+engine, not `System.Text.RegularExpressions.Regex`. Omitting `Regex` preserves
+literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 An operation filter retains nonmatching stored mail. Set `InboxOptions.Filter`
 to discard nonmatching incoming mail **before local storage**; this global filter

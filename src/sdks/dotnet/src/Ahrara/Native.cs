@@ -10,7 +10,8 @@ internal static partial class Native
     private const string Library = "ahrara_native";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
     };
 
     static Native()
