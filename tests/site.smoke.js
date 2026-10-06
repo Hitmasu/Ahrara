@@ -103,6 +103,7 @@ async (page) => {
       agents: ["agents"],
       sdk: ["sdk"],
       "receive-app-support": ["receive-app-support"],
+      "receive-domain": ["receive-domain"],
     };
     const lpHashes = lpDocsLinks.map((href) => href.split("#")[1] || "");
     for (const hash of lpHashes) check(hash in landing, `Map the landing page link docs/#${hash} in this test.`);

@@ -229,6 +229,8 @@ xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 <li>Use <strong>Criar endereço</strong> para gerar endereços nesse domínio.</li>
 </ol>
 <p>Cada identidade armazena um domínio padrão. <strong>Remover domínio padrão</strong> volta a usar <code>@ahrara.dev</code> nos novos endereços; os endereços existentes não mudam.</p>
+<p>Todos os endereços do domínio compartilham o destino do encaminhamento e a caixa de entrada dele, então desativar esse destino interrompe todo o catch-all. Desativar ou excluir um endereço no Ahrara não muda as regras do seu provedor, e o cabeçalho <code>To</code> só mostra para onde o e-mail foi enviado; ele não decide a entrega.</p>
+<p>Vai rodar seu próprio relay com encaminhamento confiável? Veja a <a href="https://github.com/Hitmasu/Ahrara/blob/main/src/server/README.md#configuration">configuração do servidor</a>.</p>
 <h2 id="receive-profiles"><span class="visually-hidden"></span>Manter a caixa de entrada entre execuções</h2>
 <p>Um perfil guarda sua identidade, seus endereços, as mensagens e os anexos salvos, além das configurações para abri-los. Ele fica no seu computador; não existe conta no servidor.</p>
 <ul>

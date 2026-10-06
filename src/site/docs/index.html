@@ -229,6 +229,8 @@ xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 <li>Use <strong>Create address</strong> to generate addresses on that domain.</li>
 </ol>
 <p>Each identity stores one default domain. <strong>Remove default domain</strong> brings back <code>@ahrara.dev</code> for new addresses; existing addresses don’t change.</p>
+<p>Every address on the domain shares the forwarding destination and its inbox, so disabling that destination stops the whole catch-all. Disabling or deleting an address in Ahrara doesn’t change your provider’s rules, and the <code>To</code> header only shows where the email was sent; it doesn’t decide the delivery.</p>
+<p>Running your own relay with trusted forwarding? See the <a href="https://github.com/Hitmasu/Ahrara/blob/main/src/server/README.md#configuration">server configuration</a>.</p>
 <h2 id="receive-profiles"><span class="visually-hidden"></span>Keep your inbox between runs</h2>
 <p>A profile holds your identity, addresses, saved messages and attachments, plus the settings to open them. It lives on your computer; there is no server-side account.</p>
 <ul>

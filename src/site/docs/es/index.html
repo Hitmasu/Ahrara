@@ -229,6 +229,8 @@ xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 <li>Usa <strong>Crear dirección</strong> para generar direcciones en ese dominio.</li>
 </ol>
 <p>Cada identidad guarda un dominio predeterminado. <strong>Quitar dominio predeterminado</strong> restablece <code>@ahrara.dev</code> para las direcciones nuevas; las existentes no cambian.</p>
+<p>Todas las direcciones del dominio comparten el destino del reenvío y su bandeja, así que deshabilitar ese destino detiene todo el catch-all. Deshabilitar o eliminar una dirección en Ahrara no cambia las reglas de tu proveedor, y la cabecera <code>To</code> solo muestra a dónde se envió el correo; no decide la entrega.</p>
+<p>¿Ejecutas tu propio relay con reenvío de confianza? Consulta la <a href="https://github.com/Hitmasu/Ahrara/blob/main/src/server/README.md#configuration">configuración del servidor</a>.</p>
 <h2 id="receive-profiles"><span class="visually-hidden"></span>Conservar la bandeja entre ejecuciones</h2>
 <p>Un perfil reúne tu identidad, tus direcciones, los mensajes y adjuntos guardados, y la configuración para abrirlos. Está en tu equipo; no hay ninguna cuenta en el servidor.</p>
 <ul>
