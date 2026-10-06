@@ -229,10 +229,10 @@ func (i *Inbox) WaitForEmail(ctx context.Context, filter Filter) (*Email, error)
 }
 
 type receiveResult struct {
-	Status  string       `json:"status"`
-	Email   *Email       `json:"email"`
-	Matches []RegexMatch `json:"matches"`
-	Values  []string     `json:"values"`
+	Status  string        `json:"status"`
+	Email   *Email        `json:"email"`
+	Matches []*RegexMatch `json:"matches"`
+	Values  []string      `json:"values"`
 }
 
 func (i *Inbox) receive(ctx context.Context, request map[string]any) (*receiveResult, error) {

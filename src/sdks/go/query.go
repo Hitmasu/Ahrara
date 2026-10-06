@@ -73,15 +73,7 @@ func regexRequest(pattern string, options RegexOptions, all bool) map[string]any
 // returns its first occurrence. Nonmatching emails remain available. It has no
 // default timeout; ctx controls cancellation and any deadline.
 func (i *Inbox) WaitForRegexMatch(ctx context.Context, pattern string, options RegexOptions) (*RegexMatch, error) {
-	result, err := i.receive(ctx, regexRequest(pattern, options, false))
-	if err != nil {
-		return nil, err
-	}
-	if len(result.Matches) == 0 {
-		return nil, errors.New("unexpected Ahrara regex response")
-	}
-
-	return &result.Matches[0], nil
+	return searchFirst(ctx, i, regexRequest(pattern, options, false), regexMatches)
 }
 
 // WaitForRegexMatches yields every occurrence from successive eligible emails.
@@ -90,26 +82,7 @@ func (i *Inbox) WaitForRegexMatch(ctx context.Context, pattern string, options R
 // another email. Each selected email is consumed once, with its bounded results
 // retained only while yielding that email. No goroutine or prefetch is used.
 func (i *Inbox) WaitForRegexMatches(ctx context.Context, pattern string, options RegexOptions) iter.Seq2[*RegexMatch, error] {
-	return func(yield func(*RegexMatch, error) bool) {
-		request := regexRequest(pattern, options, true)
-		for {
-			result, err := i.receive(ctx, request)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-
-			for index := range result.Matches {
-				if err := ctx.Err(); err != nil {
-					yield(nil, err)
-					return
-				}
-				if !yield(&result.Matches[index], nil) {
-					return
-				}
-			}
-		}
-	}
+	return searchAll(ctx, i, regexRequest(pattern, options, true), regexMatches)
 }
 
 func xpathRequest(expression string, filter Filter, all bool) map[string]any {
@@ -123,15 +96,7 @@ func xpathRequest(expression string, filter Filter, all bool) map[string]any {
 // SVG, MathML and XLink use the predefined svg, math and xlink prefixes.
 // Empty strings, empty node sets and false do not consume an email.
 func (i *Inbox) WaitForXPath(ctx context.Context, expression string, filter Filter) (string, error) {
-	result, err := i.receive(ctx, xpathRequest(expression, filter, false))
-	if err != nil {
-		return "", err
-	}
-	if len(result.Values) == 0 {
-		return "", errors.New("unexpected Ahrara XPath response")
-	}
-
-	return result.Values[0], nil
+	return searchFirst(ctx, i, xpathRequest(expression, filter, false), xpathValues)
 }
 
 // WaitForXPathValues yields values in document order across all eligible emails.
@@ -139,18 +104,44 @@ func (i *Inbox) WaitForXPath(ctx context.Context, expression string, filter Filt
 // Like WaitForRegexMatches, an email is consumed when its results are selected,
 // and early iteration exit leaves subsequent emails available.
 func (i *Inbox) WaitForXPathValues(ctx context.Context, expression string, filter Filter) iter.Seq2[string, error] {
-	return func(yield func(string, error) bool) {
-		request := xpathRequest(expression, filter, true)
+	return searchAll(ctx, i, xpathRequest(expression, filter, true), xpathValues)
+}
+
+func regexMatches(result *receiveResult) []*RegexMatch { return result.Matches }
+
+func xpathValues(result *receiveResult) []string { return result.Values }
+
+// searchFirst consumes one matched email and returns the first result picked from it.
+func searchFirst[T any](ctx context.Context, i *Inbox, request map[string]any, pick func(*receiveResult) []T) (T, error) {
+	var first T
+	result, err := i.receive(ctx, request)
+	if err != nil {
+		return first, err
+	}
+
+	values := pick(result)
+	if len(values) == 0 {
+		return first, errors.New("unexpected Ahrara search response")
+	}
+
+	return values[0], nil
+}
+
+// searchAll yields every picked result from successive matched emails until
+// ctx ends, a receive fails, or the caller stops.
+func searchAll[T any](ctx context.Context, i *Inbox, request map[string]any, pick func(*receiveResult) []T) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
 		for {
 			result, err := i.receive(ctx, request)
 			if err != nil {
-				yield("", err)
+				yield(zero, err)
 				return
 			}
 
-			for _, value := range result.Values {
+			for _, value := range pick(result) {
 				if err := ctx.Err(); err != nil {
-					yield("", err)
+					yield(zero, err)
 					return
 				}
 				if !yield(value, nil) {

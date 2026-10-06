@@ -133,7 +133,6 @@ they do not copy an existing profile or create an offline queue at the relay.
 WSS close waits up to five seconds for the relay to disconnect, then drops the
 socket. Immediate identity reuse is verified with a healthy relay; after a
 network failure, the identity can remain occupied until the relay cleans up.
-SSE teardown remains asynchronous.
 
 Recovery keys are secrets. `fmt` string and Go-syntax formatting of `Credentials`
 and `Options` are redacted. Explicit JSON serialization includes the key for

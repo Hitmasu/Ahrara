@@ -2,11 +2,8 @@ package ahrara_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
-	"net"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -17,6 +14,12 @@ import (
 
 	ahrara "github.com/Hitmasu/Ahrara/src/sdks/go"
 )
+
+// TestMain lets net/smtp verify the development relay with the system roots.
+func TestMain(m *testing.M) {
+	os.Setenv("SSL_CERT_FILE", os.Getenv("AHRARA_TEST_TLS_CA"))
+	m.Run()
+}
 
 func options(t *testing.T) ahrara.Options {
 	t.Helper()
@@ -55,66 +58,14 @@ func send(address, subject, body string) error {
 	return sendRaw(address, message)
 }
 
+// sendRaw relies on the relay's required STARTTLS; TestMain trusts its CA.
 func sendRaw(address, message string) error {
 	endpoint := os.Getenv("AHRARA_TEST_SMTP_ADDRESS")
 	if endpoint == "" {
 		endpoint = "localhost:2525"
 	}
 
-	host, _, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return err
-	}
-
-	connection, err := net.DialTimeout("tcp", endpoint, 5*time.Second)
-	if err != nil {
-		return err
-	}
-
-	defer connection.Close()
-	if err := connection.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return err
-	}
-
-	client, err := smtp.NewClient(connection, host)
-	if err != nil {
-		return err
-	}
-
-	defer client.Close()
-	ca, err := os.ReadFile(os.Getenv("AHRARA_TEST_TLS_CA"))
-	if err != nil {
-		return err
-	}
-
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(ca) {
-		return errors.New("invalid test CA")
-	}
-	if err := client.StartTLS(&tls.Config{RootCAs: roots, ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
-		return err
-	}
-	if err := client.Mail("sender@example.test"); err != nil {
-		return err
-	}
-	if err := client.Rcpt(address); err != nil {
-		return err
-	}
-
-	writer, err := client.Data()
-	if err != nil {
-		return err
-	}
-
-	_, err = writer.Write([]byte(message))
-	if err != nil {
-		return err
-	}
-	if err := writer.Close(); err != nil {
-		return err
-	}
-
-	return client.Quit()
+	return smtp.SendMail(endpoint, nil, "sender@example.test", []string{address}, []byte(message))
 }
 
 func TestRegexQueriesApplyAdmissionThenCallFiltersAcrossEmails(t *testing.T) {

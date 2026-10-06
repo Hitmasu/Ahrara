@@ -78,32 +78,27 @@ func nativePath() (string, func(), error) {
 	}
 
 	asset, err := nativeAssets.ReadFile("native/" + runtime.GOOS + "-" + runtime.GOARCH + "/" + name)
-	if err == nil {
-		directory, err := os.MkdirTemp("", "ahrara-native-")
-		if err != nil {
-			return "", nil, err
-		}
-
-		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, asset, 0500); err != nil {
-			_ = os.RemoveAll(directory)
-			return "", nil, err
-		}
-
-		// POSIX permits removing an already loaded shared object. Windows keeps
-		// its DLL mapped until process exit, so it remains in the private temp dir.
-		return path, func() { _ = os.RemoveAll(directory) }, nil
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil, errors.New("no embedded Ahrara native library for this platform; set AHRARA_NATIVE_LIBRARY to its absolute path")
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", nil, err
-	}
-
-	executable, err := os.Executable()
 	if err != nil {
 		return "", nil, err
 	}
 
-	return filepath.Join(filepath.Dir(executable), name), func() {}, nil
+	directory, err := os.MkdirTemp("", "ahrara-native-")
+	if err != nil {
+		return "", nil, err
+	}
+
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, asset, 0500); err != nil {
+		_ = os.RemoveAll(directory)
+		return "", nil, err
+	}
+
+	// POSIX permits removing an already loaded shared object. Windows keeps
+	// its DLL mapped until process exit, so it remains in the private temp dir.
+	return path, func() { _ = os.RemoveAll(directory) }, nil
 }
 
 func nativeCall(request []byte) ([]byte, error) {

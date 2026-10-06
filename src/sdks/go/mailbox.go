@@ -1,7 +1,5 @@
 package ahrara
 
-import "encoding/base64"
-
 // Credentials restores an identity and its inbox address. RecoveryKey grants
 // access to that identity; store it as a secret and never log or commit it.
 // Default fmt formatting is redacted. JSON serialization is an explicit export
@@ -84,9 +82,9 @@ type Attachment struct {
 // AttachmentData contains the attachment metadata and decoded bytes.
 type AttachmentData struct {
 	// Attachment identifies and describes the downloaded attachment.
-	Attachment Attachment
+	Attachment Attachment `json:"attachment"`
 	// Content holds the exact decoded attachment bytes.
-	Content []byte
+	Content []byte `json:"content_base64"`
 }
 
 // HTMLBody contains sanitized HTML and the number of detected remote resources.
@@ -197,20 +195,12 @@ func (i *Inbox) ClearEmails() (int64, error) {
 
 // GetAttachment reads and decodes one attachment from the specified message.
 func (i *Inbox) GetAttachment(id int64, attachmentID string) (*AttachmentData, error) {
-	var result struct {
-		Attachment Attachment `json:"attachment"`
-		Content    string     `json:"content_base64"`
-	}
+	var result AttachmentData
 	if err := i.request("attachment", map[string]any{"id": id, "attachment_id": attachmentID}, &result); err != nil {
 		return nil, err
 	}
 
-	content, err := base64.StdEncoding.DecodeString(result.Content)
-	if err != nil {
-		return nil, err
-	}
-
-	return &AttachmentData{Attachment: result.Attachment, Content: content}, nil
+	return &result, nil
 }
 
 // SaveAttachment writes an attachment to an absolute filename or directory and
@@ -226,13 +216,10 @@ func (i *Inbox) SaveAttachment(id int64, attachmentID, destination string) (stri
 // RawEmail returns the original RFC 5322 message bytes.
 func (i *Inbox) RawEmail(id int64) ([]byte, error) {
 	var result struct {
-		Content string `json:"content_base64"`
+		Content []byte `json:"content_base64"`
 	}
-	if err := i.request("raw", map[string]any{"id": id}, &result); err != nil {
-		return nil, err
-	}
-
-	return base64.StdEncoding.DecodeString(result.Content)
+	err := i.request("raw", map[string]any{"id": id}, &result)
+	return result.Content, err
 }
 
 // GetHTML returns sanitized HTML. Remote resources are blocked unless
