@@ -12,6 +12,7 @@ services:
     stop_grace_period: 20s
     environment:
       AHRARA_UNIX_SOCKET: /run/ahrara/ahrara.sock
+      AHRARA_WEB_ORIGINS: ${AHRARA_WEB_ORIGINS:-}
     ulimits:
       nofile: 1048576
     ports:

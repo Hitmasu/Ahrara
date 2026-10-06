@@ -421,52 +421,59 @@ impl Broker {
             .is_ok()
             {
                 loop {
-                    let frame = tokio::select! {
-                        _ = peer.closed.cancelled() => break,
-                        value = reader.next() => value,
+                    // Only this block sees the received frame, so the idle future
+                    // keeps no frame across the reply's await.
+                    let reply = {
+                        let frame = tokio::select! {
+                            _ = peer.closed.cancelled() => break,
+                            value = reader.next() => value,
+                        };
+
+                        match frame {
+                            Some(Ok(Message::Binary(raw))) => {
+                                let Ok((kind, payload)) = p::decode(&raw) else {
+                                    break;
+                                };
+                                // Browsers cannot send WebSocket PINGs; echo their keepalive.
+                                if kind == p::KEEPALIVE && payload.is_empty() {
+                                    let Ok(frame) = p::encode(p::KEEPALIVE, &[]) else {
+                                        break;
+                                    };
+                                    Message::Binary(frame.into())
+                                } else {
+                                    if ![p::ACCEPT, p::REJECT, p::ACK, p::NACK].contains(&kind) {
+                                        break;
+                                    }
+
+                                    let Ok(mut reply) = serde_json::from_slice::<Reply>(payload)
+                                    else {
+                                        break;
+                                    };
+                                    reply.kind = kind;
+                                    let waiter = peer.pending.lock().unwrap().replies.remove(
+                                        &format!("{}:{}", reply.transfer_id, reply.recipient),
+                                    );
+
+                                    if let Some(waiter) = waiter {
+                                        let _ = waiter.send(reply);
+                                    }
+
+                                    continue;
+                                }
+                            }
+                            Some(Ok(Message::Ping(payload))) => Message::Pong(payload),
+                            Some(Ok(Message::Pong(_))) => continue,
+                            _ => break,
+                        }
                     };
-
-                    match frame {
-                        Some(Ok(Message::Binary(raw))) => {
-                            let Ok((kind, payload)) = p::decode(&raw) else {
-                                break;
-                            };
-                            if ![p::ACCEPT, p::REJECT, p::ACK, p::NACK].contains(&kind) {
-                                break;
-                            }
-
-                            let Ok(mut reply) = serde_json::from_slice::<Reply>(payload) else {
-                                break;
-                            };
-                            reply.kind = kind;
-                            let waiter = peer
-                                .pending
-                                .lock()
-                                .unwrap()
-                                .replies
-                                .remove(&format!("{}:{}", reply.transfer_id, reply.recipient));
-
-                            if let Some(waiter) = waiter {
-                                let _ = waiter.send(reply);
-                            }
-                        }
-                        Some(Ok(Message::Ping(payload))) => {
-                            peer.last_ping
-                                .store(self.started.elapsed().as_secs(), Ordering::Relaxed);
-                            // Flush the native PONG even if no email is being written.
-                            if !matches!(
-                                Box::pin(timeout(
-                                    Duration::from_secs(5),
-                                    peer.message(Message::Pong(payload))
-                                ))
-                                .await,
-                                Ok(Ok(()))
-                            ) {
-                                break;
-                            }
-                        }
-                        Some(Ok(Message::Pong(_))) => {}
-                        _ => break,
+                    peer.last_ping
+                        .store(self.started.elapsed().as_secs(), Ordering::Relaxed);
+                    // Flush the PONG or keepalive even if no email is being written.
+                    if !matches!(
+                        Box::pin(timeout(Duration::from_secs(5), peer.message(reply))).await,
+                        Ok(Ok(()))
+                    ) {
+                        break;
                     }
                 }
             }
@@ -672,15 +679,31 @@ mod tests {
         }
 
         async fn receive(&mut self, kind: u8) -> serde_json::Value {
+            let (actual, payload) = self.frame().await;
+
+            assert_eq!(actual, kind);
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        async fn frame(&mut self) -> (u8, Vec<u8>) {
             let raw = timeout(Duration::from_secs(1), self.receive.recv())
                 .await
                 .unwrap()
                 .unwrap();
             let frame = self.receiver.open(&raw).unwrap();
-            let (actual, payload) = p::decode(&frame).unwrap();
+            let (kind, payload) = p::decode(&frame).unwrap();
+            (kind, payload.to_vec())
+        }
 
-            assert_eq!(actual, kind);
-            serde_json::from_slice(payload).unwrap()
+        async fn send_frame(&mut self, kind: u8, payload: &[u8]) {
+            let cipher = self
+                .sender
+                .seal(&p::encode(kind, payload).unwrap())
+                .unwrap();
+            self.send
+                .send(Message::Binary(cipher.into()))
+                .await
+                .unwrap();
         }
 
         async fn login(&mut self, key: &SigningKey, binding: [u8; 32], expected: u8) {
@@ -745,10 +768,10 @@ mod tests {
             closed,
             client,
         );
-        eprintln!(
-            "encrypted broker connection future bytes={}",
-            std::mem::size_of_val(&connection)
-        );
+        // Every idle connection stores this future. Without the test transport it
+        // is 24 bytes smaller (280), keeping tokio's 128-byte-aligned task at 384.
+        let size = std::mem::size_of_val(&connection);
+        assert!(size <= 304, "connection future grew to {size} bytes");
         let task = tokio::spawn(connection);
         let mut handshake = secure::initiator(key.public.as_slice().try_into().unwrap()).unwrap();
         let mut message = [0; secure::MAX_HANDSHAKE];
@@ -916,6 +939,37 @@ mod tests {
                 broker.admission.try_client(Some(SOURCE)).is_some(),
                 "the source's only slot was not released"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_keepalive_refreshes_liveness_and_is_echoed() {
+        for payload in [&b""[..], b"x"] {
+            let (broker, mut client, task) = encrypted_client(CancellationToken::new()).await;
+            let key = SigningKey::from_bytes(&[9; 32]);
+            client.login(&key, client.binding, p::READY).await;
+            let peer = broker
+                .lookup(&p::derive_route(&key.verifying_key().to_bytes()))
+                .unwrap();
+            peer.last_ping.store(1000, Ordering::Relaxed);
+            client.send_frame(p::KEEPALIVE, payload).await;
+            if payload.is_empty() {
+                assert_eq!(client.frame().await, (p::KEEPALIVE, vec![]));
+                assert!(peer.last_ping.load(Ordering::Relaxed) < 1000);
+                drop(client);
+            } else {
+                let closed = timeout(Duration::from_secs(1), client.receive.recv()).await;
+
+                assert!(
+                    closed.unwrap().is_none(),
+                    "a malformed keepalive was accepted"
+                );
+            }
+
+            timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap();
         }
     }
 

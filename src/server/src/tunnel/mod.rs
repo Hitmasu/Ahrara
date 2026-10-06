@@ -111,11 +111,7 @@ fn handshake(request: &Parts) -> Result<String, StatusCode> {
     if request.uri.path() != "/" {
         return Err(StatusCode::NOT_FOUND);
     }
-    if request
-        .headers
-        .get("origin")
-        .is_some_and(|value| !value.is_empty())
-    {
+    if !crate::origin_allowed(request.headers.get("origin"), crate::web_origins()) {
         return Err(StatusCode::FORBIDDEN);
     }
     let key = request

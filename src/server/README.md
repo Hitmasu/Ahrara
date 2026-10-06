@@ -35,6 +35,7 @@ and valid certificates. See [Run locally](../../CONTRIBUTING.md#run-locally) for
 | `AHRARA_HEALTHCHECK_SERVER_NAME` | `localhost` | Certificate name verified by the local health check |
 | `AHRARA_TRANSPORT_KEY_FILE` | `/certs/transport.key` | Noise private key |
 | `AHRARA_UNIX_SOCKET` | Unset | Optional HTTP/WebSocket Unix socket |
+| `AHRARA_WEB_ORIGINS` | Empty | Browser origins allowed to connect, such as `https://app.ahrara.dev` |
 | `AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS` | Empty | Trusted SMTP forwarding sources |
 | `AHRARA_EMAIL_ROUTING_ADDRESS` | Unset | Exact SMTP sink for native Email Routing |
 | `AHRARA_EMAIL_ROUTING_VERIFICATION_RECIPIENT` | Unset | Temporary Ahrara inbox for verifying the sink |
@@ -123,6 +124,15 @@ to 20 leading zero bits, about 4 thousand to 1 million attempts, rising toward t
 cap. Clients solve it automatically; it costs a legitimate user nothing until one
 address holds many connections. Clients without this support are disconnected
 without an error and reconnect later.
+
+### Browser clients
+
+Native clients send no `Origin` header. Browsers always do, so the relay accepts
+their WebSocket upgrades only from the exact origins in `AHRARA_WEB_ORIGINS`
+(comma-separated, no path or trailing slash) and answers 403 to any other site.
+Browsers cannot send WebSocket PINGs; the web client instead sends an empty
+`KEEPALIVE` frame, which the relay echoes and counts as liveness. Update the
+relay before publishing a web client that sends it.
 
 ## Cloudflare Tunnel with WSS and Unix
 

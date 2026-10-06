@@ -18,7 +18,7 @@ use anyhow::{Context, Result, ensure};
 use axum::{
     Extension, Json, Router,
     extract::{ConnectInfo, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -29,7 +29,7 @@ use std::{
     env,
     io::Write,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -79,6 +79,43 @@ fn address(value: &str) -> Result<SocketAddr> {
     value.parse().context("invalid listener address")
 }
 
+/// Browser origins that may open client WebSockets, from AHRARA_WEB_ORIGINS.
+static WEB_ORIGINS: OnceLock<Box<[String]>> = OnceLock::new();
+
+/// Native clients send no Origin. Browsers always do, so only listed web apps
+/// connect and other sites cannot use their visitors as relay clients.
+pub fn origin_allowed(origin: Option<&HeaderValue>, allowed: &[String]) -> bool {
+    origin.is_none_or(|origin| origin.is_empty() || allowed.iter().any(|item| origin == item))
+}
+
+pub fn web_origins() -> &'static [String] {
+    WEB_ORIGINS.get().map_or(&[], |origins| origins)
+}
+
+/// Parses exact origins such as `https://app.ahrara.dev`: no path, slash or wildcard.
+fn parse_web_origins(value: &str) -> Result<Box<[String]>> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| {
+            let uri: axum::http::Uri = origin
+                .parse()
+                .context("AHRARA_WEB_ORIGINS entries must be origins")?;
+            ensure!(
+                matches!(uri.scheme_str(), Some("https" | "http"))
+                    && uri.authority().is_some_and(|authority| {
+                        !authority.as_str().contains(['*', '@'])
+                            && format!("{}://{authority}", uri.scheme_str().unwrap_or_default())
+                                == origin
+                    }),
+                "AHRARA_WEB_ORIGINS entries must be exact origins such as https://app.ahrara.dev"
+            );
+            Ok(origin.to_owned())
+        })
+        .collect()
+}
+
 /// The client address Cloudflare forwards. Trust it only where only Cloudflare
 /// connects: the integrated Tunnel and cloudflared's private Unix socket.
 pub fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
@@ -91,7 +128,7 @@ async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if headers.get("origin").is_some_and(|value| !value.is_empty()) {
+    if !origin_allowed(headers.get("origin"), web_origins()) {
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
     // Only the TLS listener has a TCP peer; the Unix socket is cloudflared's.
@@ -308,6 +345,7 @@ async fn run() -> Result<()> {
     if env::args().nth(1).as_deref() == Some("healthcheck") {
         return healthcheck().await;
     }
+    let _ = WEB_ORIGINS.set(parse_web_origins(&setting("AHRARA_WEB_ORIGINS", ""))?);
     let forwarding = Arc::new(routing::Config::new(
         &setting("AHRARA_TRUSTED_EMAIL_ROUTING_CIDRS", ""),
         &setting("AHRARA_EMAIL_ROUTING_ADDRESS", ""),
@@ -452,6 +490,47 @@ mod tests {
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
         TlsAcceptor::from(Arc::new(tls))
+    }
+
+    #[test]
+    fn only_exact_listed_web_origins_may_open_client_websockets() {
+        let allowed = parse_web_origins(" https://app.ahrara.dev, http://localhost:8788 ").unwrap();
+
+        assert_eq!(
+            &*allowed,
+            ["https://app.ahrara.dev", "http://localhost:8788"]
+        );
+        for invalid in [
+            "https://app.ahrara.dev/",
+            "https://app.ahrara.dev/inbox",
+            "https://*.ahrara.dev",
+            "https://user@app.ahrara.dev",
+            "app.ahrara.dev",
+            "ftp://app.ahrara.dev",
+        ] {
+            assert!(parse_web_origins(invalid).is_err(), "{invalid}");
+        }
+
+        let origin = |value: &'static str| HeaderValue::from_static(value);
+
+        assert!(origin_allowed(None, &[]), "native clients send no Origin");
+        assert!(origin_allowed(Some(&origin("")), &[]));
+        assert!(origin_allowed(
+            Some(&origin("https://app.ahrara.dev")),
+            &allowed
+        ));
+        assert!(!origin_allowed(
+            Some(&origin("https://app.ahrara.dev")),
+            &[]
+        ));
+        assert!(!origin_allowed(
+            Some(&origin("https://evil.test")),
+            &allowed
+        ));
+        assert!(!origin_allowed(
+            Some(&origin("https://app.ahrara.dev.evil.test")),
+            &allowed
+        ));
     }
 
     #[tokio::test]
