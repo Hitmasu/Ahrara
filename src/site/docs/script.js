@@ -48,13 +48,28 @@
   paintTheme();
 
   /* Small lexical highlights, as in the current docs; text nodes keep code inert. */
-  const KEYWORDS = "\\b(?:import|from|const|let|var|await|async|try|finally|with|as|for|in|if|return|using|new|class|static|void|throws|export|default|function|package|func|defer|use|fn|pub|Some|None|true|false|null|True|False)\\b";
+  const WORDS = {
+    javascript: "import|from|export|default|const|let|var|function|async|await|return|if|else|for|of|in|new|class|try|catch|finally|throw|typeof|true|false|null|undefined",
+    csharp: "using|namespace|public|private|internal|protected|static|readonly|async|await|var|new|class|record|void|string|int|bool|return|if|else|foreach|for|in|try|catch|finally|throw|null|true|false|this|out|is|not",
+    go: "package|import|func|return|if|else|for|range|defer|go|var|const|type|struct|interface|map|nil|true|false",
+    java: "import|package|public|private|protected|static|final|void|class|new|return|if|else|for|try|catch|finally|throw|throws|var|null|true|false|this",
+    python: "import|from|as|def|class|async|await|with|return|if|elif|else|for|in|try|except|finally|raise|assert|lambda|not|and|or|None|True|False",
+    rust: "use|fn|pub|let|mut|async|await|move|match|if|else|for|in|loop|while|return|impl|struct|enum|mod|Some|None|Ok|Err|true|false",
+  };
+  WORDS.typescript = `${WORDS.javascript}|type|interface`;
+  // Robot Framework: section headers, settings, variables, and the keyword each step calls.
+  const ROBOT = [
+    "(?<keyword>^\\*{3}[^*]+\\*{3}$|^(?:Library|Resource|Variables|Documentation|Suite Setup|Suite Teardown|Test Setup|Test Teardown|Test Timeout)\\b|(?<=^ {4})\\[[A-Za-z][\\w ]*\\]|\\b(?:WITH NAME|AND)\\b)",
+    "(?<variable>[$@&%]\\{[^}]*\\})",
+    "(?<function>(?:(?<=^ {4})|(?<== {2,}))[A-Za-z][\\w.]*(?: [\\w.]+)*)",
+  ];
   function tokenPattern(syntax) {
     const parts = [];
     if (["typescript", "javascript", "csharp", "go", "java", "rust"].includes(syntax)) parts.push("(?<comment>(?<!:)//[^\\n]*)");
     if (["python", "robot", "shell"].includes(syntax)) parts.push("(?<comment>(?:^|(?<=\\s))# [^\\n]*)");
+    if (syntax === "robot") parts.push(...ROBOT);
     parts.push("(?<string>\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`[^`]*`)");
-    if (!["shell", "json", "toml", "xml", "text", "robot"].includes(syntax)) parts.push(`(?<keyword>${KEYWORDS})`, "(?<number>\\b\\d[\\d_]*\\b)");
+    if (WORDS[syntax]) parts.push(`(?<keyword>\\b(?:${WORDS[syntax]})\\b)`, "(?<number>\\b\\d[\\d_]*\\b)", "(?<function>\\b[A-Za-z_]\\w*(?=\\())");
     return new RegExp(parts.join("|"), "g");
   }
   for (const pre of $$("pre[data-syntax]")) {

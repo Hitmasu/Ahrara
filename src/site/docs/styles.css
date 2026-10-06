@@ -283,6 +283,8 @@ pre code { padding: 0; background: none; font: inherit; }
 .token-string { color: #f2c66d; }
 .token-keyword { color: #8ec1ff; }
 .token-number { color: #ff9e93; }
+.token-function { color: #7fd4c1; }
+.token-variable { color: #e1a8ff; }
 
 /* Reference tabs sit on the page, not in a code block. */
 .tabs-light { overflow: visible; border: 0; border-radius: 0; background: transparent; color: inherit; }
