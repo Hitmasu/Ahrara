@@ -78,6 +78,31 @@ pub struct MailMessage {
     pub attachments: Vec<MessageAttachment>,
 }
 
+/// The header fields stored with every received message.
+pub struct Summary {
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub message_id: Option<String>,
+}
+
+pub fn summary(raw: &[u8]) -> Summary {
+    let headers = mailparse::parse_headers(raw)
+        .map(|x| x.0)
+        .unwrap_or_default();
+    let header = |name| {
+        headers
+            .get_first_value(name)
+            .map(|s| s.chars().take(4096).collect::<String>())
+    };
+    Summary {
+        from: header("From").unwrap_or_default(),
+        to: header("To").unwrap_or_default(),
+        subject: header("Subject").unwrap_or_default(),
+        message_id: header("Message-ID"),
+    }
+}
+
 /// Decodes a bounded message for native host mail APIs without another parser.
 /// Parsing failures are explicit and never include untrusted message content.
 pub fn mail_message(metadata: crate::model::Email, raw: &[u8]) -> Result<MailMessage> {

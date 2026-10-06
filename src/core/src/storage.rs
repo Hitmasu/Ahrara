@@ -6,7 +6,6 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use mailparse::MailHeaderMap;
 use rand::{RngCore, rngs::OsRng};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter, types::Value};
 use std::{
@@ -718,16 +717,7 @@ impl Storage {
         }
 
         self.call(move |c| {
-            let headers = mailparse::parse_headers(&raw).map(|x| x.0).unwrap_or_default();
-            let header = |name| {
-                headers.get_first_value(name).unwrap_or_default()
-                    .chars().take(4096).collect::<String>()
-            };
-            let from = header("From");
-            let to = header("To");
-            let subject = header("Subject");
-            let message_id = headers.get_first_value("Message-ID")
-                .map(|s| s.chars().take(4096).collect::<String>());
+            let crate::mail::Summary { from, to, subject, message_id } = crate::mail::summary(&raw);
             let received = Utc::now().to_rfc3339();
 
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

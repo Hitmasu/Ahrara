@@ -11,7 +11,9 @@ CARGO = $(DOCKER) --platform linux/$(DOCKER_ARCH) -w /work/src/cli \
 	-e CARGO_HOME=/work/.dev/cargo -e CARGO_TARGET_DIR=/work/.dev/target \
 	-e AHRARA_TEST_BINARY -e AHRARA_TEST_SERVER_PUBLIC_KEY \
 	-e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS \
-	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY ahrara-builder:$(DOCKER_ARCH) cargo
+	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY -e AHRARA_WEB_RELAY_URL \
+	ahrara-builder:$(DOCKER_ARCH) cargo
+WEB_OUT ?= dist/web
 
 .PHONY: dev-certs server cli check test client-lint client-test openapi openapi-check e2e mcp-e2e api-e2e web-e2e toolchain cargo
 
@@ -155,6 +157,30 @@ toolchain:
 
 cargo: toolchain
 	@$(CARGO) $(ARGS)
+
+# The browser app for static hosting. AHRARA_WEB_RELAY_URL (default wss://ahrara.dev)
+# and AHRARA_SERVER_PUBLIC_KEY select the relay it trusts.
+.PHONY: web
+web: toolchain
+	export AHRARA_WEB_RELAY_URL="$${AHRARA_WEB_RELAY_URL:-wss://ahrara.dev}"
+	[[ $$AHRARA_WEB_RELAY_URL =~ ^wss://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$$ ]] || { echo 'AHRARA_WEB_RELAY_URL must be a plain wss:// URL' >&2; exit 1; }
+	test -n "$${AHRARA_SERVER_PUBLIC_KEY:-}" || { echo 'AHRARA_SERVER_PUBLIC_KEY is required' >&2; exit 1; }
+	$(CARGO) rustc --locked --release --manifest-path /work/src/web/Cargo.toml --lib --crate-type cdylib --target wasm32-unknown-unknown
+	rm -rf "$(WEB_OUT)" && mkdir -p "$(WEB_OUT)"
+	cp -R src/web/www/. src/web/assets "$(WEB_OUT)/"
+	$(DOCKER) -w /work ahrara-builder:$(DOCKER_ARCH) wasm-bindgen --target no-modules --no-typescript \
+		--out-dir "/work/$(WEB_OUT)/app" /work/.dev/target/wasm32-unknown-unknown/release/ahrara_web.wasm
+	sed -i "s|@RELAY_URL@|$$AHRARA_WEB_RELAY_URL|" "$(WEB_OUT)/_headers"
+
+# Chromium and Firefox drive the browser app against an isolated relay; needs make dev-certs.
+.PHONY: web-app-e2e
+web-app-e2e: server
+	test -s .dev/certs/transport-public.txt || { echo 'Run make dev-certs first' >&2; exit 1; }
+	AHRARA_WEB_RELAY_URL=wss://127.0.0.1:28443 AHRARA_SERVER_PUBLIC_KEY="$$(cat .dev/certs/transport-public.txt)" \
+		$(MAKE) web WEB_OUT=.dev/web-e2e
+	docker run --rm --network host --shm-size=1g --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
+		-v "$$PWD:/repo" -w /repo/src/web/e2e mcr.microsoft.com/playwright:v1.58.2-noble \
+		bash -ec 'npm ci --no-audit --no-fund && npx playwright test'
 
 .PHONY: sdk-native sdk-rust-e2e
 sdk-native: toolchain

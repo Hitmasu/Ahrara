@@ -80,6 +80,14 @@ Artifacts are written to `dist/ahrara-<platform>-<arch>` (`.exe` for Windows).
 in [Dockerfile.builder](src/cli/Dockerfile.builder). Validate release binaries on their
 target OS before publishing.
 
+`make web` builds the browser app into `dist/web` for static hosting. It embeds
+the relay URL from `AHRARA_WEB_RELAY_URL` (default `wss://ahrara.dev`) and requires
+that relay's `AHRARA_SERVER_PUBLIC_KEY`. The relay must list the app's origin in
+`AHRARA_WEB_ORIGINS`. The host must apply `dist/web/_headers` and answer paths
+without a file with `index.html`. The pages and routes in `src/web` also serve the
+CLI's Web page; `src/web/www` holds the browser's shell, Service Worker and
+connection worker.
+
 ## Checks
 
 Run the checks relevant to your change before submitting a pull request:
@@ -91,6 +99,7 @@ Run the checks relevant to your change before submitting a pull request:
 | REST contract | `make openapi` and `make openapi-check`; include `openapi.yaml` |
 | Delivery or reconnect | `make e2e` |
 | MCP, API, Web, or forwarding | `make mcp-e2e`, `make api-e2e`, `make web-e2e`, or `make forwarding-e2e` |
+| Web pages or the browser app | `make web-app-e2e` (Chromium and Firefox in Docker against an isolated relay) |
 | Updater or release tooling | `make update-test` |
 | Agent plugin | `make test` (includes native stdio, launcher, and installer checks) |
 | Any contribution | Review the diff and scan for secrets with Gitleaks |

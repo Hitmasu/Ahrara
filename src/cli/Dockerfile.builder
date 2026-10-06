@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends musl-tools=1.2.
 ARG TARGETARCH
 RUN rustup component add rustfmt clippy && rustup target add wasm32-unknown-unknown && \
     case "$TARGETARCH" in amd64) rustup target add x86_64-unknown-linux-musl ;; arm64) rustup target add aarch64-unknown-linux-musl ;; *) exit 1 ;; esac
+# Must match the wasm-bindgen version in src/web/Cargo.lock.
+RUN cargo install --locked --version 0.2.129 wasm-bindgen-cli && rm -rf /usr/local/cargo/registry
 WORKDIR /work/src/cli
 
 FROM native AS cross

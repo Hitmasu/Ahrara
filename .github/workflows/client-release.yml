@@ -64,6 +64,16 @@ jobs:
           name: client-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/ahrara-*
           if-no-files-found: error
+      # The browser app trusts the same relay key; its static host publishes this artifact.
+      - name: Build browser app
+        if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
+        run: make web
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
+        with:
+          name: ahrara-web-app
+          path: dist/web/
+          if-no-files-found: error
   publish:
     needs: build
     runs-on: ubuntu-latest

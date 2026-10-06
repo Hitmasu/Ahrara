@@ -30,6 +30,13 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
 - Run the relevant [checks](../CONTRIBUTING.md#checks), including `make update-test`,
   and validate the binaries on their native platforms.
 
+The browser app is built by the same workflow as artifact `ahrara-web-app`, with
+the relay key from `AHRARA_SERVER_PUBLIC_KEY`. Before publishing it, set
+`AHRARA_WEB_ORIGINS=https://app.ahrara.dev` on the relay and deploy the relay.
+Publish the artifact's contents at the root of `https://app.ahrara.dev` on a host
+that applies its `_headers` file, such as Cloudflare Pages, and serves
+`index.html` for paths without a file.
+
 Only the public key is embedded in binaries. Builds without it cannot check or
 apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json`.
 

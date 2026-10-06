@@ -27,7 +27,7 @@ pub struct CustomDomain {
     pub forwarding_address: String,
 }
 
-pub(crate) fn normalize_domain(value: &str) -> Result<String> {
+pub fn normalize_domain(value: &str) -> Result<String> {
     let domain = value.trim().to_ascii_lowercase();
     if domain == "ahrara.dev"
         || domain.len() > 253

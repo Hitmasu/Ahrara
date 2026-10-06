@@ -11,7 +11,7 @@ function notify(text) {
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-copy]');
   if (!button) return;
-  try { await navigator.clipboard.writeText(button.dataset.copy); notify('Address copied'); }
+  try { await navigator.clipboard.writeText(button.dataset.copy); notify(button.dataset.copied ?? 'Address copied'); }
   catch { notify('Clipboard unavailable. Select the address to copy it.'); }
 });
 document.addEventListener('click', event => {
@@ -53,7 +53,16 @@ async function refresh() {
   } catch { notify('Unable to update the page. Refresh to try again.'); }
   finally { refreshing = false; if (pending) { pending = false; refresh(); } }
 }
-const events = new EventSource('/events');
+// The browser app announces the same events from its workers.
+function subscribe() {
+  if (document.body.dataset.events !== 'broadcast') return new EventSource('/events');
+  const channel = new BroadcastChannel('ahrara');
+  const target = new EventTarget();
+  channel.addEventListener('message', ({ data }) => target.dispatchEvent(new MessageEvent(data.kind, { data: JSON.stringify(data.data) })));
+  target.close = () => channel.close();
+  return target;
+}
+const events = subscribe();
 events.addEventListener('open', refresh);
 for (const type of ['email_received', 'email_deleted', 'emails_cleared', 'address_created', 'address_updated', 'address_deleted', 'resync']) {
   events.addEventListener(type, () => {
@@ -82,4 +91,11 @@ document.addEventListener('submit', event => {
 });
 document.addEventListener('click', event => {
   if (event.target.closest('[data-keep-blocked]')) document.querySelector('[data-remote-notice]').hidden = true;
+});
+
+// The browser app's data survives storage pressure only when persisted.
+document.addEventListener('submit', event => { if (event.target.matches('[data-persist]')) navigator.storage?.persist?.(); });
+const storage = document.querySelector('[data-storage]');
+if (storage) navigator.storage?.persisted?.().then(persisted => {
+  storage.textContent = persisted ? 'Persistent' : 'Best effort: the browser may clear it when space runs low';
 });

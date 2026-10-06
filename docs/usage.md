@@ -61,7 +61,8 @@ to receive mail: there is no relay queue for offline clients. Web, MCP, and the
 | / | Manage Web and MCP |
 | Ctrl+C | Stop the listener |
 
-Manage addresses in Web or with `ahrara address`, and delete all emails with
+Manage addresses in Web or with `ahrara address`; `ahrara address add` receives
+an address created in the [browser app](#browser-app). Delete all emails with
 `ahrara inbox clear`. Deleting an address preserves received mail. Dates use the host's timezone; `NO_COLOR=1`
 disables colors. Clipboard access over SSH may require OSC 52 support.
 
@@ -104,6 +105,35 @@ loopback-only. Do not expose this port to the internet.
 Set `api_tls_cert_path` and `api_tls_key_path` to your certificate and key.
 For access through SSH, use `ssh -L 8787:127.0.0.1:8787 user@your-server`
 and the loopback URL.
+
+## Browser app
+
+[app.ahrara.dev](https://app.ahrara.dev) runs the same Web page without
+installing the CLI. The browser connects to the relay itself, using the CLI's
+Rust core compiled to WebAssembly, and keeps the Identity, addresses and emails
+in its own storage. Messages and addresses are encrypted there with a key
+derived from the Identity, as the CLI encrypts its inbox.
+
+On the first visit, create an Identity and save the Recovery Key it shows, or
+import an existing key. Keep a tab open to receive email: the relay does not
+queue mail. Tabs share one connection, and another tab takes over when the one
+holding it closes. Phones keep it only while the app is in the foreground.
+
+An Identity has one connection at a time, so the CLI and the browser cannot
+receive with the same key simultaneously. To move between them:
+
+- **CLI to browser:** copy the key with `ahrara auth export --copy`, import it
+  in the app, then add each address from `ahrara --json address list` (its
+  `routing_address`) in **Addresses → Add an existing address**.
+- **Browser to CLI:** copy the key from **Settings → Show Recovery Key**,
+  register it in a new profile with `ahrara auth set --stdin`, then run
+  `ahrara address add <address>` for each address.
+
+Received emails stay where they arrived. Browsers may clear site data when
+storage runs low; the app requests persistent storage when you confirm the
+backup, and **Settings** shows whether it was granted. **Settings → Delete local
+data** removes everything from the browser. The app needs Service Workers, which
+some private windows disable.
 
 ## MCP
 

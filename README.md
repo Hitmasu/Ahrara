@@ -191,6 +191,12 @@ row to search and read messages, view HTML, download EML and attachments, and
 manage addresses. It is only reachable from your own computer by default; see
 the [Web guide](docs/usage.md#web) for passwords and LAN access.
 
+To use it without installing anything, open [app.ahrara.dev](https://app.ahrara.dev):
+the same interface connects to the relay from your browser and keeps your inbox
+there. Keep a tab open to receive email; the
+[browser app guide](docs/usage.md#browser-app) explains how to move an Identity
+between the browser and the CLI.
+
 ## 🏗️ How it works
 
 ```mermaid
@@ -217,7 +223,8 @@ See [how delivery works](https://ahrara.dev/docs/#delivery) and the
 - Ahrara is not end-to-end encrypted: senders, forwarding providers and the
   relay can read messages.
 - Web, MCP and the API listen only on your computer by default, and MCP and the
-  API require a token.
+  API require a token. The browser app keeps its Identity and inbox in that
+  browser's storage.
 - Treat email as untrusted input, especially when an AI agent reads it.
 
 See [SECURITY.md](SECURITY.md) for security boundaries and how to report a

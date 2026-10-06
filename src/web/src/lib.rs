@@ -9,6 +9,10 @@ use askama::Template;
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
+
+#[cfg(target_arch = "wasm32")]
+mod browser;
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 // The browser app shows every page inside its own same-origin shell.
@@ -86,11 +90,15 @@ pub trait Backend {
 
     /// Errors that mean the item is gone (404) rather than a bad request (400).
     fn not_found(&self, error: &anyhow::Error) -> bool {
-        error
-            .to_string()
-            .split_once(':')
-            .is_some_and(|(code, _)| code.ends_with("_not_found"))
+        missing(error)
     }
+}
+
+fn missing(error: &anyhow::Error) -> bool {
+    error
+        .to_string()
+        .split_once(':')
+        .is_some_and(|(code, _)| code.ends_with("_not_found"))
 }
 
 /// Answers one UI request. Adapters own access control, the body limit and
@@ -98,24 +106,35 @@ pub trait Backend {
 pub async fn respond<B: Backend>(backend: &B, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let mode = backend.mode();
     let browser = mode.browser();
-    let mut response = route(backend, mode, request).await.unwrap_or_else(|error| {
-        let missing = backend.not_found(&error);
-        reply(
-            if missing {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::BAD_REQUEST
-            },
-            "text/plain; charset=utf-8",
-            if missing {
-                "This item is no longer available. Go back and refresh."
-            } else {
-                "The request could not be completed. Check the form and try again."
-            },
-        )
-    });
+    let mut response = route(backend, mode, request)
+        .await
+        .unwrap_or_else(|error| failure(backend.not_found(&error)));
     harden(response.headers_mut(), browser);
     response
+}
+
+fn failure(missing: bool) -> Response<Vec<u8>> {
+    reply(
+        if missing {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
+        },
+        "text/plain; charset=utf-8",
+        if missing {
+            "This item is no longer available. Go back and refresh."
+        } else {
+            "The request could not be completed. Check the form and try again."
+        },
+    )
+}
+
+fn verify(csrf: &str, expected: &str) -> Result<()> {
+    if !bool::from(csrf.as_bytes().ct_eq(expected.as_bytes())) {
+        bail!("invalid form token")
+    }
+
+    Ok(())
 }
 
 /// Security headers for every UI response; route-specific values win.
@@ -157,10 +176,7 @@ async fn route<B: Backend>(
     let query = parts.uri.query().unwrap_or("");
     let form = || -> Result<Action> {
         let form: Action = serde_urlencoded::from_bytes(&body)?;
-        if !bool::from(form.csrf.as_bytes().ct_eq(backend.csrf().as_bytes())) {
-            bail!("invalid form token")
-        }
-
+        verify(&form.csrf, backend.csrf())?;
         Ok(form)
     };
     let segments: Vec<&str> = parts.uri.path().split('/').skip(1).collect();
@@ -277,6 +293,8 @@ async fn route<B: Backend>(
         (false, ["settings"]) => Page::new(backend, mode, "settings", "Settings")
             .await?
             .response(),
+        // The browser app's host serves these files itself.
+        #[cfg(not(target_arch = "wasm32"))]
         (false, ["assets", name]) => Ok(asset(name)),
         _ => Ok(reply(StatusCode::NOT_FOUND, "text/plain", "")),
     }
@@ -399,6 +417,8 @@ struct Page {
     raw: Option<String>,
     remote_resources: usize,
     custom_domain: Option<CustomDomain>,
+    /// The browser's Recovery Key, shown on request only.
+    recovery: Option<Zeroizing<String>>,
 }
 
 impl Page {
@@ -446,6 +466,7 @@ impl Page {
             raw: None,
             remote_resources: 0,
             custom_domain: None,
+            recovery: None,
         })
     }
 
@@ -512,6 +533,7 @@ pub fn download(attachment: &Attachment, bytes: Vec<u8>) -> Response<Vec<u8>> {
     response
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn asset(name: &str) -> Response<Vec<u8>> {
     let (mime, bytes): (&'static str, &'static [u8]) = match name {
         "app.css" => (
