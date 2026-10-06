@@ -415,21 +415,9 @@ async fn wait(
     params(("id" = i64, Path)),
     responses((status = 200, body = String, content_type = "message/rfc822"))
 )]
-pub(crate) async fn eml(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> ApiResult<Response> {
+async fn eml(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> ApiResult<Response> {
     let (meta, raw) = core.storage.email(id).await?;
-    let mut response = Response::new(Body::from(raw));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("message/rfc822"),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"email-{}.eml\"", meta.id)
-            .parse()
-            .unwrap(),
-    );
-
-    Ok(response)
+    Ok(ahrara_web::eml(meta.id, raw).map(Body::from))
 }
 
 #[utoipa::path(
@@ -451,33 +439,12 @@ async fn list_attachments(
     params(("id" = i64, Path), ("attachmentId" = String, Path)),
     responses((status = 200, body = String, content_type = "application/octet-stream"))
 )]
-pub(crate) async fn download_attachment(
+async fn download_attachment(
     State(core): State<Arc<Core>>,
     Path((id, attachment_id)): Path<(i64, String)>,
 ) -> ApiResult<Response> {
     let (meta, bytes) = core.attachment(id, attachment_id).await?;
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/octet-stream"),
-    );
-    let ascii: String = meta
-        .filename
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || "._-".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{ascii}\"").parse().unwrap(),
-    );
-
-    Ok(response)
+    Ok(ahrara_web::download(&meta, bytes).map(Body::from))
 }
 
 /// Ephemeral metadata events from this API process only; resynchronize via REST after disconnect.

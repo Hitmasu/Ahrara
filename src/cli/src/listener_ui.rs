@@ -949,7 +949,7 @@ fn email_line(email: &Email, width: usize, selected: bool) -> String {
             &date,
             sender,
             subject,
-            &ahrara::web::bytes(email.size_bytes.max(0) as usize),
+            &ahrara_web::bytes(email.size_bytes.max(0) as usize),
         ],
         width,
         selected,

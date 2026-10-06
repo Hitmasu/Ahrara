@@ -150,6 +150,7 @@ packages, binaries, profiles, and logs belong in ignored directories.
 | `src/native/` | Shared core exposed through an owned-string C ABI |
 | `src/sdks/` | Language bindings and framework integration tests |
 | `src/cli/` | CLI, Web, MCP, and HTTP API built on the shared core |
+| `src/web/` | Web UI pages, routes and assets shared by the CLI and the browser app |
 | `src/server/` | Rust SMTP receiver and authenticated relay |
 | `src/third_party/` | Shared vendored mail parser |
 | `docs/` | User and release guides |

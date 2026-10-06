@@ -1,0 +1,26 @@
+[package]
+name = "ahrara-web"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Ahrara's Web UI, served by the CLI's local server and by the browser app"
+license = "MIT"
+repository = "https://github.com/Hitmasu/Ahrara"
+
+[dependencies]
+ahrara-core = { path = "../core", version = "0.1.0" }
+anyhow = "1.0"
+askama = "=0.14.0"
+http = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_urlencoded = "0.7"
+subtle = "2.6"
+
+[patch.crates-io]
+mailparse = { path = "../third_party/mailparse" }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

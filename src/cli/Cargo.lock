@@ -26,6 +26,7 @@ name = "ahrara"
 version = "0.1.0"
 dependencies = [
  "ahrara-core",
+ "ahrara-web",
  "anyhow",
  "arboard",
  "argon2",
@@ -107,6 +108,19 @@ dependencies = [
  "webpki-roots 1.0.9",
  "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "ahrara-web"
+version = "0.1.0"
+dependencies = [
+ "ahrara-core",
+ "anyhow",
+ "askama",
+ "http",
+ "serde",
+ "serde_urlencoded",
+ "subtle",
 ]
 
 [[package]]

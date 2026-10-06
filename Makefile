@@ -108,9 +108,12 @@ test: toolchain client-test
 client-lint: toolchain
 	$(CARGO) fmt --all -- --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings
+	$(CARGO) clippy --locked --manifest-path /work/src/web/Cargo.toml --all-targets -- -D warnings
+	$(CARGO) clippy --locked --manifest-path /work/src/web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
 client-test: toolchain
 	$(CARGO) test --locked --lib --bin ahrara --test local --test web --test update_cli --test crypto_cli --test mcp_stdio
+	$(CARGO) test --locked --manifest-path /work/src/web/Cargo.toml
 	$(DOCKER) -w /work python:3.13-slim python3 -B -m unittest discover -s tests -p 'test_release_manifest.py'
 	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs
 

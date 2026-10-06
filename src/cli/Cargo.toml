@@ -10,6 +10,7 @@ homepage = "https://ahrara.dev"
 
 [dependencies]
 ahrara-core = { path = "../core", version = "0.1.0" }
+ahrara-web = { path = "../web", version = "0.1.0" }
 anyhow = "1.0"
 argon2 = "=0.5.3"
 askama = "=0.14.0"

@@ -1,15 +1,15 @@
-use crate::{
-    core::{Core, Status},
-    mail::{self, ParsedEmail},
-    storage::{Address, Email, Filters},
-    web_state::Settings,
+use crate::core::Core;
+use ahrara_core::{
+    mail::{Attachment, HtmlEmail, ParsedEmail},
+    storage::{Address, CustomDomain, Email, Filters},
 };
+use ahrara_web::{LocalSettings, Mode, Status};
 use anyhow::Result;
 use askama::Template;
 use axum::{
     Extension, Form, Router,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response, Sse, sse::Event},
@@ -26,9 +26,7 @@ use subtle::ConstantTimeEq;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
-const HTML_CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox";
-const HTML_IMAGES_CSP: &str = "default-src 'none'; img-src data: http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox";
+const BODY_LIMIT: usize = 16 * 1024;
 
 struct WebError(anyhow::Error);
 
@@ -175,286 +173,8 @@ async fn guard(State(core): State<Arc<Core>>, request: Request, next: Next) -> R
     }
 
     let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers
-        .entry(header::CONTENT_SECURITY_POLICY)
-        .or_insert(header::HeaderValue::from_static(CSP));
-    headers
-        .entry(header::CACHE_CONTROL)
-        .or_insert(header::HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        header::HeaderValue::from_static("nosniff"),
-    );
-    headers
-        .entry(header::REFERRER_POLICY)
-        .or_insert(header::HeaderValue::from_static("same-origin"));
-    headers.insert(
-        "permissions-policy",
-        header::HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
-    );
-
+    ahrara_web::harden(response.headers_mut(), false);
     response
-}
-
-#[derive(Default, Deserialize)]
-pub struct InboxQuery {
-    #[serde(default)]
-    q: String,
-    #[serde(default)]
-    address: String,
-    before: Option<i64>,
-}
-
-struct Row {
-    id: i64,
-    from: String,
-    subject: String,
-    received: String,
-    recipient: String,
-    size: String,
-}
-
-impl From<Email> for Row {
-    fn from(e: Email) -> Self {
-        Self {
-            id: e.id,
-            from: if e.from_header.is_empty() {
-                e.envelope_sender
-            } else {
-                e.from_header
-            },
-            subject: if e.subject.is_empty() {
-                "(no subject)".into()
-            } else {
-                e.subject
-            },
-            received: date(&e.received_at),
-            recipient: e.recipient,
-            size: bytes(e.size_bytes.max(0) as usize),
-        }
-    }
-}
-
-fn date(s: &str) -> String {
-    mail::local_date(s, "%b %d, %H:%M %:z")
-}
-
-pub fn bytes(n: usize) -> String {
-    if n < 1024 {
-        format!("{n} B")
-    } else if n < 1024 * 1024 {
-        format!("{:.1} KiB", n as f64 / 1024.)
-    } else {
-        format!("{:.1} MiB", n as f64 / 1048576.)
-    }
-}
-
-#[derive(Template)]
-#[template(path = "page.html")]
-struct Page {
-    section: &'static str,
-    title: &'static str,
-    version: &'static str,
-    csrf: String,
-    connected: bool,
-    total: i64,
-    default_address: String,
-    fingerprint: String,
-    route: String,
-    settings: Settings,
-    mcp_auth_required: bool,
-    url: String,
-    query: String,
-    address: String,
-    rows: Vec<Row>,
-    addresses: Vec<Address>,
-    next: i64,
-    previous: bool,
-    email: Option<ParsedEmail>,
-    size: String,
-    received: String,
-    raw: Option<String>,
-    remote_resources: usize,
-    custom_domain: Option<crate::storage::CustomDomain>,
-}
-
-impl Page {
-    fn timestamp(&self, value: &str) -> String {
-        date(value)
-    }
-
-    async fn new(core: &Core, section: &'static str, title: &'static str) -> Result<Self> {
-        let Status {
-            connected,
-            emails_count,
-            identity_fingerprint,
-            route_id,
-            ..
-        } = core.status().await?;
-
-        Ok(Self {
-            section,
-            title,
-            version: env!("CARGO_PKG_VERSION"),
-            csrf: core.web.csrf.clone(),
-            connected,
-            total: emails_count,
-            default_address: core
-                .storage
-                .latest_enabled_address(identity_fingerprint.clone())
-                .await?
-                .map(|a| a.address)
-                .unwrap_or_default(),
-            fingerprint: identity_fingerprint,
-            route: route_id,
-            settings: core.web.settings(),
-            mcp_auth_required: core.mcp_auth_required(),
-            url: core.web_url(),
-            query: String::new(),
-            address: String::new(),
-            rows: vec![],
-            addresses: vec![],
-            next: 0,
-            previous: false,
-            email: None,
-            size: String::new(),
-            received: String::new(),
-            raw: None,
-            remote_resources: 0,
-            custom_domain: None,
-        })
-    }
-
-    fn response(self) -> WebResult<Html<String>> {
-        Ok(Html(self.render().map_err(anyhow::Error::from)?))
-    }
-}
-
-async fn inbox(
-    State(core): State<Arc<Core>>,
-    Query(q): Query<InboxQuery>,
-) -> WebResult<Html<String>> {
-    let mut page = Page::new(&core, "inbox", "Inbox").await?;
-    let filters = Filters {
-        address: if q.address.is_empty() {
-            None
-        } else {
-            Some(q.address.clone())
-        },
-        limit: Some(21),
-        ..Default::default()
-    };
-    let mut emails = core
-        .storage
-        .inbox_page(
-            filters,
-            core.identity.fingerprint(),
-            q.before,
-            Some(q.q.clone()),
-        )
-        .await?;
-    if emails.len() > 20 {
-        emails.pop();
-        page.next = emails.last().map(|e| e.id).unwrap_or(0);
-    }
-
-    page.rows = emails.into_iter().map(Into::into).collect();
-    page.query = q.q;
-    page.address = q.address;
-    page.previous = q.before.is_some();
-    // The filter accepts any exact local address, including aliases beyond this first selector page.
-    page.addresses = core
-        .storage
-        .addresses(core.identity.fingerprint(), 0, 100, false)
-        .await?;
-
-    page.response()
-}
-
-async fn detail(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> WebResult<Html<String>> {
-    let mut page = Page::new(&core, "email", "Email").await?;
-    let mut email = core.get_email(id, 256 * 1024).await?;
-    email.date = mail::local_date(&email.date, "%Y-%m-%d %H:%M:%S %:z");
-    page.size = bytes(email.metadata.size_bytes.max(0) as usize);
-    page.received = date(&email.metadata.received_at);
-    if email.html_available {
-        page.remote_resources = core.html_email(id, false).await?.remote_resources;
-    }
-
-    page.email = Some(email);
-    page.response()
-}
-
-async fn raw(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> WebResult<Html<String>> {
-    let mut page = Page::new(&core, "email", "Raw EML").await?;
-    let (_, raw) = core.storage.email(id).await?;
-    page.raw = Some(String::from_utf8_lossy(&raw).into_owned());
-    page.email = Some(core.get_email(id, 1).await?);
-    page.response()
-}
-
-async fn html(State(core): State<Arc<Core>>, Path(id): Path<i64>) -> WebResult<Response> {
-    Ok((
-        [
-            (header::CONTENT_SECURITY_POLICY, HTML_CSP),
-            (header::REFERRER_POLICY, "no-referrer"),
-        ],
-        Html(core.html_email(id, false).await?.html),
-    )
-        .into_response())
-}
-
-async fn load_images(
-    State(core): State<Arc<Core>>,
-    Path(id): Path<i64>,
-    Form(form): Form<Action>,
-) -> WebResult<Response> {
-    form.check(&core)?;
-    Ok((
-        [
-            (header::CONTENT_SECURITY_POLICY, HTML_IMAGES_CSP),
-            (header::REFERRER_POLICY, "no-referrer"),
-        ],
-        Html(core.html_email(id, true).await?.html),
-    )
-        .into_response())
-}
-
-#[derive(Default, Deserialize)]
-struct AddressQuery {
-    after_id: Option<i64>,
-}
-
-async fn addresses(
-    State(core): State<Arc<Core>>,
-    Query(q): Query<AddressQuery>,
-) -> WebResult<Html<String>> {
-    let mut page = Page::new(&core, "addresses", "Addresses").await?;
-    page.custom_domain = core
-        .storage
-        .custom_domain(core.identity.fingerprint())
-        .await?;
-    page.addresses = core
-        .storage
-        .addresses(
-            core.identity.fingerprint(),
-            q.after_id.unwrap_or(0),
-            21,
-            false,
-        )
-        .await?;
-    if page.addresses.len() > 20 {
-        page.addresses.pop();
-        page.next = page.addresses.last().map(|a| a.id).unwrap_or(0);
-    }
-
-    page.previous = q.after_id.is_some();
-    page.response()
-}
-
-async fn settings(State(core): State<Arc<Core>>) -> WebResult<Html<String>> {
-    Page::new(&core, "settings", "Settings").await?.response()
 }
 
 async fn login(State(core): State<Arc<Core>>) -> WebResult<Html<String>> {
@@ -483,11 +203,8 @@ struct Action {
     enabled: bool,
     #[serde(default)]
     acknowledge: bool,
-    label: Option<String>,
     password: Option<String>,
     password_confirm: Option<String>,
-    domain: Option<String>,
-    forwarding_address: Option<String>,
     #[serde(default)]
     confirm: bool,
 }
@@ -500,76 +217,6 @@ impl Action {
 
         Ok(())
     }
-}
-
-async fn create_address(
-    State(core): State<Arc<Core>>,
-    Form(form): Form<Action>,
-) -> WebResult<Redirect> {
-    form.check(&core)?;
-    let label = form.label.filter(|l| !l.trim().is_empty());
-    if label.as_ref().is_some_and(|l| l.len() > 120) {
-        return Err(anyhow::anyhow!("label too long").into());
-    }
-
-    core.create_address(label).await?;
-    Ok(Redirect::to("/addresses"))
-}
-
-async fn address_action(
-    State(core): State<Arc<Core>>,
-    Path(id): Path<i64>,
-    Form(form): Form<Action>,
-) -> WebResult<Redirect> {
-    form.check(&core)?;
-    let enabled = match form.action.as_str() {
-        "enable" => Some(true),
-        "disable" => Some(false),
-        "delete" if form.confirm => None,
-        _ => return Err(anyhow::anyhow!("confirm action").into()),
-    };
-    core.change_address(id.to_string(), enabled).await?;
-    Ok(Redirect::to("/addresses"))
-}
-
-async fn delete_email(
-    State(core): State<Arc<Core>>,
-    Path(id): Path<i64>,
-    Form(form): Form<Action>,
-) -> WebResult<Redirect> {
-    form.check(&core)?;
-    if !form.confirm {
-        return Err(anyhow::anyhow!("confirmation required").into());
-    }
-
-    core.delete_emails(Some(id)).await?;
-    Ok(Redirect::to("/"))
-}
-
-async fn domain_action(
-    State(core): State<Arc<Core>>,
-    Form(form): Form<Action>,
-) -> WebResult<Redirect> {
-    form.check(&core)?;
-    if form.action == "remove" {
-        core.storage
-            .remove_custom_domain(core.identity.fingerprint())
-            .await?;
-    } else if form.action == "set" {
-        core.storage
-            .set_custom_domain(
-                core.identity.fingerprint(),
-                form.domain
-                    .ok_or_else(|| anyhow::anyhow!("domain required"))?,
-                form.forwarding_address
-                    .ok_or_else(|| anyhow::anyhow!("forwarding destination required"))?,
-            )
-            .await?;
-    } else {
-        return Err(anyhow::anyhow!("invalid domain action").into());
-    }
-
-    Ok(Redirect::to("/addresses"))
 }
 
 async fn settings_action(
@@ -715,48 +362,151 @@ async fn events(
     })
 }
 
-async fn asset(Path(name): Path<String>) -> Response {
-    let (mime, bytes): (&str, &[u8]) = match name.as_str() {
-        "app.css" => ("text/css; charset=utf-8", include_bytes!("../web/app.css")),
-        "app.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../web/app.js"),
-        ),
-        "logo.png" => ("image/png", include_bytes!("../web/logo.png")),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+impl ahrara_web::Backend for Core {
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
+    fn mode(&self) -> Mode {
+        let settings = self.web.settings();
+        Mode::Cli(LocalSettings {
+            url: self.web_url(),
+            lan_enabled: settings.lan_enabled,
+            lan_no_auth_acknowledged: settings.lan_no_auth_acknowledged,
+            password: settings.password_hash.is_some(),
+            api_enabled: settings.api_enabled,
+            mcp_enabled: settings.mcp_enabled,
+            mcp_auth_required: self.mcp_auth_required(),
+        })
+    }
+
+    fn csrf(&self) -> &str {
+        &self.web.csrf
+    }
+
+    // The receiver's inherent methods share names with this trait's.
+    async fn status(&self) -> Result<Status> {
+        let receiver: &ahrara_core::core::Core = self;
+        let status = receiver.status().await?;
+        Ok(Status {
+            connected: status.connected,
+            emails: status.emails_count,
+            fingerprint: status.identity_fingerprint,
+            route: status.route_id,
+        })
+    }
+
+    async fn latest_enabled_address(&self) -> Result<Option<Address>> {
+        self.storage
+            .latest_enabled_address(self.identity.fingerprint())
+            .await
+    }
+
+    async fn inbox_page(
+        &self,
+        filters: Filters,
+        before: Option<i64>,
+        search: String,
+    ) -> Result<Vec<Email>> {
+        self.storage
+            .inbox_page(filters, self.identity.fingerprint(), before, Some(search))
+            .await
+    }
+
+    async fn addresses(&self, after_id: i64, limit: u32) -> Result<Vec<Address>> {
+        self.storage
+            .addresses(self.identity.fingerprint(), after_id, limit, false)
+            .await
+    }
+
+    async fn email(&self, id: i64) -> Result<(Email, Vec<u8>)> {
+        self.storage.email(id).await
+    }
+
+    async fn create_address(&self, label: Option<String>) -> Result<()> {
+        let receiver: &ahrara_core::core::Core = self;
+        receiver.create_address(label).await.map(drop)
+    }
+
+    async fn change_address(&self, id: i64, enabled: Option<bool>) -> Result<()> {
+        let receiver: &ahrara_core::core::Core = self;
+        receiver
+            .change_address(id.to_string(), enabled)
+            .await
+            .map(drop)
+    }
+
+    async fn delete_email(&self, id: i64) -> Result<()> {
+        self.delete_emails(Some(id)).await.map(drop)
+    }
+
+    async fn custom_domain(&self) -> Result<Option<CustomDomain>> {
+        self.storage
+            .custom_domain(self.identity.fingerprint())
+            .await
+    }
+
+    async fn set_custom_domain(&self, domain: String, forwarding_address: String) -> Result<()> {
+        self.storage
+            .set_custom_domain(self.identity.fingerprint(), domain, forwarding_address)
+            .await
+            .map(drop)
+    }
+
+    async fn remove_custom_domain(&self) -> Result<()> {
+        self.storage
+            .remove_custom_domain(self.identity.fingerprint())
+            .await
+    }
+
+    async fn parsed_email(&self, id: i64, max_body: usize) -> Result<ParsedEmail> {
+        self.get_email(id, max_body).await
+    }
+
+    async fn html_email(&self, id: i64, allow_remote: bool) -> Result<HtmlEmail> {
+        let receiver: &ahrara_core::core::Core = self;
+        receiver.html_email(id, allow_remote).await
+    }
+
+    async fn attachment(&self, id: i64, attachment_id: &str) -> Result<(Attachment, Vec<u8>)> {
+        let receiver: &ahrara_core::core::Core = self;
+        receiver.attachment(id, attachment_id.to_owned()).await
+    }
+
+    fn not_found(&self, error: &anyhow::Error) -> bool {
+        crate::api::not_found(error)
+    }
+}
+
+async fn shared(State(core): State<Arc<Core>>, request: Request) -> Response {
+    let (parts, body) = request.into_parts();
+    let Ok(body) = axum::body::to_bytes(body, BODY_LIMIT).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
 
-    (
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "public, max-age=0, must-revalidate"),
-        ],
-        Body::from(bytes),
-    )
-        .into_response()
+    ahrara_web::respond(&*core, Request::from_parts(parts, body.into()))
+        .await
+        .map(Body::from)
 }
 
 pub fn router(core: Arc<Core>) -> Router {
     Router::new()
-        .route("/", get(inbox))
-        .route("/emails/{id}", get(detail))
-        .route("/emails/{id}/delete", post(delete_email))
-        .route("/emails/{id}/raw", get(raw))
-        .route("/emails/{id}/html", get(html).post(load_images))
-        .route("/emails/{id}/eml", get(crate::api::eml))
-        .route(
-            "/emails/{id}/attachments/{attachmentId}",
-            get(crate::api::download_attachment),
-        )
-        .route("/addresses", get(addresses).post(create_address))
-        .route("/addresses/domain", post(domain_action))
-        .route("/addresses/{id}", post(address_action))
-        .route("/settings", get(settings).post(settings_action))
+        .route("/", get(shared))
+        .route("/emails/{id}", get(shared))
+        .route("/emails/{id}/delete", post(shared))
+        .route("/emails/{id}/raw", get(shared))
+        .route("/emails/{id}/html", get(shared).post(shared))
+        .route("/emails/{id}/eml", get(shared))
+        .route("/emails/{id}/attachments/{attachmentId}", get(shared))
+        .route("/addresses", get(shared).post(shared))
+        .route("/addresses/domain", post(shared))
+        .route("/addresses/{id}", post(shared))
+        .route("/settings", get(shared).post(settings_action))
         .route("/login", get(login).post(sign_in))
         .route("/logout", post(logout))
         .route("/events", get(events))
-        .route("/assets/{name}", get(asset))
-        .layer(DefaultBodyLimit::max(16 * 1024))
+        .route("/assets/{name}", get(shared))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn_with_state(core.clone(), guard))
         .with_state(core)
 }
