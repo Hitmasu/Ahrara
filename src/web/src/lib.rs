@@ -737,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_pages_frame_in_the_shell_without_cli_settings() {
+    fn browser_pages_frame_in_the_shell_and_explain_missing_options() {
         let backend = Memory::default();
         for path in ["/", "/emails/1", "/emails/1/raw", "/addresses", "/settings"] {
             let response = send(&backend, "GET", path, "");
@@ -750,11 +750,21 @@ mod tests {
             );
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
             assert!(!text(&response).contains("Sign out") && !text(&response).contains("/mcp"));
+            assert!(text(&response).contains(
+                "href=\"https://ahrara.dev/docs/#receive-app-support\" target=\"_blank\""
+            ));
         }
 
+        // The installed app's server options stay visible, disabled and explained.
         let settings = send(&backend, "GET", "/settings", "");
         assert!(text(&settings).contains("fingerprint-value"));
-        assert!(!text(&settings).contains("Web Page"));
+        assert!(!text(&settings).contains("action=\"/settings\""));
+        for tooltip in [i18n::EN.server_unavailable, i18n::EN.mcp_unavailable] {
+            assert!(text(&settings).contains(&format!(
+                "aria-disabled=\"true\" title=\"{}\"",
+                tooltip.replace('\'', "&#39;")
+            )));
+        }
     }
 
     #[test]

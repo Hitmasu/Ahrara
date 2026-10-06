@@ -26,6 +26,10 @@ pub struct Strings {
     pub create_address: &'static str,
     pub copy_your_address: &'static str,
     pub sign_out: &'static str,
+    pub browser_notice: &'static str,
+    pub see_more: &'static str,
+    /// The documentation in this language.
+    pub docs: &'static str,
 
     // Inbox
     pub inbox_lede: &'static str,
@@ -177,6 +181,9 @@ pub struct Strings {
     pub storage_detail: &'static str,
     pub confirm_erase: &'static str,
     pub erase: &'static str,
+    pub not_in_browser: &'static str,
+    pub server_unavailable: &'static str,
+    pub mcp_unavailable: &'static str,
 
     // First use in the browser
     pub welcome: &'static str,
@@ -234,6 +241,9 @@ pub static EN: Strings = Strings {
     create_address: "Create address",
     copy_your_address: "Copy your email address",
     sign_out: "Sign out",
+    browser_notice: "You're using the browser version, which doesn't include every feature of the installed Ahrara.",
+    see_more: "See more",
+    docs: "https://ahrara.dev/docs/",
 
     inbox_lede: "Your emails, stored on this computer.",
     search_placeholder: "Search sender or subject",
@@ -381,6 +391,9 @@ pub static EN: Strings = Strings {
     storage_detail: "Your key and emails exist only in this browser. Clearing its site data deletes them.",
     confirm_erase: "Delete the key, addresses and emails stored in this browser? Save your Recovery Key first.",
     erase: "Delete local data",
+    not_in_browser: "Not available in the browser",
+    server_unavailable: "Not available in the browser version: browsers don't let a web page run the local server behind these settings.",
+    mcp_unavailable: "Not available in the browser version: AI agents can't connect to a browser tab.",
 
     welcome: "Welcome",
     welcome_heading: "Your inbox, in this browser.",
@@ -435,6 +448,9 @@ pub static PT_BR: Strings = Strings {
     create_address: "Criar endereço",
     copy_your_address: "Copiar seu endereço de e-mail",
     sign_out: "Sair",
+    browser_notice: "Você está usando a versão do navegador, que não inclui todos os recursos do Ahrara instalado.",
+    see_more: "Veja mais",
+    docs: "https://ahrara.dev/docs/pt-br/",
 
     inbox_lede: "Seus e-mails, guardados neste computador.",
     search_placeholder: "Buscar remetente ou assunto",
@@ -582,6 +598,9 @@ pub static PT_BR: Strings = Strings {
     storage_detail: "Sua chave e seus e-mails existem só neste navegador. Limpar os dados do site apaga tudo.",
     confirm_erase: "Apagar a chave, os endereços e os e-mails guardados neste navegador? Guarde sua Recovery Key antes.",
     erase: "Apagar dados locais",
+    not_in_browser: "Indisponível no navegador",
+    server_unavailable: "Indisponível na versão do navegador: o navegador não permite que uma página rode o servidor local por trás destas configurações.",
+    mcp_unavailable: "Indisponível na versão do navegador: agentes de IA não conseguem se conectar a uma aba do navegador.",
 
     welcome: "Boas-vindas",
     welcome_heading: "Sua caixa de entrada, neste navegador.",
@@ -636,6 +655,9 @@ pub static ES: Strings = Strings {
     create_address: "Crear dirección",
     copy_your_address: "Copiar tu dirección de correo",
     sign_out: "Cerrar sesión",
+    browser_notice: "Estás usando la versión del navegador, que no incluye todas las funciones de Ahrara instalado.",
+    see_more: "Ver más",
+    docs: "https://ahrara.dev/docs/es/",
 
     inbox_lede: "Tus correos, guardados en este equipo.",
     search_placeholder: "Buscar remitente o asunto",
@@ -783,6 +805,9 @@ pub static ES: Strings = Strings {
     storage_detail: "Tu clave y tus correos solo existen en este navegador. Borrar los datos del sitio los elimina.",
     confirm_erase: "¿Eliminar la clave, las direcciones y los correos guardados en este navegador? Guarda antes tu Recovery Key.",
     erase: "Eliminar datos locales",
+    not_in_browser: "No disponible en el navegador",
+    server_unavailable: "No disponible en la versión del navegador: el navegador no permite que una página ejecute el servidor local detrás de estos ajustes.",
+    mcp_unavailable: "No disponible en la versión del navegador: los agentes de IA no pueden conectarse a una pestaña del navegador.",
 
     welcome: "Te damos la bienvenida",
     welcome_heading: "Tu bandeja de entrada, en este navegador.",

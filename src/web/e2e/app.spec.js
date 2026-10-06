@@ -173,3 +173,22 @@ test('follows the browser language', async ({ browserName, playwright }) => {
   await expect(ui(page).getByRole('heading', { name: 'Sua caixa de entrada, neste navegador.' })).toBeVisible();
   await browser.close();
 });
+
+test('marks what the browser version lacks', async ({ page }) => {
+  await page.goto('/');
+  const notice = ui(page).locator('.browser-notice');
+  await expect(notice).toContainText("doesn't include every feature of the installed Ahrara");
+  await expect(notice.getByRole('link', { name: 'See more' }))
+    .toHaveAttribute('href', 'https://ahrara.dev/docs/#receive-app-support');
+  await onboard(page);
+  await expect(notice).toBeVisible();
+  await ui(page).getByRole('link', { name: 'Settings' }).click();
+  // The installed app's options stay visible, disabled, with the reason on hover.
+  for (const [name, reason] of [['Enable LAN access', /local server/], ['Set password', /local server/], ['Enable MCP', /AI agents/]]) {
+    const option = ui(page).getByRole('button', { name });
+    await expect(option).toBeDisabled();
+    await expect(option).toHaveAttribute('title', reason);
+  }
+  await ui(page).getByRole('button', { name: 'Enable MCP' }).click({ force: true });
+  await expect(page).toHaveURL(/\/settings$/);
+});

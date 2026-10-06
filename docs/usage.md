@@ -137,6 +137,27 @@ backup, and **Settings** shows whether it was granted. **Settings → Delete loc
 data** removes everything from the browser. The app needs Service Workers, which
 some private windows disable.
 
+### What the browser app supports
+
+The browser app receives and reads email like the installed Ahrara. What it
+lacks comes from what browsers allow a web page to do, not from a choice to make
+you install anything: wherever the browser allows it, the app does the same.
+
+| Feature | Browser | Installed |
+|---|---|---|
+| Receive, search and read email, HTML, attachments and the original EML | Yes | Yes |
+| Create, disable and delete addresses, and use your own domain | Yes | Yes |
+| Receive with no window open | No: browsers stop closed pages, and phones pause tabs in the background | Yes, while `ahrara` runs |
+| MCP for AI agents | No: agents can't connect to a page in a browser tab | Yes |
+| HTTP API, Web password and LAN access | No: a page can't run the local server they belong to | Yes |
+| Terminal and scripts (`ahrara` commands, `--json`) | No: a page can't run commands on your computer | Yes |
+| Inbox kept until you delete it | Usually: browsers may clear site data when storage runs low | Yes |
+
+The app shows a notice linking here, and **Settings** keeps these options
+visible but disabled, with the reason on hover. Backups of messages and moving
+received messages between the browser and the CLI aren't available in the
+browser app yet: the Recovery Key moves the Identity and its addresses.
+
 ## MCP
 
 The [agent plugin](agents.md) installs and manages Ahrara for the agent. To use

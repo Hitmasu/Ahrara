@@ -19,3 +19,12 @@
 .domain-settings {margin:0 0 24px}
 .domain-settings .create-address {margin:16px 0}
 .domain-settings .create-address label {flex:1;max-width:none}
+.browser-notice{margin:0;padding:9px 38px;background:var(--accent);color:#fff;font-size:12px}
+.browser-notice a{color:inherit;font-weight:650;text-decoration:underline}
+.login .browser-notice{margin-bottom:30px;padding:9px 12px;border-radius:var(--radius)}
+.button[aria-disabled=true]{opacity:.55;cursor:not-allowed}
+@media(max-width:760px){.browser-notice{padding:9px 20px}}
+select{width:100%;border:1px solid #dce2eb;border-radius:var(--radius);padding:9px 12px;background:white;color:var(--text);min-width:0}
+label>select{display:block;margin-top:8px}
+select:focus-visible{outline:3px solid #96bbff;outline-offset:3px}
+.settings-sections .create-address{margin:0}
