@@ -184,25 +184,45 @@ class Inbox:
         cancellation and other errors propagate. Closing/breaking the generator
         leaves the inbox open. Omit timeout for an indefinite subscription.
         """
-        deadline = _deadline(timeout)
+        yield from self._stream(
+            timeout,
+            cancel,
+            lambda remaining: [
+                self.wait_for_email(
+                    remaining,
+                    subject=subject,
+                    from_address=from_address,
+                    filter=filter,
+                    cancel=cancel,
+                )
+            ],
+        )
 
+    def _stream(
+        self,
+        timeout: float | None,
+        cancel: threading.Event | None,
+        receive: Callable[[float | None], list[T]],
+    ) -> Generator[T, None, None]:
+        deadline = _deadline(timeout)
         while True:
             _check_cancel(cancel)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
             try:
-                email = self.wait_for_email(
-                    None if math.isinf(remaining) else remaining,
-                    subject=subject,
-                    from_address=from_address,
-                    filter=filter,
-                    cancel=cancel,
-                )
+                values = receive(None if math.isinf(remaining) else remaining)
             except TimeoutError:
                 return
 
-            yield email
+            # A consumed email still yields its first value at the deadline.
+            for index, value in enumerate(values):
+                if index:
+                    _check_cancel(cancel)
+                    if time.monotonic() >= deadline:
+                        return
+
+                yield value
 
     def receive_emails(
         self,
@@ -339,29 +359,13 @@ class Inbox:
         filter: EmailFilter | None,
         cancel: threading.Event | None,
     ) -> Generator[Any, None, None]:
-        deadline = _deadline(timeout)
-        while True:
-            _check_cancel(cancel)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            try:
-                result = self._wait(
-                    "search",
-                    None if math.isinf(remaining) else remaining,
-                    cancel,
-                    query=query,
-                    filter=filter,
-                )
-            except TimeoutError:
-                return
-
-            for value in result[field]:
-                _check_cancel(cancel)
-                if time.monotonic() >= deadline:
-                    return
-
-                yield value
+        return self._stream(
+            timeout,
+            cancel,
+            lambda remaining: self._wait(
+                "search", remaining, cancel, query=query, filter=filter
+            )[field],
+        )
 
     def list_emails(
         self,
@@ -603,8 +607,23 @@ class AsyncInbox:
         propagates and leaves the inbox open, as do break and generator aclose().
         No message is prefetched while the consumer handles the previous one.
         """
-        deadline = _deadline(timeout)
 
+        async def receive(remaining: float | None) -> list[Email]:
+            return [
+                await self.wait_for_email(
+                    remaining, subject=subject, from_address=from_address, filter=filter
+                )
+            ]
+
+        async for email in self._stream(timeout, receive):
+            yield email
+
+    async def _stream(
+        self,
+        timeout: float | None,
+        receive: Callable[[float | None], Awaitable[list[T]]],
+    ) -> AsyncGenerator[T, None]:
+        deadline = _deadline(timeout)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -613,19 +632,22 @@ class AsyncInbox:
             task = asyncio.current_task()
             cancellations = task.cancelling() if task is not None else 0
             try:
-                email = await self.wait_for_email(
-                    None if math.isinf(remaining) else remaining,
-                    subject=subject,
-                    from_address=from_address,
-                    filter=filter,
-                )
+                values = await receive(None if math.isinf(remaining) else remaining)
             except TimeoutError:
                 return
 
-            yield email
-            # A committed match can win cancellation once, never restart a stream.
-            if task is not None and task.cancelling() > cancellations:
-                raise asyncio.CancelledError
+            # A consumed email still yields its first value at the deadline.
+            for index, value in enumerate(values):
+                if index:
+                    # A buffered value must still give pending task cancellation a turn.
+                    await asyncio.sleep(0)
+                    if time.monotonic() >= deadline:
+                        return
+
+                yield value
+                # A committed match can win cancellation once, never restart a stream.
+                if task is not None and task.cancelling() > cancellations:
+                    raise asyncio.CancelledError
 
     async def receive_emails(
         self,
@@ -729,40 +751,18 @@ class AsyncInbox:
         ):
             yield str(value)
 
-    async def _search_values(
+    def _search_values(
         self,
         query: dict[str, Any],
         field: str,
         timeout: float | None,
         filter: EmailFilter | None,
     ) -> AsyncGenerator[Any, None]:
-        deadline = _deadline(timeout)
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
+        async def receive(remaining: float | None) -> list[Any]:
+            result = await self._wait("search", remaining, query=query, filter=filter)
+            return list(result[field])
 
-            task = asyncio.current_task()
-            cancellations = task.cancelling() if task is not None else 0
-            try:
-                result = await self._wait(
-                    "search",
-                    None if math.isinf(remaining) else remaining,
-                    query=query,
-                    filter=filter,
-                )
-            except TimeoutError:
-                return
-
-            for value in result[field]:
-                # A buffered value must still give pending task cancellation a turn.
-                await asyncio.sleep(0)
-                if time.monotonic() >= deadline:
-                    return
-
-                yield value
-                if task is not None and task.cancelling() > cancellations:
-                    raise asyncio.CancelledError
+        return self._stream(timeout, receive)
 
     async def export_credentials(self) -> InboxCredentials:
         """Explicitly export sensitive identity restoration material."""
