@@ -6,7 +6,7 @@
 
 <p align="center"><em>Zero Retention. Simple. Free. Open Source.</em></p>
 
-<p align="center"><strong>Disposable email for AI agents and automated tests.</strong></p>
+<p align="center"><strong>Disposable email built for AI agents, QA and automation.</strong></p>
 
 <p align="center">
   <a href="https://ahrara.dev/">Website</a> ·
