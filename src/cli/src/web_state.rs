@@ -169,9 +169,11 @@ impl WebState {
     }
 }
 
-// One IPv6 client usually controls a whole /64; IPv4-mapped peers stay IPv4.
+// One IPv6 client usually controls a whole /64 and any local process every
+// loopback address; IPv4-mapped peers stay IPv4.
 fn login_client(ip: IpAddr) -> IpAddr {
     match ip.to_canonical() {
+        ip if ip.is_loopback() => IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
         IpAddr::V6(ip) => IpAddr::V6((u128::from(ip) & (u128::MAX << 64)).into()),
         ip => ip,
     }

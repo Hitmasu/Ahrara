@@ -549,6 +549,22 @@ async fn web_password_sessions_lan_and_persisted_acknowledgement() {
 }
 
 #[test]
+fn login_throttling_counts_every_loopback_address_as_one_client() {
+    let (_dir, core) = profile();
+
+    // Any local process can bind 127.0.0.0/8, so rotating sources must not reset the backoff.
+    for host in 1..=4 {
+        assert!(
+            core.web
+                .allow_login(std::net::Ipv4Addr::new(127, 0, 0, host).into())
+        );
+    }
+
+    assert!(!core.web.allow_login("127.1.2.3".parse().unwrap()));
+    assert!(!core.web.allow_login("::1".parse().unwrap()));
+}
+
+#[test]
 fn login_throttling_groups_ipv6_networks_and_evicts_instead_of_refusing() {
     let (_dir, core) = profile();
 
