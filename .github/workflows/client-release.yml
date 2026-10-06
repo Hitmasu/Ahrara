@@ -67,6 +67,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    # The signing key is a secret of this protected environment, never of the repository.
+    environment: release
     permissions:
       contents: write
     env:

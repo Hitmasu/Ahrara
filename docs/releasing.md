@@ -13,8 +13,13 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
   and `.qoder-plugin/plugin.json`. The workflow and `scripts/release-manifest.py`
   reject a release whose version differs from `src/cli/Cargo.toml`.
 - Configure repository variable `AHRARA_UPDATE_PUBLIC_KEY` with the Ed25519
-  public key as 64 hexadecimal characters and secret `AHRARA_RELEASE_SIGNING_KEY`
-  with its private PEM. Use a dedicated release key, never a user Identity.
+  public key as 64 hexadecimal characters. Use a dedicated release key, never a
+  user Identity.
+- Store its private PEM as secret `AHRARA_RELEASE_SIGNING_KEY` of the `release`
+  environment, not as a repository secret. The workflow runs from the pushed tag,
+  so anyone who can push a tag could otherwise change it to read the key. Require
+  reviewers for the environment, limit its deployments to `v*` tags, and protect
+  those tags with a ruleset.
 - Set repository variable `AHRARA_SERVER_PUBLIC_KEY` to the production relay's
   verified `ahrara_server_v1_...` public pin. Release binaries embed it and connect
   to `wss://ahrara.dev` automatically. The Tunnel must route `ahrara.dev` to the
