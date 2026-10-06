@@ -41,6 +41,8 @@ globalThis.ahraraStore = (() => {
     all: name => one(name, 'readonly', store => store.getAll()),
     count: name => one(name, 'readonly', store => store.count()),
     put: (name, value, key) => one(name, 'readwrite', store => key === undefined ? store.put(value) : store.put(value, key)),
+    // Rejects when the key exists.
+    add: (name, value, key) => one(name, 'readwrite', store => store.add(value, key)),
     remove: (names, key) => run(names, 'readwrite', transaction => names.forEach(name => transaction.objectStore(name).delete(key))),
     deliver: entries => run(['messages', 'raw'], 'readwrite', (transaction, done) => {
       const ids = entries.map(() => null);

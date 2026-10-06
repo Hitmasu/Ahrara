@@ -50,6 +50,9 @@ mod idb {
         /// Resolves to the record's key.
         #[wasm_bindgen(js_namespace = ahraraStore, catch)]
         pub async fn put(store: &str, value: &JsValue, key: &JsValue) -> Result<JsValue, JsValue>;
+        /// Rejects when the key exists.
+        #[wasm_bindgen(js_namespace = ahraraStore, catch)]
+        pub async fn add(store: &str, value: &JsValue, key: &JsValue) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(js_namespace = ahraraStore, catch)]
         pub async fn remove(stores: Array, key: &JsValue) -> Result<JsValue, JsValue>;
         /// Stores new deliveries; resolves to their ids, null for ones stored before.
@@ -648,13 +651,23 @@ async fn answer(
                                 StatusCode::BAD_REQUEST,
                             );
                         };
-                        // An imported key is already saved elsewhere.
-                        set_kv("backup", &true.into()).await?;
                         identity
                     }
                     _ => bail!("invalid action"),
                 };
-                set_kv("identity", &identity.export().as_str().into()).await?;
+                // Another tab may have stored an Identity meanwhile; never replace it.
+                let key = identity.export();
+                if idb::add("kv", &key.as_str().into(), &"identity".into())
+                    .await
+                    .is_err()
+                {
+                    return Ok(redirect("/"));
+                }
+                if form.action == "import" {
+                    // An imported key is already saved elsewhere.
+                    set_kv("backup", &true.into()).await?;
+                }
+
                 idb::emit("identity_changed", "{}");
                 Ok(redirect(if form.action == "import" {
                     "/addresses"
