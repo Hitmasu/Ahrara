@@ -228,6 +228,25 @@ fn identity_recovery_and_shared_go_rust_vectors() {
 }
 
 #[tokio::test]
+async fn addresses_from_the_browser_app_are_added_once_and_only_for_this_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = Core::open(config(dir.path())).unwrap();
+    let address = auth::address(&core.identity.route(), &[7; 8]);
+    let added = core.add_address(address.clone()).await.unwrap();
+    core.change_address(address.clone(), Some(false))
+        .await
+        .unwrap();
+    let again = core.add_address(address.clone()).await.unwrap();
+
+    assert_eq!((added.id, added.routing_address), (again.id, address));
+    assert!(again.enabled);
+    let other = auth::address(&Identity::generate().route(), &[7; 8]);
+
+    assert!(core.add_address(other).await.is_err());
+    assert!(core.add_address("not-an-address".into()).await.is_err());
+}
+
+#[tokio::test]
 async fn aliases_collisions_disabled_and_history_survive_deletion() {
     let dir = tempfile::tempdir().unwrap();
     let (core, _) = Core::open(config(dir.path())).unwrap();

@@ -348,6 +348,23 @@ impl Core {
         Ok(address)
     }
 
+    /// Receives mail for an address created elsewhere with this Identity, such as
+    /// in the browser app. An existing address is enabled again.
+    pub async fn add_address(&self, address: String) -> Result<Address> {
+        let (route, _, canonical) = crate::auth::decode_address(&address)
+            .map_err(|_| anyhow::anyhow!("invalid_argument: use the address's @ahrara.dev form"))?;
+        if route != self.identity.route() {
+            bail!("invalid_argument: address belongs to another Identity")
+        }
+
+        let address = self
+            .storage
+            .restore_address(self.identity.fingerprint(), canonical)
+            .await?;
+        self.emit("address_created", json!(address));
+        Ok(address)
+    }
+
     pub async fn change_address(&self, id: String, enabled: Option<bool>) -> Result<Address> {
         let address = self
             .storage

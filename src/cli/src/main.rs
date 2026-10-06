@@ -166,6 +166,9 @@ enum Address {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Receive mail for an address created elsewhere with this Identity, such as
+    /// in the browser app.
+    Add { address: String },
     List {
         #[arg(long, default_value_t = 0)]
         after_id: i64,
@@ -615,6 +618,7 @@ async fn run() -> Result<()> {
                     Ok(())
                 }
             }
+            Address::Add { address } => output(&core.add_address(address).await?),
             Address::List { after_id, limit } => output(
                 &core
                     .storage
