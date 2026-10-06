@@ -18,7 +18,8 @@ The default wait has **no time limit**. Reception is ready when creation returns
 and mail received before waiting remains available. A finite wait is explicit:
 
 ```java
-var email = inbox.waitForEmail(Duration.ofSeconds(30), "Verification", null);
+var email = inbox.waitForEmail(Duration.ofSeconds(30),
+    EmailFilter.builder().subject("Verification").build());
 ```
 
 A finite wait throws `TimeoutException` on expiry. Thread interruption throws
@@ -39,7 +40,7 @@ try (var emails = inbox.emails(Duration.ofMinutes(2))) {
 }
 
 inbox.receiveEmails(email -> processEmail(email)); // Unlimited until interrupted/error.
-inbox.receiveEmails(email -> processEmail(email), Duration.ofMinutes(2), null, null);
+inbox.receiveEmails(email -> processEmail(email), Duration.ofMinutes(2), null);
 ```
 
 Streams are sequential, lazy, and do not prefetch or create background threads.
@@ -109,9 +110,8 @@ to interpret all string conditions as case-insensitive Rust regex patterns.
 Recipient, envelope sender, and Message-ID patterns must match the whole value;
 other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
 case sensitivity; `RegexQuery` is case-sensitive unless `ignoreCase` is true.
-Header names and the `subject`/`from` wait arguments stay literal. Invalid
-patterns fail before consuming mail; omitting `.regex(true)` keeps literal
-matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+Header names stay literal. Invalid patterns fail before consuming mail; omitting
+`.regex(true)` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
 
 ## Persistent profiles and identity import
 

@@ -35,20 +35,9 @@ public record RegexQuery(
   }
 
   Map<String, Object> toNative(boolean all) {
-    return Map.of(
-        "kind",
-        "regex",
-        "pattern",
-        pattern,
-        "source",
-        source,
-        "ignore_case",
-        ignoreCase,
-        "multi_line",
-        multiLine,
-        "dot_matches_new_line",
-        dotMatchesNewLine,
-        "all",
-        all);
+    var query = NativeCore.encode(this);
+    query.put("kind", "regex");
+    query.put("all", all);
+    return query;
   }
 }

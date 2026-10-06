@@ -1,6 +1,5 @@
 package dev.ahrara;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -44,22 +43,5 @@ public record EmailFilter(
    */
   public static EmailFilterBuilder builder() {
     return new EmailFilterBuilder();
-  }
-
-  Map<String, Object> toNative() {
-    var result = new LinkedHashMap<String, Object>();
-    if (regex) result.put("regex", true);
-    if (sender != null) result.put("sender", sender);
-    if (subject != null) result.put("subject", subject);
-    if (to != null) result.put("to", to);
-    if (cc != null) result.put("cc", cc);
-    if (recipient != null) result.put("recipient", recipient);
-    if (envelopeSender != null) result.put("envelope_sender", envelopeSender);
-    if (messageId != null) result.put("message_id", messageId);
-    if (text != null) result.put("text", text);
-    if (hasAttachments != null) result.put("has_attachments", hasAttachments);
-    if (headers != null) result.put("headers", headers);
-
-    return result;
   }
 }

@@ -40,7 +40,6 @@ class ReceivingTest {
             received.add(email.subject());
           },
           Duration.ofMillis(250),
-          null,
           null);
 
       assertEquals(List.of("one", "two"), received);
@@ -85,7 +84,6 @@ class ReceivingTest {
                       Thread.currentThread().interrupt();
                     },
                     Duration.ofMillis(100),
-                    null,
                     null));
         assertTrue(Thread.currentThread().isInterrupted());
       } finally {

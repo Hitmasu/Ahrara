@@ -1,7 +1,5 @@
 package dev.ahrara;
 
-import com.fasterxml.jackson.databind.JsonNode;
-
 /**
  * Describes an attachment without loading its content.
  *
@@ -16,13 +14,4 @@ public record Attachment(
     String filename,
     String contentType,
     long size,
-    String contentDisposition) {
-  static Attachment fromNative(JsonNode value) {
-    return new Attachment(
-        value.path("attachment_id").asText(),
-        value.path("filename").asText(""),
-        value.path("content_type").asText(),
-        value.path("size").asLong(),
-        value.path("content_disposition").asText());
-  }
-}
+    String contentDisposition) {}

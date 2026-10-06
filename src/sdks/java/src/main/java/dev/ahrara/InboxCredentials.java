@@ -1,6 +1,5 @@
 package dev.ahrara;
 
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -22,10 +21,6 @@ public record InboxCredentials(String address, String recoveryKey) {
     if (address.isBlank() || recoveryKey.isBlank()) {
       throw new IllegalArgumentException("Both address and recovery key are required.");
     }
-  }
-
-  Map<String, String> toNative() {
-    return Map.of("address", address, "recovery_key", recoveryKey);
   }
 
   /**

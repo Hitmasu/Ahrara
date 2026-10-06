@@ -5,7 +5,10 @@ import java.lang.ref.Cleaner;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Spliterator;
@@ -69,9 +72,7 @@ public final class Inbox implements AutoCloseable {
    * @throws AhraraException if export fails
    */
   public InboxCredentials exportCredentials() {
-    JsonNode result = call("export_credentials");
-    return new InboxCredentials(
-        result.path("address").asText(), result.path("recovery_key").asText());
+    return NativeCore.decode(call("export_credentials"), InboxCredentials.class);
   }
 
   /**
@@ -102,32 +103,14 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public Email waitForEmail(Duration timeout) throws InterruptedException, TimeoutException {
-    return waitForEmail(timeout, null, null);
+    return waitForEmail(timeout, null);
   }
 
   /**
    * Waits for one matching email without discarding unmatched messages.
    *
-   * @param timeout positive timeout, or null for no time limit
-   * @param subject optional subject substring
-   * @param from optional sender substring
-   * @return the next matching email
-   * @throws InterruptedException if interrupted; only this wait is cancelled
-   * @throws TimeoutException if the supplied timeout expires
-   * @throws IllegalArgumentException if the timeout is invalid
-   * @throws AhraraException if reception fails
-   * @throws IllegalStateException if the inbox is closed
-   */
-  public Email waitForEmail(Duration timeout, String subject, String from)
-      throws InterruptedException, TimeoutException {
-    return waitForEmail(timeout, subject, from, null);
-  }
-
-  /**
-   * Waits for mail matching an additional object filter.
-   *
    * @param timeout optional positive timeout; null waits indefinitely
-   * @param filter additional AND conditions; nonmatching mail remains available
+   * @param filter optional AND conditions; nonmatching mail remains available
    * @return the next matching email
    * @throws InterruptedException if interrupted
    * @throws TimeoutException if the finite timeout expires
@@ -135,37 +118,8 @@ public final class Inbox implements AutoCloseable {
    */
   public Email waitForEmail(Duration timeout, EmailFilter filter)
       throws InterruptedException, TimeoutException {
-    return waitForEmail(timeout, null, null, filter);
-  }
-
-  /**
-   * Combines legacy subject/sender filters and an object filter with AND.
-   *
-   * @param timeout optional positive timeout; null waits indefinitely
-   * @param subject optional subject substring
-   * @param from optional sender substring
-   * @param filter additional conditions; unmatched mail remains available
-   * @return the next matching email
-   * @throws InterruptedException if interrupted
-   * @throws TimeoutException if the finite timeout expires
-   * @throws AhraraException if receiving or filter validation fails
-   */
-  public Email waitForEmail(Duration timeout, String subject, String from, EmailFilter filter)
-      throws InterruptedException, TimeoutException {
-    return awaitEmail(timeout, subject, from, filter, () -> false);
-  }
-
-  private Email awaitEmail(
-      Duration timeout, String subject, String from, EmailFilter filter, BooleanSupplier stopped)
-      throws InterruptedException, TimeoutException {
-    var request = new LinkedHashMap<String, Object>();
-    request.put("op", "wait");
-    if (subject != null) request.put("subject", subject);
-    if (from != null) request.put("from", from);
-    if (filter != null) request.put("filter", filter.toNative());
-
-    var result = awaitResult(timeout, request, stopped);
-    return result == null ? null : Email.fromNative(result.path("email"));
+    var result = awaitResult(timeout, request("wait", null, filter), () -> false);
+    return NativeCore.decode(result.path("email"), Email.class);
   }
 
   private JsonNode awaitResult(
@@ -226,7 +180,7 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public Stream<Email> emails() {
-    return emails(null, null, null);
+    return emails(null, null);
   }
 
   /**
@@ -238,91 +192,26 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public Stream<Email> emails(Duration duration) {
-    return emails(duration, null, null);
+    return emails(duration, null);
   }
 
   /**
    * Creates a lazy sequential stream. Duration starts on first advance and includes consumer time.
    *
    * @param duration optional positive total duration; null is unlimited
-   * @param subject optional subject substring
-   * @param from optional sender substring
+   * @param filter optional AND conditions retaining unmatched mail
    * @return a stream ending normally on duration expiry or close, without closing the inbox
    * @throws CancellationException during traversal if interrupted; the interrupt flag is restored
    * @throws IllegalArgumentException if duration is invalid
    * @throws IllegalStateException if the inbox is closed
-   * @throws AhraraException during traversal if reception fails
+   * @throws AhraraException during traversal if validation or reception fails
    */
-  public Stream<Email> emails(Duration duration, String subject, String from) {
-    return emails(duration, subject, from, null);
-  }
-
-  /**
-   * Creates a lazy stream with additional AND-combined email conditions.
-   *
-   * @param duration total duration including consumer time; null is unlimited
-   * @param subject optional subject substring
-   * @param from optional sender substring
-   * @param filter additional conditions retaining unmatched mail
-   * @return a sequential stream that leaves the inbox open when closed
-   * @throws CancellationException during traversal if interrupted, preserving the flag
-   * @throws AhraraException if validation or reception fails
-   */
-  public Stream<Email> emails(Duration duration, String subject, String from, EmailFilter filter) {
-    long limit = durationNanos(duration);
-    requireOpen();
-    var stopped = new AtomicBoolean();
-    var iterator =
-        new Spliterators.AbstractSpliterator<Email>(
-            Long.MAX_VALUE, Spliterator.ORDERED | Spliterator.NONNULL) {
-          private Long started;
-
-          @Override
-          public Spliterator<Email> trySplit() {
-            return null;
-          }
-
-          @Override
-          public boolean tryAdvance(Consumer<? super Email> action) {
-            Objects.requireNonNull(action, "action");
-            if (stopped.get()) {
-              return false;
-            }
-            if (Thread.currentThread().isInterrupted()) {
-              throw new CancellationException("Ahrara email stream interrupted.");
-            }
-            if (started == null) {
-              started = System.nanoTime();
-            }
-
-            long remaining = remainingNanos(limit, started);
-            if (remaining <= 0) {
-              return false;
-            }
-            try {
-              Email email =
-                  awaitEmail(
-                      limit == Long.MAX_VALUE ? null : Duration.ofNanos(remaining),
-                      subject,
-                      from,
-                      filter,
-                      stopped::get);
-              if (email == null) {
-                return false;
-              }
-
-              action.accept(email);
-              return true;
-            } catch (TimeoutException expired) {
-              return false;
-            } catch (InterruptedException interrupted) {
-              Thread.currentThread().interrupt();
-              throw new CancellationException("Ahrara email stream interrupted.");
-            }
-          }
-        };
-
-    return StreamSupport.stream(iterator, false).onClose(() -> stopped.set(true));
+  public Stream<Email> emails(Duration duration, EmailFilter filter) {
+    return results(
+        request("wait", null, filter),
+        result -> List.of(result.path("email")).iterator(),
+        email -> NativeCore.decode(email, Email.class),
+        duration);
   }
 
   /**
@@ -335,7 +224,7 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public void receiveEmails(Consumer<Email> handler) {
-    receiveEmails(handler, null, null, null);
+    receiveEmails(handler, null, null);
   }
 
   /**
@@ -343,34 +232,16 @@ public final class Inbox implements AutoCloseable {
    *
    * @param handler callback; its exceptions propagate and delivered mail remains consumed
    * @param duration optional positive total duration, including callback time; null is unlimited
-   * @param subject optional subject substring
-   * @param from optional sender substring
+   * @param filter optional AND conditions retaining nonmatching mail
    * @throws CancellationException if interrupted; the interrupt flag is restored
    * @throws IllegalArgumentException if duration is invalid
    * @throws NullPointerException if handler is null
-   * @throws AhraraException if receiving fails
+   * @throws AhraraException if validation or reception fails
    * @throws IllegalStateException if the inbox is closed
    */
-  public void receiveEmails(
-      Consumer<Email> handler, Duration duration, String subject, String from) {
-    receiveEmails(handler, duration, subject, from, null);
-  }
-
-  /**
-   * Invokes each callback sequentially for emails matching an additional filter.
-   *
-   * @param handler callback, whose exceptions propagate
-   * @param duration total receiving duration including callback work; null is unlimited
-   * @param subject optional subject substring
-   * @param from optional sender substring
-   * @param filter additional AND conditions retaining nonmatching mail
-   * @throws CancellationException if interrupted, preserving the interrupt flag
-   * @throws AhraraException if validation or reception fails
-   */
-  public void receiveEmails(
-      Consumer<Email> handler, Duration duration, String subject, String from, EmailFilter filter) {
+  public void receiveEmails(Consumer<Email> handler, Duration duration, EmailFilter filter) {
     Objects.requireNonNull(handler, "handler");
-    try (var stream = emails(duration, subject, from, filter)) {
+    try (var stream = emails(duration, filter)) {
       stream.forEachOrdered(handler);
     }
   }
@@ -408,7 +279,7 @@ public final class Inbox implements AutoCloseable {
       arguments.put("from", from);
     }
 
-    return EmailPage.fromNative(call("list", arguments));
+    return NativeCore.decode(call("list", arguments), EmailPage.class);
   }
 
   /**
@@ -420,7 +291,7 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public Email getEmail(long id) {
-    return Email.fromNative(call("get", Map.of("id", id)));
+    return NativeCore.decode(call("get", Map.of("id", id)), Email.class);
   }
 
   /**
@@ -458,7 +329,7 @@ public final class Inbox implements AutoCloseable {
   public AttachmentDownload getAttachment(long id, String attachmentId) {
     var value = call("attachment", Map.of("id", id, "attachment_id", attachmentId));
     return new AttachmentDownload(
-        Attachment.fromNative(value.path("attachment")),
+        NativeCore.decode(value.path("attachment"), Attachment.class),
         Base64.getDecoder().decode(value.path("content_base64").asText()));
   }
 
@@ -505,8 +376,8 @@ public final class Inbox implements AutoCloseable {
    * @throws IllegalStateException if the inbox is closed
    */
   public EmailHtml getHtml(long id, boolean allowRemote) {
-    var value = call("html", Map.of("id", id, "allow_remote", allowRemote));
-    return new EmailHtml(value.path("html").asText(), value.path("remote_resources").asInt());
+    return NativeCore.decode(
+        call("html", Map.of("id", id, "allow_remote", allowRemote)), EmailHtml.class);
   }
 
   /**
@@ -539,8 +410,9 @@ public final class Inbox implements AutoCloseable {
   public RegexMatch waitForRegexMatch(RegexQuery query, Duration timeout, EmailFilter filter)
       throws InterruptedException, TimeoutException {
     Objects.requireNonNull(query, "query");
-    var result = awaitResult(timeout, searchRequest(query.toNative(false), filter), () -> false);
-    return RegexMatch.fromNative(result.path("matches").get(0));
+    var result =
+        awaitResult(timeout, request("search", query.toNative(false), filter), () -> false);
+    return NativeCore.decode(result.path("matches").get(0), RegexMatch.class);
   }
 
   /**
@@ -570,7 +442,11 @@ public final class Inbox implements AutoCloseable {
   public Stream<RegexMatch> waitForRegexMatches(
       RegexQuery query, Duration duration, EmailFilter filter) {
     Objects.requireNonNull(query, "query");
-    return searchResults(query.toNative(true), "matches", duration, filter, RegexMatch::fromNative);
+    return results(
+        request("search", query.toNative(true), filter),
+        result -> result.path("matches").iterator(),
+        match -> NativeCore.decode(match, RegexMatch.class),
+        duration);
   }
 
   /**
@@ -606,7 +482,8 @@ public final class Inbox implements AutoCloseable {
     var result =
         awaitResult(
             timeout,
-            searchRequest(Map.of("kind", "xpath", "expression", expression, "all", false), filter),
+            request(
+                "search", Map.of("kind", "xpath", "expression", expression, "all", false), filter),
             () -> false);
 
     return result.path("values").get(0).asText();
@@ -639,12 +516,11 @@ public final class Inbox implements AutoCloseable {
   public Stream<String> waitForXPathValues(
       String expression, Duration duration, EmailFilter filter) {
     Objects.requireNonNull(expression, "expression");
-    return searchResults(
-        Map.of("kind", "xpath", "expression", expression, "all", true),
-        "values",
-        duration,
-        filter,
-        JsonNode::asText);
+    return results(
+        request("search", Map.of("kind", "xpath", "expression", expression, "all", true), filter),
+        result -> result.path("values").iterator(),
+        JsonNode::asText,
+        duration);
   }
 
   /**
@@ -702,30 +578,30 @@ public final class Inbox implements AutoCloseable {
     return waitForRegexMatches(new RegexQuery(pattern), duration, filter);
   }
 
-  private Map<String, Object> searchRequest(Map<String, Object> query, EmailFilter filter) {
+  private static Map<String, Object> request(
+      String operation, Map<String, Object> query, EmailFilter filter) {
     var request = new LinkedHashMap<String, Object>();
-    request.put("op", "search");
-    request.put("query", query);
-    if (filter != null) request.put("filter", filter.toNative());
+    request.put("op", operation);
+    if (query != null) request.put("query", query);
+    if (filter != null) request.put("filter", filter);
 
     return request;
   }
 
-  private <T> Stream<T> searchResults(
-      Map<String, Object> query,
-      String field,
-      Duration duration,
-      EmailFilter filter,
-      Function<JsonNode, T> decode) {
+  // Lazily yields each item of every matched native result; at most one result is buffered.
+  private <T> Stream<T> results(
+      Map<String, Object> request,
+      Function<JsonNode, Iterator<JsonNode>> items,
+      Function<JsonNode, T> decode,
+      Duration duration) {
     long limit = durationNanos(duration);
     requireOpen();
-    var request = searchRequest(query, filter);
     var stopped = new AtomicBoolean();
     var iterator =
         new Spliterators.AbstractSpliterator<T>(
             Long.MAX_VALUE, Spliterator.ORDERED | Spliterator.NONNULL) {
           private Long started;
-          private java.util.Iterator<JsonNode> pending = java.util.Collections.emptyIterator();
+          private Iterator<JsonNode> pending = Collections.emptyIterator();
 
           @Override
           public Spliterator<T> trySplit() {
@@ -737,14 +613,16 @@ public final class Inbox implements AutoCloseable {
             Objects.requireNonNull(action, "action");
             if (stopped.get()) return false;
             if (Thread.currentThread().isInterrupted()) {
-              throw new CancellationException("Ahrara search interrupted.");
+              throw new CancellationException("Ahrara stream interrupted.");
             }
             if (started == null) started = System.nanoTime();
+            if (remainingNanos(limit, started) <= 0) return false;
 
-            long remaining = remainingNanos(limit, started);
-            if (remaining <= 0) return false;
             try {
               while (!pending.hasNext()) {
+                long remaining = remainingNanos(limit, started);
+                if (remaining <= 0) return false;
+
                 JsonNode result =
                     awaitResult(
                         limit == Long.MAX_VALUE ? null : Duration.ofNanos(remaining),
@@ -752,9 +630,7 @@ public final class Inbox implements AutoCloseable {
                         stopped::get);
                 if (result == null) return false;
 
-                pending = result.path(field).iterator();
-                remaining = remainingNanos(limit, started);
-                if (remaining <= 0) return false;
+                pending = items.apply(result);
               }
 
               action.accept(decode.apply(pending.next()));
@@ -763,7 +639,7 @@ public final class Inbox implements AutoCloseable {
               return false;
             } catch (InterruptedException interrupted) {
               Thread.currentThread().interrupt();
-              throw new CancellationException("Ahrara search interrupted.");
+              throw new CancellationException("Ahrara stream interrupted.");
             }
           }
         };

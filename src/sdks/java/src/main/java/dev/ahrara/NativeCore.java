@@ -1,7 +1,11 @@
 package dev.ahrara;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
@@ -13,7 +17,13 @@ import java.util.Locale;
 import java.util.Map;
 
 final class NativeCore {
-  private static final ObjectMapper JSON = new ObjectMapper();
+  // Records map to the core's snake_case JSON; null options are omitted.
+  private static final ObjectMapper JSON =
+      JsonMapper.builder()
+          .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+          .serializationInclusion(JsonInclude.Include.NON_NULL)
+          .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+          .build();
   private static final Api API = load();
 
   interface Api extends Library {
@@ -98,5 +108,18 @@ final class NativeCore {
     } finally {
       if (response != null) API.ahrara_string_free(response);
     }
+  }
+
+  static <T> T decode(JsonNode value, Class<T> type) {
+    try {
+      return JSON.treeToValue(value, type);
+    } catch (IOException error) {
+      throw new IllegalStateException("Invalid Ahrara native JSON response.", error);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  static Map<String, Object> encode(Object value) {
+    return JSON.convertValue(value, Map.class);
   }
 }

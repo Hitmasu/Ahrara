@@ -13,7 +13,8 @@ class InboxTest {
   void buffersUnicodeMailAndConsumesOnlyOnce() throws Exception {
     try (var inbox = Ahrara.createInbox(Relay.options())) {
       Relay.send(inbox.address(), "Confirmação 日本語", "Verification code: 123456");
-      var email = inbox.waitForEmail(Duration.ofSeconds(10), "日本語", null);
+      var email =
+          inbox.waitForEmail(Duration.ofSeconds(10), EmailFilter.builder().subject("日本語").build());
 
       assertEquals("Confirmação 日本語", email.subject());
       assertTrue(email.textBody().contains("123456"));
@@ -33,7 +34,10 @@ class InboxTest {
 
       assertEquals(
           "Verification",
-          first.waitForEmail(Duration.ofSeconds(10), "Verification", null).subject());
+          first
+              .waitForEmail(
+                  Duration.ofSeconds(10), EmailFilter.builder().subject("Verification").build())
+              .subject());
       assertEquals("Earlier", first.waitForEmail().subject());
       assertEquals("Second inbox", second.waitForEmail().subject());
     }

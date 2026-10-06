@@ -1,8 +1,8 @@
 package dev.ahrara;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * Connection, identity, and storage settings. Null values use native defaults.
@@ -21,7 +21,7 @@ public record InboxOptions(
     String serverUrl,
     String serverPublicKey,
     String tlsCaPath,
-    Duration connectTimeout,
+    @JsonIgnore Duration connectTimeout,
     InboxCredentials credentials,
     String profilePath,
     String recoveryKey,
@@ -139,19 +139,9 @@ public record InboxOptions(
         value);
   }
 
-  Map<String, Object> toNative() {
-    var options = new LinkedHashMap<String, Object>();
-    if (serverUrl != null) options.put("server_url", serverUrl);
-    if (serverPublicKey != null) options.put("server_public_key", serverPublicKey);
-    if (tlsCaPath != null) options.put("tls_ca_path", tlsCaPath);
-    if (connectTimeout != null) options.put("connect_timeout_ms", connectTimeout.toMillis());
-    if (credentials != null) options.put("credentials", credentials.toNative());
-    if (profilePath != null) options.put("profile_path", profilePath);
-    if (recoveryKey != null) options.put("recovery_key", recoveryKey);
-    if (address != null) options.put("address", address);
-    if (filter != null) options.put("filter", filter.toNative());
-
-    return options;
+  @JsonProperty("connect_timeout_ms")
+  Long connectTimeoutMs() {
+    return connectTimeout == null ? null : connectTimeout.toMillis();
   }
 
   /**

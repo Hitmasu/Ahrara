@@ -25,7 +25,7 @@ public final class Ahrara {
    * @throws NullPointerException if options is null
    */
   public static Inbox createInbox(InboxOptions options) {
-    var result = NativeCore.call(Map.of("op", "create", "options", options.toNative()));
+    var result = NativeCore.call(Map.of("op", "create", "options", options));
     return new Inbox(result.path("handle").asLong(), result.path("address").asText());
   }
 }

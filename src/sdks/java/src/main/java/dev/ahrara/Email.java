@@ -1,8 +1,6 @@
 package dev.ahrara;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
-import java.util.stream.StreamSupport;
 
 /**
  * A parsed email.
@@ -47,28 +45,8 @@ public record Email(
     String date,
     String forwardedTo,
     boolean parseError) {
-  static Email fromNative(JsonNode node) {
-    return new Email(
-        node.path("id").asLong(),
-        node.path("subject").asText(""),
-        node.path("from").asText(""),
-        node.path("to").asText(""),
-        node.path("text_body").asText(""),
-        node.path("text_body_truncated").asBoolean(),
-        node.path("html_available").asBoolean(),
-        StreamSupport.stream(node.path("attachments").spliterator(), false)
-            .map(Attachment::fromNative)
-            .toList(),
-        node.path("transfer_id").asText(),
-        node.path("identity_fingerprint").asText(),
-        node.path("recipient").asText(),
-        node.path("envelope_sender").asText(),
-        node.path("received_at").asText(),
-        node.path("size_bytes").asLong(),
-        node.path("message_id").asText(null),
-        node.path("cc").asText(),
-        node.path("date").asText(),
-        node.path("forwarded_to").asText(null),
-        node.path("parse_error").asBoolean());
+  /** Copies attachment metadata to keep the email immutable. */
+  public Email {
+    attachments = attachments == null ? null : List.copyOf(attachments);
   }
 }

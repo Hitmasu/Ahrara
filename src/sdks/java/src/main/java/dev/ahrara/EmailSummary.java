@@ -1,7 +1,5 @@
 package dev.ahrara;
 
-import com.fasterxml.jackson.databind.JsonNode;
-
 /**
  * Metadata for a stored email. Read the full email to obtain its body and attachments.
  *
@@ -28,19 +26,4 @@ public record EmailSummary(
     String identityFingerprint,
     String recipient,
     String envelopeSender,
-    String messageId) {
-  static EmailSummary fromNative(JsonNode value) {
-    return new EmailSummary(
-        value.path("id").asLong(),
-        value.path("subject").asText(),
-        value.path("from").asText(),
-        value.path("to").asText(),
-        value.path("received_at").asText(),
-        value.path("size_bytes").asLong(),
-        value.path("transfer_id").asText(),
-        value.path("identity_fingerprint").asText(),
-        value.path("recipient").asText(),
-        value.path("envelope_sender").asText(),
-        value.path("message_id").asText(null));
-  }
-}
+    String messageId) {}
