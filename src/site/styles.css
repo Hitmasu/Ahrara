@@ -115,7 +115,7 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 /* Narrow columns wrap long commands at spaces instead of hiding them behind a scrollbar. */
 .usage .command code { font-size: 14px; white-space: pre-wrap; }
 .envelope { padding: 1px; border-radius: 16px; background: linear-gradient(135deg, rgba(232, 48, 47, .75), rgba(249, 184, 18, .5) 50%, rgba(22, 135, 255, .75)); }
-.installer { padding: 22px 24px 18px; border-radius: 15px; background: linear-gradient(180deg, var(--surface-raised), var(--surface) 70%); }
+.installer, .web-card { padding: 22px 24px 18px; border-radius: 15px; background: linear-gradient(180deg, var(--surface-raised), var(--surface) 70%); }
 .install-note { margin-top: 16px; color: var(--secondary); font-size: 14px; }
 
 /* 8. Installation methods and integrated command */
@@ -202,6 +202,27 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 .terminal-inbox .terminal-received { width: 160px; }
 .terminal-inbox .terminal-from { width: 25%; }
 .terminal-inbox .terminal-size { width: 64px; }
+
+/* Browser preview: the web app's inbox in a window edged with the macaw's feathers. */
+.web-app { margin-top: 16px; }
+.browser-preview { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: #0a0f17; box-shadow: 0 30px 80px rgba(0, 0, 0, .35); }
+.browser-bar { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.browser-feathers { display: flex; gap: 6px; }
+.browser-feathers i { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+.browser-feathers i + i { background: var(--yellow); }
+.browser-feathers i + i + i { background: var(--blue); }
+.browser-url { flex: 1; padding: 5px 12px; border-radius: 999px; background: var(--background); color: var(--secondary); font: 12px/1.4 var(--mono); }
+.browser-page { padding: 20px; }
+.browser-heading { margin-bottom: 14px; font-size: 18px; font-weight: 720; letter-spacing: -.02em; }
+.browser-heading span { margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: rgba(47, 124, 246, .16); color: var(--link); font-size: 12px; vertical-align: 2px; }
+.browser-inbox { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.browser-inbox li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--surface); }
+.browser-inbox li + li { border-top: 1px solid var(--border); }
+.browser-avatar { display: grid; place-items: center; flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 13px; font-weight: 700; }
+.browser-inbox li + li .browser-avatar { background: var(--red); }
+.browser-message { display: grid; flex: 1; min-width: 0; font-size: 14px; }
+.browser-message span { overflow: hidden; color: var(--secondary); text-overflow: ellipsis; white-space: nowrap; }
+.browser-inbox time { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
 /* 11. Agents */
 .agent-chat { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 15px; }
@@ -316,7 +337,7 @@ main p a:hover, .install-note a:hover { color: var(--text); }
   .section-heading { margin-bottom: 32px; }
   .section-heading p { font-size: 16px; }
   .envelope { border-radius: 13px; }
-  .installer { padding: 18px 14px 16px; border-radius: 12px; }
+  .installer, .web-card { padding: 18px 14px 16px; border-radius: 12px; }
   .install-panel { flex-direction: column; align-items: stretch; padding: 12px; gap: 8px; }
   .command { gap: 8px; }
   .command code { font-size: 12.5px; white-space: pre-wrap; }

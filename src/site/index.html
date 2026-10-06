@@ -85,7 +85,7 @@
       <h1 id="hero-title">Ahrara</h1>
       <p class="hero-tagline">Zero Retention. Simple. Free. Open Source.</p>
       <p class="headline">Disposable email for AI agents and automated tests</p>
-      <p class="hero-lede">Receive any email in an inbox on your computer. Use it from the terminal, your AI agent or your tests.</p>
+      <p class="hero-lede">Receive any email right in your browser or in an inbox on your computer. Use it from the terminal, your AI agent or your tests.</p>
     </section>
 
     <section class="about container" id="about" aria-labelledby="about-title">
@@ -109,8 +109,30 @@
     <section class="section how-to container" id="how-to-use" aria-labelledby="how-to-title">
       <div class="section-heading">
         <h2 id="how-to-title">How to use</h2>
-        <p>Read your email in the terminal, hand it to your AI agent, or assert on it from your tests.</p>
+        <p>Read your email in the browser or the terminal, hand it to your AI agent, or assert on it from your tests.</p>
       </div>
+
+      <section class="usage usage-flip" id="browser" aria-labelledby="browser-title">
+        <div class="usage-copy">
+          <h3 id="browser-title">In the browser</h3>
+          <p>Nothing to install: open the web app, create your address and read your emails right there. Your key and your inbox stay in your browser.</p>
+          <div class="envelope">
+            <div class="web-card">
+              <p class="installer-platforms">Current browsers on desktop and mobile.</p>
+              <a class="button button-primary web-app" href="https://app.ahrara.dev">Open the web app</a>
+              <p class="install-hint">Keep the tab open to receive emails. <a href="docs/#receive-app-support">What the browser version supports</a>.</p>
+            </div>
+          </div>
+        </div>
+        <figure class="browser-preview">
+          <figcaption class="visually-hidden">Example of the Ahrara web app with two received emails.</figcaption>
+          <div class="browser-bar" aria-hidden="true"><span class="browser-feathers"><i></i><i></i><i></i></span><span class="browser-url">app.ahrara.dev</span></div>
+          <div class="browser-page">
+            <p class="browser-heading">Inbox <span>2</span></p>
+            <ul class="browser-inbox"><li><span class="browser-avatar" aria-hidden="true">G</span><span class="browser-message"><strong>GitHub</strong><span>Your verification code: 482916</span></span><time>Just now</time></li><li><span class="browser-avatar" aria-hidden="true">L</span><span class="browser-message"><strong>Linear</strong><span>You&#39;re invited to the workspace</span></span><time>Just now</time></li></ul>
+          </div>
+        </figure>
+      </section>
 
       <section class="usage" id="install" aria-labelledby="cli-title">
         <!-- TODO: Before announcing, confirm that the Homebrew tap, the hosted
