@@ -117,7 +117,7 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 /* Narrow columns wrap long commands at spaces instead of hiding them behind a scrollbar. */
 .usage .command code { font-size: 14px; white-space: pre-wrap; }
 .envelope { padding: 1px; border-radius: 16px; background: linear-gradient(135deg, rgba(232, 48, 47, .75), rgba(249, 184, 18, .5) 50%, rgba(22, 135, 255, .75)); }
-.installer, .web-card { padding: 22px 24px 18px; border-radius: 15px; background: linear-gradient(180deg, var(--surface-raised), var(--surface) 70%); }
+.installer { padding: 22px 24px 18px; border-radius: 15px; background: linear-gradient(180deg, var(--surface-raised), var(--surface) 70%); }
 .install-note { margin-top: 16px; color: var(--secondary); font-size: 14px; }
 
 /* 8. Installation methods and integrated command */
@@ -206,7 +206,7 @@ main p a:hover, .install-note a:hover { color: var(--text); }
 .terminal-inbox .terminal-size { width: 64px; }
 
 /* Browser preview: the web app's inbox in a window edged with the macaw's feathers. */
-.web-app { margin-top: 16px; }
+.web-app { margin-top: 28px; }
 .browser-preview { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: #0a0f17; box-shadow: 0 30px 80px rgba(0, 0, 0, .35); }
 .browser-bar { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .browser-feathers { display: flex; gap: 6px; }
@@ -339,7 +339,7 @@ main p a:hover, .install-note a:hover { color: var(--text); }
   .section-heading { margin-bottom: 32px; }
   .section-heading p { font-size: 16px; }
   .envelope { border-radius: 13px; }
-  .installer, .web-card { padding: 18px 14px 16px; border-radius: 12px; }
+  .installer { padding: 18px 14px 16px; border-radius: 12px; }
   .install-panel { flex-direction: column; align-items: stretch; padding: 12px; gap: 8px; }
   .command { gap: 8px; }
   .command code { font-size: 12.5px; white-space: pre-wrap; }
