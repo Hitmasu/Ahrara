@@ -15,7 +15,7 @@ export default function () {
   const inbox = ahrara.createInbox({});
   try {
     // Trigger the application under test with inbox.address.
-    const email = inbox.waitForEmail({ subject: 'Verify' });
+    const email = inbox.waitForEmail({ filter: { subject: 'Verify' } });
     // Check email.textBody.
   } finally {
     inbox.close();
@@ -24,7 +24,7 @@ export default function () {
 ```
 
 Create inboxes during VU execution. A receive has no timeout unless you pass
-`durationMs`, for example `inbox.waitForEmail({ subject: 'Verify', durationMs: 30000 })`;
+`durationMs`, for example `inbox.waitForEmail({ filter: { subject: 'Verify' }, durationMs: 30000 })`;
 expiry throws. Otherwise it waits for mail, VU cancellation, close, or an error.
 It blocks only the current virtual user.
 The receiver stores mail that arrives before a wait, and each matched message
@@ -43,7 +43,7 @@ const processed = inbox.forEachEmail(email => {
   // Check this email before receiving another one.
   received++;
   return received < 3;
-}, { subject: 'Notification' });
+}, { filter: { subject: 'Notification' } });
 ```
 
 An optional `{ durationMs: 60000 }` limits the **whole loop**, including time
@@ -61,8 +61,7 @@ are `sender`, `subject`, `to`, `cc`, `text`, `headers`, `recipient`,
 `envelopeSender`, `messageId` and `hasAttachments`. Header/body checks are
 case-insensitive substrings; envelope fields and Message-ID match the whole value,
 ignoring case. `headers` maps a header name to a substring, including repeated
-headers. Top-level `subject`/`from` options are literal substrings, even when
-`filter.regex` is set, and cannot be combined with the same nested filter fields.
+headers.
 
 Use `filter: { regex: true, subject: '^(Verification|Confirm email)$' }` to
 interpret all string conditions as case-insensitive Rust regex patterns.
@@ -129,7 +128,6 @@ the two import forms. No offline relay queue is created by restoring credentials
 WSS close waits up to five seconds for the relay to disconnect, then drops the
 socket. Immediate identity reuse is verified with a healthy relay; after a
 network failure, the identity can remain occupied until the relay cleans up.
-SSE teardown remains asynchronous.
 
 `String(credentials)` and `JSON.stringify(credentials)` redact the key. Reading
 `credentials.recoveryKey` is an explicit secret export; store it securely and

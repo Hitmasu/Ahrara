@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"regexp"
 	"time"
 
 	sdk "github.com/Hitmasu/Ahrara/src/sdks/go"
@@ -22,7 +21,7 @@ type RegexOptions struct {
 	// DotMatchesNewLine lets . match newlines.
 	DotMatchesNewLine bool `js:"dotMatchesNewLine"`
 	// Filter is applied after the inbox admission filter and before extraction.
-	Filter *sdk.Filter `js:"filter"`
+	Filter sdk.Filter `js:"filter"`
 	// DurationMS bounds the entire operation, including callbacks; zero uses the VU lifetime.
 	DurationMS int64 `js:"durationMs"`
 }
@@ -30,56 +29,19 @@ type RegexOptions struct {
 // XPathOptions selects eligible messages and an optional total duration.
 type XPathOptions struct {
 	// Filter selects messages after the inbox's admission filter.
-	Filter *sdk.Filter `js:"filter"`
+	Filter sdk.Filter `js:"filter"`
 	// DurationMS bounds the whole operation; zero uses the VU lifetime.
 	DurationMS int64 `js:"durationMs"`
 }
 
-// receiveFilter adds top-level subject/from options, which stay literal
-// substrings as in the other SDKs even when filter.regex is set.
-func receiveFilter(subject, from string, filter *sdk.Filter) (sdk.Filter, error) {
-	var result sdk.Filter
-	if filter != nil {
-		result = *filter
-	}
-
-	literal := func(value string) string {
-		if result.Regex {
-			return regexp.QuoteMeta(value)
-		}
-
-		return value
-	}
-	if subject != "" {
-		if result.Subject != "" {
-			return result, errors.New("subject and filter.subject are mutually exclusive")
-		}
-
-		result.Subject = literal(subject)
-	}
-	if from != "" {
-		if result.From != "" {
-			return result, errors.New("from and filter.sender are mutually exclusive")
-		}
-
-		result.From = literal(from)
-	}
-
-	return result, nil
-}
-
 func (o RegexOptions) options() sdk.RegexOptions {
-	result := sdk.RegexOptions{
+	return sdk.RegexOptions{
 		Source:            o.Source,
 		IgnoreCase:        o.IgnoreCase,
 		MultiLine:         o.MultiLine,
 		DotMatchesNewLine: o.DotMatchesNewLine,
+		Filter:            o.Filter,
 	}
-	if o.Filter != nil {
-		result.Filter = *o.Filter
-	}
-
-	return result
 }
 
 func queryContext(ctx context.Context, durationMS int64) (context.Context, context.CancelFunc, error) {
@@ -120,8 +82,7 @@ func (i *Inbox) WaitForXPath(expression string, options XPathOptions) (string, e
 	}
 
 	defer cancel()
-	filter, _ := receiveFilter("", "", options.Filter)
-	return i.inner.WaitForXPath(ctx, expression, filter)
+	return i.inner.WaitForXPath(ctx, expression, options.Filter)
 }
 
 // ForEachRegexMatch invokes a synchronous callback for every occurrence across
@@ -134,19 +95,7 @@ func (i *Inbox) ForEachRegexMatch(pattern string, callback sobek.Value, options 
 	}
 
 	defer cancel()
-	values := func(yield func(any, error) bool) {
-		for match, err := range i.inner.WaitForRegexMatches(ctx, pattern, options.options()) {
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			if !yield(regexValue(match), nil) {
-				return
-			}
-		}
-	}
-
-	return i.forEachQuery(callback, values)
+	return forEach(i, callback, i.inner.WaitForRegexMatches(ctx, pattern, options.options()), regexValue)
 }
 
 // ForEachXPathValue invokes callback in document order across every eligible
@@ -159,22 +108,15 @@ func (i *Inbox) ForEachXPathValue(expression string, callback sobek.Value, optio
 	}
 
 	defer cancel()
-	filter, _ := receiveFilter("", "", options.Filter)
-	values := func(yield func(any, error) bool) {
-		for value, err := range i.inner.WaitForXPathValues(ctx, expression, filter) {
-			if !yield(value, err) || err != nil {
-				return
-			}
-		}
-	}
-
-	return i.forEachQuery(callback, values)
+	return forEach(i, callback, i.inner.WaitForXPathValues(ctx, expression, options.Filter), func(value string) string { return value })
 }
 
-func (i *Inbox) forEachQuery(callback sobek.Value, values iter.Seq2[any, error]) (int64, error) {
+// forEach passes each converted value to a synchronous callback. An expired
+// optional duration ends the loop normally; other errors propagate.
+func forEach[T, R any](i *Inbox, callback sobek.Value, values iter.Seq2[T, error], convert func(T) R) (int64, error) {
 	fn, ok := sobek.AssertFunction(callback)
 	if !ok {
-		return 0, errors.New("query callback must be a function")
+		return 0, errors.New("callback must be a function")
 	}
 
 	var count int64
@@ -188,12 +130,12 @@ func (i *Inbox) forEachQuery(callback sobek.Value, values iter.Seq2[any, error])
 		}
 
 		count++
-		result, err := fn(sobek.Undefined(), i.vu.Runtime().ToValue(value))
+		result, err := fn(sobek.Undefined(), i.vu.Runtime().ToValue(convert(value)))
 		if err != nil {
 			return count, err
 		}
 		if _, asynchronous := result.Export().(*sobek.Promise); asynchronous {
-			return count, errors.New("query callbacks must be synchronous")
+			return count, errors.New("callbacks must be synchronous")
 		}
 		if value, isBoolean := result.Export().(bool); isBoolean && !value {
 			return count, nil

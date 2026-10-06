@@ -75,26 +75,10 @@ type Options struct {
 
 // ReceiveOptions selects matching messages and an optional deadline.
 type ReceiveOptions struct {
-	// Subject matches a literal substring of the subject header, even with filter.regex.
-	Subject string `js:"subject"`
-	// From matches a literal substring of the sender header, even with filter.regex.
-	From string `js:"from"`
-	// Filter combines sender, subject, headers, body and envelope conditions.
-	Filter *sdk.Filter `js:"filter"`
-	// DurationMS bounds the wait; expiry throws. Zero waits until VU cancellation.
-	DurationMS int64 `js:"durationMs"`
-}
-
-// ForEachOptions selects messages and an optional deadline for the whole loop.
-type ForEachOptions struct {
-	// Subject matches a literal substring of the subject header, even with filter.regex.
-	Subject string `js:"subject"`
-	// From matches a literal substring of the sender header, even with filter.regex.
-	From string `js:"from"`
 	// Filter runs after admission and leaves nonmatches available.
-	Filter *sdk.Filter `js:"filter"`
-	// DurationMS bounds the whole callback loop. Zero runs until cancellation,
-	// close, callback failure, or a callback returning false.
+	Filter sdk.Filter `js:"filter"`
+	// DurationMS bounds a wait, which throws on expiry, or a whole forEachEmail
+	// loop, which then returns its count. Zero runs until VU cancellation.
 	DurationMS int64 `js:"durationMs"`
 }
 
@@ -151,18 +135,13 @@ func (m *Module) CreateInbox(options Options) (*Inbox, error) {
 // cancellation, Close, or an error. The synchronous call blocks only this
 // virtual user.
 func (i *Inbox) WaitForEmail(options ReceiveOptions) (map[string]any, error) {
-	filter, err := receiveFilter(options.Subject, options.From, options.Filter)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel, err := queryContext(i.ctx, options.DurationMS)
 	if err != nil {
 		return nil, err
 	}
 
 	defer cancel()
-	email, err := i.inner.WaitForEmail(ctx, filter)
+	email, err := i.inner.WaitForEmail(ctx, options.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -175,46 +154,14 @@ func (i *Inbox) WaitForEmail(options ReceiveOptions) (map[string]any, error) {
 // No messages are prefetched. DurationMS is a total loop duration, checked between
 // callbacks and during waits; an executing callback must return cooperatively.
 // The return value is the number of callbacks invoked.
-func (i *Inbox) ForEachEmail(callback sobek.Value, options ForEachOptions) (int64, error) {
-	fn, ok := sobek.AssertFunction(callback)
-	if !ok {
-		return 0, errors.New("email callback must be a function")
-	}
-
-	filter, err := receiveFilter(options.Subject, options.From, options.Filter)
-	if err != nil {
-		return 0, err
-	}
-
+func (i *Inbox) ForEachEmail(callback sobek.Value, options ReceiveOptions) (int64, error) {
 	ctx, cancel, err := queryContext(i.ctx, options.DurationMS)
 	if err != nil {
 		return 0, err
 	}
 
 	defer cancel()
-	var count int64
-
-	for {
-		email, err := i.inner.WaitForEmail(ctx, filter)
-		if errors.Is(err, context.DeadlineExceeded) && i.ctx.Err() == nil {
-			return count, nil
-		}
-		if err != nil {
-			return count, err
-		}
-
-		count++
-		result, err := fn(sobek.Undefined(), i.vu.Runtime().ToValue(emailValue(email)))
-		if err != nil {
-			return count, err
-		}
-		if _, asynchronous := result.Export().(*sobek.Promise); asynchronous {
-			return count, errors.New("forEachEmail requires a synchronous callback")
-		}
-		if value, isBoolean := result.Export().(bool); isBoolean && !value {
-			return count, nil
-		}
-	}
+	return forEach(i, callback, i.inner.Emails(ctx, options.Filter), emailValue)
 }
 
 // ExportCredentials returns explicit access to the secret needed to restore this identity.

@@ -60,7 +60,7 @@ export default function () {
 
     const subject = `k6 isolated VU ${__VU}`;
     send(subject);
-    const email = inbox.waitForEmail({ subject });
+    const email = inbox.waitForEmail({ filter: { subject } });
     check(email, {
       "received this VU message through Rust": (value) =>
         value !== null && value.subject === subject,
@@ -216,16 +216,16 @@ export default function () {
       });
       check(
         queried.waitForEmail({
-          subject: "literal (1)",
           durationMs: 2000,
           filter: {
             regex: true,
+            subject: "literal \\(1\\)",
             envelopeSender: "sender@example\\.test",
             text: "^7{6} is",
           },
         }),
         {
-          "top-level subject stays literal with a regex filter": (value) =>
+          "regex filter matches escaped literals": (value) =>
             value.subject === "Query literal (1)",
         },
       );
