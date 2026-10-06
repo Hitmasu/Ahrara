@@ -20,8 +20,7 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   derived from the Recovery Identity. Anyone with the Identity file or Recovery
   Key and the database can decrypt it. Runtime memory, earlier plaintext copies,
   exported EML, and attachments are outside this protection.
-- Database conversion and import validate integrity before replacing data.
-  Import requires the matching Recovery Key, an offline destination, and explicit
+- Database import validates integrity before replacing data. It requires the matching Recovery Key, an offline destination, and explicit
   `--replace` to overwrite an existing inbox. Identity replacement is refused
   while an inbox exists.
 - Local MCP uses HTTP and requires the local API bearer token by default, even on

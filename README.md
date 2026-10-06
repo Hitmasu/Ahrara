@@ -247,8 +247,16 @@ and propose focused changes through pull requests. Keep code and repository
 documentation in English; the website is also maintained in Portuguese and
 Spanish.
 
+## 🙏 Acknowledgments
+
+The relay's integrated Cloudflare Tunnel connector is derived from
+[libcfd](https://github.com/apersomany/libcfd) by apersomany. Thank you for
+building a programmable Tunnel client in Rust; Ahrara's connector starts from
+it under the Apache-2.0 license, as recorded in the
+[server notice](src/server/NOTICE).
+
 ## 📄 License
 
-[MIT](LICENSE). Vendored dependencies and icons retain their licenses:
-[shared dependencies](src/third_party/README.md), [server](src/server/third_party/README.md),
-and [icons](src/site/assets/icons/README.md).
+[MIT](LICENSE). Vendored dependencies, derived code, and icons retain their
+licenses: [shared dependencies](src/third_party/README.md),
+[server](src/server/NOTICE), and [icons](src/site/assets/icons/README.md).

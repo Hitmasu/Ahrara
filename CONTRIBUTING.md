@@ -99,8 +99,7 @@ Integration tests need `make dev-certs` and the development relay. Stop the
 interactive client before running them. For bug fixes, reproduce the failure with
 a regression test when practical. Check documentation links and commands; preview
 site changes in a browser. Vendored dependency checks are documented in
-[src/third_party/README.md](src/third_party/README.md) and
-[src/server/third_party/README.md](src/server/third_party/README.md).
+[src/third_party/README.md](src/third_party/README.md).
 
 ### SDK development
 
@@ -174,7 +173,8 @@ Preview the site with `python3 -m http.server 8080 --bind 127.0.0.1 --directory 
 Static hosting publishes the contents of `src/site/`.
 
 The landing page and the documentation each exist in English, Brazilian Portuguese
-and Spanish. The pages of each part share one stylesheet and one script:
+and Spanish. The pages of each part share one stylesheet and one script, and both
+parts load `src/site/listbox.js`, the icon dropdown of the installers and agent picker:
 
 | Part | English | Brazilian Portuguese | Spanish | Shared |
 |---|---|---|---|---|
@@ -187,8 +187,7 @@ links) keeps the reader's place and deep links work in every language; they reac
 shared files and assets with `../`. The documentation is a single page per
 language: the URL hash selects which `<article class="page">` is shown. The docs
 script adds navigation, search, synchronized example tabs, the theme toggle and
-copy buttons, and maps IDs from the previous documentation to their new sections;
-update that map when you rename or remove an ID.
+copy buttons.
 
 The scripts contain no user-visible text. Each page declares its interface strings
 in a `<script type="application/json" id="ui-strings">` block: translate the
@@ -214,8 +213,7 @@ playwright-cli run-code --filename=tests/site.smoke.js
 ```
 
 This checks the landing page's installers, language menu and links into the docs;
-every docs page, links from the previous documentation, synchronized tabs, the
-clipboard, search, the theme toggle, mobile navigation and the language menu. For
+every docs page, synchronized tabs, the agent picker, the clipboard, search, the theme toggle, mobile navigation and the language menu. For
 each language present, it compares element IDs and interface keys with English,
 checks the `lang` attribute and shared files, and reads the page without
 JavaScript. The server must serve `src/site/` at its root. Browser outputs belong
@@ -226,6 +224,7 @@ in ignored development directories.
 Describe the problem, resulting behavior, and checks run, including validation
 limits. Update documentation when behavior changes. Do not commit generated files,
 real email, credentials, or personal profiles. Preserve upstream license notices
-and document vendored changes in the corresponding `src/third_party/README.md`
-or `src/server/third_party/README.md`.
+and document vendored changes in `src/third_party/README.md`. Changes to the
+libcfd-derived Tunnel connector in `src/server/src/tunnel/` keep their file
+notices and are summarized in `src/server/NOTICE`.
 Contributions are made under the [MIT License](LICENSE).

@@ -35,8 +35,7 @@ The local service uses HTTP by default; its certificate paths are only used when
 for the relay and the stdio bridge to local HTTPS. The [development setup](../CONTRIBUTING.md#build-and-run) generates
 development certificates and a profile.
 
-The relay connection requires TLS and a pinned Noise session. SSE is also
-available with `https://relay.example.com/sse` when enabled by the operator.
+The relay connection requires TLS and a pinned Noise session.
 Routing addresses use `ahrara.dev`; use [forwarding](#custom-domains) for other
 domains. Running the relay does not configure DNS, MX records, or public delivery.
 
@@ -59,12 +58,11 @@ to receive mail: there is no relay queue for offline clients. Web, MCP, and the
 | Page Up / Page Down | Scroll the reader |
 | Home / End | Jump in the reader; Home in the inbox returns to latest mail |
 | C | Copy the displayed address |
-| / | Manage addresses, Web, and MCP |
+| / | Manage Web and MCP |
 | Ctrl+C | Stop the listener |
 
-Use **/ → Emails** to copy or delete addresses, or to delete all emails. Create
-addresses in Web or with `ahrara address create`. Deleting
-an address preserves received mail. Dates use the host's timezone; `NO_COLOR=1`
+Manage addresses in Web or with `ahrara address`, and delete all emails with
+`ahrara inbox clear`. Deleting an address preserves received mail. Dates use the host's timezone; `NO_COLOR=1`
 disables colors. Clipboard access over SSH may require OSC 52 support.
 
 For scripts, use subcommands with `--json`. Run `ahrara --help` or a subcommand's
@@ -269,10 +267,8 @@ For automation, `auth set --stdin` reads the key without putting it in command
 arguments. Import validates the key, integrity, and schema. It requires an
 offline destination and `--replace` to overwrite an existing inbox.
 
-Existing plaintext inboxes are encrypted on opening under exclusive ownership;
-open their original profile with its Identity before exporting. An existing inbox
-with a missing Identity requires its original Recovery Key. Identity replacement
-and regeneration refuse profiles with an inbox.
+An existing inbox with a missing Identity requires its original Recovery Key.
+Identity replacement and regeneration refuse profiles with an inbox.
 
 Use the export command instead of copying an active `.db` file. Keep keys and
 snapshots private, and back up before schema upgrades. See
