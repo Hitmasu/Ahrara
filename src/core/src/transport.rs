@@ -1,13 +1,13 @@
-use crate::{auth::decode_address, core::Core, protocol::*};
+use crate::{
+    core::Core,
+    protocol::*,
+    session::{Session, Step},
+};
 use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
-use serde::Deserialize;
-use serde_json::{Value, json as value};
-use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 use tokio_tungstenite::{
@@ -17,20 +17,6 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 type Wire = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-struct Socket {
-    wire: Wire,
-    channel: Option<(crate::secure::Sender, crate::secure::Receiver)>,
-}
-
-impl Socket {
-    fn new(wire: Wire) -> Self {
-        Self {
-            wire,
-            channel: None,
-        }
-    }
-}
 
 pub async fn run(core: Arc<Core>, cancel: CancellationToken) {
     if core.config.server_public_key.is_none() {
@@ -52,13 +38,12 @@ pub async fn run(core: Arc<Core>, cancel: CancellationToken) {
             result = open_wire(&core) => result,
         };
         let result = match wire {
-            Ok(wire) => {
-                let mut socket = Socket::new(wire);
+            Ok(mut wire) => {
                 tokio::select! {
                     _ = cancel.cancelled() => {
                         // Keep ownership until the relay closes its side. Dropping
                         // TCP alone races immediate reuse of this identity.
-                        let ws = &mut socket.wire;
+                        let ws = &mut wire;
                         let _ = tokio::time::timeout(Duration::from_secs(5), async {
                             ws.close(None).await?;
                             while let Some(frame) = ws.next().await {
@@ -68,7 +53,7 @@ pub async fn run(core: Arc<Core>, cancel: CancellationToken) {
                         }).await;
                         break;
                     }
-                    result = connect(&core, &mut socket) => result,
+                    result = connect(&core, &mut wire) => result,
                 }
             }
             Err(error) => Err(error),
@@ -105,16 +90,6 @@ pub async fn run(core: Arc<Core>, cancel: CancellationToken) {
     core.set_state("stopped", None).await;
 }
 
-async fn send(socket: &mut Socket, kind: u8, value: &Value) -> Result<()> {
-    let frame = json(kind, value)?;
-    let frame = match &mut socket.channel {
-        Some((sender, _)) => sender.seal(&frame)?,
-        None => frame,
-    };
-
-    send_packet(&mut socket.wire, frame).await
-}
-
 async fn send_packet(wire: &mut Wire, frame: Vec<u8>) -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(30),
@@ -144,14 +119,6 @@ impl Heartbeat {
 
     fn delay(interval: Duration) -> Duration {
         interval.mul_f64(rand::thread_rng().gen_range(0.8..=1.2))
-    }
-}
-
-async fn receive(socket: &mut Socket, heartbeat: &mut Heartbeat) -> Result<Vec<u8>> {
-    let packet = receive_packet(&mut socket.wire, heartbeat).await?;
-    match &mut socket.channel {
-        Some((_, receiver)) => receiver.open(&packet),
-        None => Ok(packet),
     }
 }
 
@@ -216,99 +183,6 @@ fn tls_config(core: &Core) -> Result<rustls::ClientConfig> {
     .with_no_client_auth())
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Offer {
-    transfer_id: String,
-    recipient: String,
-    alias_id: String,
-    envelope_sender: String,
-    declared_size: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Start {
-    transfer_id: String,
-    recipients: Vec<String>,
-    envelope_sender: String,
-    declared_size: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct End {
-    transfer_id: String,
-    total_bytes: usize,
-    chunks: u32,
-    sha256: String,
-}
-
-struct Delivery {
-    id: String,
-    id_bytes: [u8; 16],
-    accepted: BTreeSet<String>,
-    recipients: Vec<String>,
-    sender: String,
-    started: bool,
-    raw: Vec<u8>,
-    digest: Sha256,
-    sequence: u32,
-}
-
-impl Delivery {
-    fn new(offer: &Offer) -> Result<Self> {
-        let id_bytes: [u8; 16] = hex::decode(&offer.transfer_id)?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid transfer id"))?;
-
-        Ok(Self {
-            id: offer.transfer_id.clone(),
-            id_bytes,
-            accepted: BTreeSet::new(),
-            recipients: Vec::new(),
-            sender: offer.envelope_sender.clone(),
-            started: false,
-            raw: Vec::new(),
-            digest: Sha256::new(),
-            sequence: 0,
-        })
-    }
-
-    fn chunk(&mut self, payload: &[u8]) -> Result<()> {
-        if !self.started
-            || payload.len() <= 20
-            || payload[..16] != self.id_bytes
-            || u32::from_be_bytes(payload[16..20].try_into()?) != self.sequence
-        {
-            bail!("invalid chunk sequence")
-        }
-
-        let bytes = &payload[20..];
-        if self.raw.len() + bytes.len() > MAX_EMAIL {
-            bail!("message exceeds 10 MiB")
-        }
-
-        self.digest.update(bytes);
-        self.raw.extend_from_slice(bytes);
-        self.sequence += 1;
-        Ok(())
-    }
-
-    fn validate_end(&self, end: &End) -> Result<()> {
-        if !self.started
-            || end.transfer_id != self.id
-            || end.total_bytes != self.raw.len()
-            || end.chunks != self.sequence
-            || end.sha256 != hex::encode(self.digest.clone().finalize())
-        {
-            bail!("invalid delivery checksum or length")
-        }
-
-        Ok(())
-    }
-}
-
 async fn open_wire(core: &Core) -> Result<Wire> {
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME))
@@ -325,7 +199,7 @@ async fn open_wire(core: &Core) -> Result<Wire> {
     Ok(socket)
 }
 
-async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
+async fn connect(core: &Arc<Core>, wire: &mut Wire) -> Result<()> {
     let pin = crate::secure::parse_public_key(
         core.config
             .server_public_key
@@ -333,180 +207,55 @@ async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
             .context("server_public_key is required for encrypted transport")?,
     )?;
     let mut heartbeat = Heartbeat::new(Duration::from_secs(90), Duration::from_secs(30));
+    let (mut session, handshake) = Session::open(core.identity.clone(), &pin)?;
     tokio::time::timeout(Duration::from_secs(15), async {
-        let binding = {
-            let mut handshake = crate::secure::initiator(&pin)?;
-            let mut message = [0; crate::secure::MAX_HANDSHAKE];
-            let length = handshake.write_message(&[], &mut message)?;
-            send_packet(&mut socket.wire, message[..length].to_vec()).await?;
-            let response = receive_packet(&mut socket.wire, &mut heartbeat).await?;
-            if response.len() > crate::secure::MAX_HANDSHAKE
-                || handshake.read_message(&response, &mut message)? != 0
-                || !handshake.is_handshake_finished()
-            {
-                bail!("invalid encrypted transport handshake")
-            }
-
-            let binding: [u8; 32] = handshake.get_handshake_hash().try_into()?;
-            socket.channel = Some(crate::secure::into_session(handshake)?);
-            binding
-        };
-        send(
-            socket,
-            HELLO,
-            &value!({"public_key":URL_SAFE_NO_PAD.encode(core.identity.public_key())}),
-        )
-        .await?;
-        let frame = receive(socket, &mut heartbeat).await?;
-        let (kind, payload) = decode(&frame)?;
-        if kind != CHALLENGE {
-            bail!("authentication_failed")
-        }
-
-        let request: Value = serde_json::from_slice(payload)?;
-        let challenge =
-            URL_SAFE_NO_PAD.decode(request["challenge"].as_str().context("missing challenge")?)?;
-        let signature = core.identity.sign_bound(&challenge, &binding)?;
-        let mut reply = value!({"signature":URL_SAFE_NO_PAD.encode(signature)});
-        // A source holding many connections must prove work for each new one.
-        if let Some(work) = request["work"].as_u64() {
-            let work = u8::try_from(work)
-                .ok()
-                .filter(|work| *work <= MAX_WORK)
-                .context("unreasonable proof of work")?;
-            let challenge: [u8; 32] = challenge.as_slice().try_into()?;
-            reply["work"] = tokio::task::spawn_blocking(move || solve_work(&challenge, work))
-                .await?
-                .into();
-        }
-
-        send(socket, AUTHENTICATE, &reply).await?;
-        let frame = receive(socket, &mut heartbeat).await?;
-        let (kind, payload) = decode(&frame)?;
-        let response: Value = serde_json::from_slice(payload)?;
-        if kind == FAILURE {
-            bail!(
-                "{}",
-                if response["code"] == "identity_in_use" {
-                    "identity_in_use"
-                } else {
-                    "authentication_failed"
+        send_packet(wire, handshake).await?;
+        loop {
+            let packet = receive_packet(wire, &mut heartbeat).await?;
+            match session.receive(&packet)? {
+                Step::Send(bytes) => send_packet(wire, bytes).await?,
+                Step::Work { challenge, bits } => {
+                    let nonce =
+                        tokio::task::spawn_blocking(move || solve_work(&challenge, bits)).await?;
+                    send_packet(wire, session.work(nonce)?).await?;
                 }
-            )
+                Step::Ready => return Ok::<(), anyhow::Error>(()),
+                _ => bail!("authentication_failed"),
+            }
         }
-        if kind != READY
-            || response["route_id"] != hex::encode(core.identity.route())
-            || response["fingerprint"] != core.identity.fingerprint()
-        {
-            bail!("authentication_failed")
-        }
-
-        Ok::<(), anyhow::Error>(())
     })
     .await??;
     core.set_state("connected", None).await;
-    let mut delivery: Option<Delivery> = None;
 
     loop {
-        let frame = receive(socket, &mut heartbeat).await?;
-        let (kind, payload) = decode(&frame)?;
-        match kind {
-            OFFER => {
-                let offer: Offer = serde_json::from_slice(payload)?;
-                let valid = match decode_address(&offer.recipient) {
-                    Ok((route, alias, canonical)) => {
-                        route == core.identity.route()
-                            && canonical == offer.recipient
-                            && hex::encode(alias) == offer.alias_id
-                    }
-                    Err(_) => false,
-                };
-                let available = delivery.as_ref().is_none_or(|d| {
-                    d.id == offer.transfer_id
-                        && !d.started
-                        && d.accepted.len() < 100
-                        && d.sender == offer.envelope_sender
-                });
-                let accept = valid
-                    && available
-                    && offer.declared_size.is_none_or(|n| n <= MAX_EMAIL as u64)
-                    && core
-                        .storage
-                        .accepts(core.identity.fingerprint(), offer.recipient.clone())
-                        .await?;
-                if accept {
-                    if delivery.is_none() {
-                        delivery = Some(Delivery::new(&offer)?);
-                    }
-
-                    delivery
-                        .as_mut()
-                        .expect("delivery exists")
-                        .accepted
-                        .insert(offer.recipient.clone());
-                }
-
-                send(
-                    socket,
-                    if accept { ACCEPT } else { REJECT },
-                    &value!({"transfer_id":offer.transfer_id,"recipient":offer.recipient}),
-                )
-                .await?;
+        let packet = receive_packet(wire, &mut heartbeat).await?;
+        match session.receive(&packet)? {
+            Step::Send(bytes) => send_packet(wire, bytes).await?,
+            Step::Offer { recipient } => {
+                let accept = core
+                    .storage
+                    .accepts(core.identity.fingerprint(), recipient)
+                    .await?;
+                send_packet(wire, session.offer(accept)?).await?;
             }
-            START => {
-                let start: Start = serde_json::from_slice(payload)?;
-                let d = delivery.as_mut().context("start without accepted offer")?;
-                let unique: BTreeSet<_> = start.recipients.iter().cloned().collect();
-                if d.started
-                    || start.transfer_id != d.id
-                    || start.envelope_sender != d.sender
-                    || unique.is_empty()
-                    || unique.len() != start.recipients.len()
-                    || !unique.is_subset(&d.accepted)
-                    || start.declared_size.is_some_and(|n| n > MAX_EMAIL as u64)
-                {
-                    bail!("invalid delivery start")
-                }
-
-                d.started = true;
-                d.recipients = start.recipients;
-                // Aliases share this buffer; reserve only the bounded declared size.
-                d.raw = Vec::with_capacity(start.declared_size.unwrap_or(0) as usize);
-            }
-            CHUNK => delivery
-                .as_mut()
-                .context("chunk without transfer")?
-                .chunk(payload)?,
-            END => {
-                let end: End = serde_json::from_slice(payload)?;
-                let d = delivery.take().context("end without transfer")?;
-                d.validate_end(&end)?;
+            Step::Deliver {
+                transfer_id,
+                recipients,
+                sender,
+                raw,
+            } => {
                 let saved = core
-                    .store_delivery(d.id.clone(), d.recipients, d.sender, d.raw)
+                    .store_delivery(transfer_id, recipients, sender, raw)
                     .await;
+                let stored = saved.is_ok();
+                if let Ok(emails) = saved {
+                    core.received(emails);
+                }
 
-                match saved {
-                    Ok(emails) => {
-                        core.received(emails);
-                        send(socket, ACK, &value!({"transfer_id":d.id})).await?;
-                    }
-                    Err(_) => {
-                        send(
-                            socket,
-                            NACK,
-                            &value!({"transfer_id":d.id,"code":"persistence_failed"}),
-                        )
-                        .await?
-                    }
-                }
+                send_packet(wire, session.stored(stored)?).await?;
             }
-            ABORT => {
-                let v: Value = serde_json::from_slice(payload)?;
-                if delivery.as_ref().is_some_and(|d| v["transfer_id"] == d.id) {
-                    delivery = None;
-                }
-            }
-            _ => bail!("unexpected protocol frame"),
+            Step::Idle => {}
+            Step::Work { .. } | Step::Ready => bail!("unexpected protocol frame"),
         }
     }
 }
@@ -514,6 +263,7 @@ async fn connect(core: &Arc<Core>, socket: &mut Socket) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
     #[tokio::test]
     async fn cancellation_waits_for_the_peer_to_finish_closing() {
@@ -608,14 +358,16 @@ mod tests {
             )
             .await
             .unwrap();
-            let mut socket = Socket::new(socket);
+            let mut socket = socket;
             let mut heartbeat =
                 Heartbeat::new(Duration::from_millis(30), Duration::from_millis(60));
-            let error =
-                tokio::time::timeout(Duration::from_secs(2), receive(&mut socket, &mut heartbeat))
-                    .await
-                    .unwrap()
-                    .unwrap_err();
+            let error = tokio::time::timeout(
+                Duration::from_secs(2),
+                receive_packet(&mut socket, &mut heartbeat),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
             if mode != 1 {
                 assert!(error.to_string().contains("PONG timeout"), "{error}");
             }
@@ -647,11 +399,11 @@ mod tests {
             tokio_tungstenite::client_async(format!("ws://{address}"), MaybeTlsStream::Plain(tcp))
                 .await
                 .unwrap();
-        let mut socket = Socket::new(socket);
+        let mut socket = socket;
         let mut heartbeat = Heartbeat::new(Duration::from_secs(90), Duration::from_secs(30));
         let received = tokio::time::timeout(
             Duration::from_secs(110),
-            receive(&mut socket, &mut heartbeat),
+            receive_packet(&mut socket, &mut heartbeat),
         )
         .await;
 
@@ -661,45 +413,5 @@ mod tests {
         );
 
         peer.await.unwrap();
-    }
-
-    #[test]
-    fn transfer_requires_order_length_and_checksum_before_commit() {
-        let offer = Offer {
-            transfer_id: hex::encode([1; 16]),
-            recipient: String::new(),
-            alias_id: String::new(),
-            envelope_sender: String::new(),
-            declared_size: None,
-        };
-        let mut delivery = Delivery::new(&offer).unwrap();
-        let mut chunk = vec![1; 16];
-        chunk.extend(0u32.to_be_bytes());
-        chunk.extend(b"body\r\n");
-
-        assert!(delivery.chunk(&chunk).is_err());
-        delivery.started = true;
-        delivery.chunk(&chunk).unwrap();
-
-        assert!(delivery.chunk(&chunk).is_err());
-        let mut end = End {
-            transfer_id: offer.transfer_id,
-            total_bytes: 6,
-            chunks: 1,
-            sha256: hex::encode(Sha256::digest(b"body\r\n")),
-        };
-
-        assert!(delivery.validate_end(&end).is_ok());
-        end.sha256 = "wrong".into();
-
-        assert!(delivery.validate_end(&end).is_err());
-        end.sha256 = hex::encode(Sha256::digest(b"body\r\n"));
-        end.total_bytes = 5;
-
-        assert!(delivery.validate_end(&end).is_err());
-        chunk[16..20].copy_from_slice(&1u32.to_be_bytes());
-        delivery.raw.resize(MAX_EMAIL, 0);
-
-        assert!(delivery.chunk(&chunk).is_err());
     }
 }

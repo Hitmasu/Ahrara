@@ -1,20 +1,24 @@
+#[cfg(not(target_arch = "wasm32"))]
 use crate::config::{Config, private_write};
 pub use crate::protocol::{decode_address, derive_route};
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
 use hkdf::Hkdf;
-use rand::{RngCore, rngs::OsRng};
+use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+#[derive(Clone)]
 pub struct Identity {
     key: SigningKey,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct DatabaseKey(Zeroizing<[u8; 32]>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DatabaseKey {
     pub(crate) fn sqlcipher_key(&self) -> Zeroizing<String> {
         let hex = Zeroizing::new(hex::encode(self.0.as_slice()));
@@ -22,6 +26,8 @@ impl DatabaseKey {
     }
 }
 
+/// Identities stored as files; the browser keeps its seed in its own storage.
+#[cfg(not(target_arch = "wasm32"))]
 impl Identity {
     pub fn load_or_create(cfg: &Config) -> Result<(Self, bool)> {
         if cfg.identity_path.exists() {
@@ -64,26 +70,6 @@ impl Identity {
         private_write(&cfg.identity_path, &*seed, true)
     }
 
-    pub fn from_recovery(recovery: &str) -> Result<Self> {
-        let encoded = recovery
-            .trim()
-            .strip_prefix("ahrara_sk_v1_")
-            .context("invalid recovery key format")?;
-        let bytes = Zeroizing::new(
-            URL_SAFE_NO_PAD
-                .decode(encoded)
-                .map_err(|_| anyhow::anyhow!("invalid recovery key encoding"))?,
-        );
-        let canonical = Zeroizing::new(URL_SAFE_NO_PAD.encode(&*bytes));
-        if bytes.len() != 32 || canonical.as_str() != encoded {
-            bail!("invalid recovery key length or encoding")
-        }
-
-        Ok(Self {
-            key: SigningKey::from_bytes(bytes.as_slice().try_into()?),
-        })
-    }
-
     pub fn install_new(recovery: &str, cfg: &Config) -> Result<Self> {
         if cfg.identity_path.try_exists()? {
             bail!("Identity already exists; registration never replaces a key")
@@ -105,6 +91,34 @@ impl Identity {
         private_write(&cfg.identity_path, &key.to_bytes(), true)?;
         Ok(Self { key })
     }
+}
+
+impl Identity {
+    pub fn generate() -> Self {
+        Self {
+            key: SigningKey::generate(&mut OsRng),
+        }
+    }
+
+    pub fn from_recovery(recovery: &str) -> Result<Self> {
+        let encoded = recovery
+            .trim()
+            .strip_prefix("ahrara_sk_v1_")
+            .context("invalid recovery key format")?;
+        let bytes = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| anyhow::anyhow!("invalid recovery key encoding"))?,
+        );
+        let canonical = Zeroizing::new(URL_SAFE_NO_PAD.encode(&*bytes));
+        if bytes.len() != 32 || canonical.as_str() != encoded {
+            bail!("invalid recovery key length or encoding")
+        }
+
+        Ok(Self {
+            key: SigningKey::from_bytes(bytes.as_slice().try_into()?),
+        })
+    }
 
     pub fn export(&self) -> Zeroizing<String> {
         Zeroizing::new(format!(
@@ -125,14 +139,24 @@ impl Identity {
         derive_route(&self.public_key())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn database_key(&self) -> DatabaseKey {
+        DatabaseKey(self.derive_key(b"ahrara-sqlcipher-v1\0"))
+    }
+
+    /// Encrypts the browser's stored mail, as `database_key` does for SQLCipher.
+    pub fn browser_store_key(&self) -> Zeroizing<[u8; 32]> {
+        self.derive_key(b"ahrara-web-store-v1\0")
+    }
+
+    fn derive_key(&self, info: &[u8]) -> Zeroizing<[u8; 32]> {
         let seed = Zeroizing::new(self.key.to_bytes());
         let mut key = Zeroizing::new([0; 32]);
         Hkdf::<Sha256>::new(Some(b"ahrara-identity-kdf-v1\0"), &*seed)
-            .expand(b"ahrara-sqlcipher-v1\0", &mut *key)
+            .expand(info, &mut *key)
             .expect("32 bytes is a valid HKDF-SHA256 output length");
 
-        DatabaseKey(key)
+        key
     }
 
     pub fn sign_bound(&self, challenge: &[u8], binding: &[u8; 32]) -> Result<[u8; 64]> {
@@ -158,7 +182,9 @@ pub fn address(route: &[u8; 16], alias: &[u8; 8]) -> String {
     format!("{}@ahrara.dev", URL_SAFE_NO_PAD.encode(bytes))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn generate_token(cfg: &Config, overwrite: bool) -> Result<()> {
+    use rand::RngCore;
     let mut bytes = Zeroizing::new([0; 32]);
     OsRng.fill_bytes(&mut *bytes);
     let token = Zeroizing::new(URL_SAFE_NO_PAD.encode(*bytes));

@@ -9,31 +9,36 @@ repository = "https://github.com/Hitmasu/Ahrara"
 
 [dependencies]
 anyhow = "1.0"
-async-stream = "0.3"
 schemars = "1.0"
 ammonia = "=4.2.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 cssparser = { version = "=0.38.0", default-features = false }
-directories = "6.0"
 ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
-futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 hkdf = "=0.12.4"
 html5ever = "=0.40.1"
-# RcDom currently implements the 0.39 TreeSink; keep the sanitizer's newer pin.
-html5ever_xpath = { package = "html5ever", version = "=0.39.0" }
-markup5ever_rcdom = "=0.39.0"
 mailparse = "0.16"
-regex = "1.13"
-sxd-document = "0.3.2"
-sxd-xpath = "0.4.2"
 rand = "0.8"
-rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+utoipa = "5.4"
+zeroize = "1.8"
+
+# The browser build keeps only the pure protocol, identity and mail modules.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-stream = "0.3"
+directories = "6.0"
+futures-util = { version = "0.3", features = ["sink"] }
+# RcDom currently implements the 0.39 TreeSink; keep the sanitizer's newer pin.
+html5ever_xpath = { package = "html5ever", version = "=0.39.0" }
+markup5ever_rcdom = "=0.39.0"
+regex = "1.13"
+sxd-document = "0.3.2"
+sxd-xpath = "0.4.2"
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 snow = { version = "=0.10.0", default-features = false, features = ["ring-accelerated", "use-curve25519", "use-chacha20poly1305", "use-sha2"] }
 tempfile = "3.23"
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
@@ -41,9 +46,13 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tokio-util = "0.7"
 toml = "0.9"
 url = "2.5"
-utoipa = "5.4"
 webpki-roots = "1.0"
-zeroize = "1.8"
+
+# Browsers supply randomness through JavaScript; snow then needs its own RNG.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+snow = { version = "=0.10.0", default-features = false, features = ["use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

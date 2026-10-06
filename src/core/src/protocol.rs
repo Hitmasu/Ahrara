@@ -21,6 +21,8 @@ pub const END: u8 = 22;
 pub const ABORT: u8 = 23;
 pub const ACK: u8 = 24;
 pub const NACK: u8 = 25;
+/// Empty liveness frame, echoed by the relay: browsers cannot send WebSocket PINGs.
+pub const KEEPALIVE: u8 = 30;
 
 pub fn encode(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
     let limit = if kind == CHUNK {

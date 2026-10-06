@@ -1,10 +1,7 @@
 //! Authenticated transport between the Rust relay and client, inside WSS.
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use snow::{
-    HandshakeState, TransportState,
-    resolvers::{DefaultResolver, FallbackResolver, RingResolver},
-};
+use snow::{HandshakeState, TransportState, resolvers::DefaultResolver};
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
@@ -25,14 +22,16 @@ pub struct Sender(Arc<Mutex<TransportState>>);
 pub struct Receiver(Arc<Mutex<TransportState>>);
 
 fn builder<'a>() -> Result<snow::Builder<'a>> {
-    // RustCrypto retains 32 bytes per cipher versus Ring's 544; Ring supplies the RNG.
-    Ok(snow::Builder::with_resolver(
-        PATTERN.parse()?,
-        Box::new(FallbackResolver::new(
-            Box::new(DefaultResolver),
-            Box::new(RingResolver),
-        )),
-    ))
+    // RustCrypto retains 32 bytes per cipher versus Ring's 544; natively Ring
+    // supplies the RNG, while browsers have no Ring and use getrandom instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    let resolver = Box::new(snow::resolvers::FallbackResolver::new(
+        Box::new(DefaultResolver),
+        Box::new(snow::resolvers::RingResolver),
+    ));
+    #[cfg(target_arch = "wasm32")]
+    let resolver = Box::new(DefaultResolver);
+    Ok(snow::Builder::with_resolver(PATTERN.parse()?, resolver))
 }
 
 pub fn initiator(remote: &[u8; 32]) -> Result<HandshakeState> {

@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use mailparse::{DispositionType, MailHeaderMap, ParsedMail};
 use serde::Serialize;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -21,7 +22,7 @@ pub struct Attachment {
 #[derive(Serialize, ToSchema)]
 pub struct ParsedEmail {
     #[serde(flatten)]
-    pub metadata: crate::storage::Email,
+    pub metadata: crate::model::Email,
     pub cc: String,
     pub date: String,
     pub forwarded_to: Option<String>,
@@ -63,7 +64,7 @@ pub struct MessageAttachment {
 /// alternatives and address groups; use the original MIME bytes for fidelity.
 #[derive(Serialize)]
 pub struct MailMessage {
-    pub metadata: crate::storage::Email,
+    pub metadata: crate::model::Email,
     pub headers: Vec<MessageHeader>,
     pub subject: String,
     pub from: Vec<MessageAddress>,
@@ -79,7 +80,7 @@ pub struct MailMessage {
 
 /// Decodes a bounded message for native host mail APIs without another parser.
 /// Parsing failures are explicit and never include untrusted message content.
-pub fn mail_message(metadata: crate::storage::Email, raw: &[u8]) -> Result<MailMessage> {
+pub fn mail_message(metadata: crate::model::Email, raw: &[u8]) -> Result<MailMessage> {
     if raw.len() > crate::protocol::MAX_EMAIL {
         bail!("invalid_message: message exceeds 10 MiB")
     }
@@ -290,7 +291,7 @@ fn attachment_metadata(index: usize, part: &ParsedMail<'_>) -> Result<Attachment
     })
 }
 
-pub fn parse(metadata: crate::storage::Email, raw: &[u8], max_body: usize) -> Result<ParsedEmail> {
+pub fn parse(metadata: crate::model::Email, raw: &[u8], max_body: usize) -> Result<ParsedEmail> {
     if max_body == 0 || max_body > 256 * 1024 {
         bail!("invalid_argument: max_body_bytes must be 1..262144")
     }
@@ -403,6 +404,7 @@ pub fn html_body(raw: &[u8], allow_remote: bool) -> Result<HtmlEmail> {
     crate::email_html::render(&html, &parsed, allow_remote)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save_attachment(metadata: &Attachment, bytes: &[u8], destination: &Path) -> Result<PathBuf> {
     let target = if destination.is_dir() {
         destination.join(safe_filename(&metadata.filename))
@@ -485,8 +487,8 @@ mod message_tests {
         assert_eq!(safe_filename("COMPUTER.txt"), "COMPUTER.txt");
     }
 
-    fn metadata(raw: &[u8]) -> crate::storage::Email {
-        crate::storage::Email {
+    fn metadata(raw: &[u8]) -> crate::model::Email {
+        crate::model::Email {
             id: 7,
             transfer_id: "synthetic-transfer".into(),
             identity_fingerprint: "synthetic-identity".into(),
