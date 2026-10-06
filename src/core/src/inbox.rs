@@ -197,6 +197,10 @@ impl Inbox {
             }
 
             private_dir(path)?;
+            #[cfg(unix)]
+            if temporary.is_none() {
+                owned_profile(path)?;
+            }
             // Without project directories, SDKs never read the user's profile.
             let config = Config {
                 server_url: options.server_url,
@@ -779,9 +783,43 @@ impl Drop for Inbox {
     }
 }
 
+/// A reused profile's identity and lock files are trusted, so no other user may
+/// own the directory or plant files in it.
+#[cfg(unix)]
+fn owned_profile(path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    if metadata.uid() != user || metadata.mode() & 0o002 != 0 {
+        bail!(
+            "invalid_argument: profile_path must belong to this user and not be writable by others"
+        )
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn reused_profiles_must_not_be_writable_by_other_users() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let mode = |mode| {
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(mode))
+                .unwrap()
+        };
+        mode(0o777);
+
+        assert!(owned_profile(directory.path()).is_err());
+        mode(0o755);
+
+        assert!(owned_profile(directory.path()).is_ok());
+    }
 
     async fn offline_inbox(filter: Option<EmailFilter>) -> Inbox {
         let directory = tempfile::tempdir().unwrap();

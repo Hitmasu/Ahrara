@@ -81,6 +81,7 @@ dependencies = [
  "hkdf",
  "html5ever 0.39.0",
  "html5ever 0.40.1",
+ "libc",
  "mailparse",
  "markup5ever_rcdom",
  "rand 0.8.8",

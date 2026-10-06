@@ -1527,7 +1527,7 @@ Reopen A Persistent Inbox
   });
 });</code></pre></div></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Opción</th><th scope="col">Qué se conserva al cerrar la bandeja</th></tr></thead><tbody><tr><td>Bandeja temporal predeterminada</td><td>Nada en disco tras la limpieza. Ideal para pruebas aisladas.</td></tr><tr><td>Perfil persistente</td><td>Identidad, dirección, mensajes cifrados y qué mensajes se procesaron.</td></tr><tr><td>Credenciales exportadas</td><td>Solo la identidad y la dirección, sin historial de mensajes.</td></tr></tbody></table></div>
-<aside class="callout callout-warn"><p><strong>Las credenciales son secretos.</strong> Las credenciales exportadas contienen la clave de recuperación. Guárdalas de forma segura, mantén los perfiles fuera del control de versiones y nunca registres ninguno de los dos en logs.</p></aside>
+<aside class="callout callout-warn"><p><strong>Las credenciales son secretos.</strong> Las credenciales exportadas contienen la clave de recuperación. Guárdalas de forma segura, mantén los perfiles fuera del control de versiones y nunca registres ninguno de los dos en logs. En Linux y macOS, un directorio de perfil reutilizado debe pertenecerte y no puede permitir escritura a otros usuarios.</p></aside>
 <h2 id="sdk-frameworks"><span class="visually-hidden"></span>Consejos para frameworks de pruebas</h2>
 <p>Crea la bandeja en el setup de la prueba y ciérrala en el teardown, incluso cuando falle una aserción. Usa una bandeja distinta para cada prueba en paralelo. Las mismas API funcionan con xUnit, NUnit, MSTest, pytest y JUnit.</p>
 <ul>

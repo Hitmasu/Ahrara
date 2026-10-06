@@ -45,6 +45,9 @@ utoipa = "5.4"
 webpki-roots = "1.0"
 zeroize = "1.8"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security_Authorization"] }
 

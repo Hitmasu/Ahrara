@@ -197,7 +197,8 @@ and query-limit errors leave the message available.
 To keep history, set the profile path to an absolute directory and reuse that
 path next time. Close the previous inbox before reopening it. Keep profiles
 private and outside version control; one identity can have only one active
-receiver.
+receiver. On Linux and macOS, a reused profile directory must belong to you and
+must not be writable by other users.
 
 Export credentials when you need to restore the address in another environment.
 They contain a secret Recovery Key: store them securely and never log them.

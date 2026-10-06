@@ -215,18 +215,44 @@ pub fn truncate_utf8(value: &str, limit: usize) -> String {
     value[..end].to_owned()
 }
 
+/// Bidi controls and zero-width characters can disguise a name, such as an
+/// executable displayed with a document extension.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
 pub fn safe_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = base
         .chars()
-        .filter(|c| !c.is_control() && !"<>:\"|?*".contains(*c))
+        .filter(|c| !c.is_control() && !invisible(*c) && !"<>:\"|?*".contains(*c))
         .collect();
     let cleaned = truncate_utf8(cleaned.trim_matches([' ', '.']), 180);
-    let stem = cleaned.split('.').next().unwrap_or("").to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit());
+    // Windows ignores trailing spaces here, so `NUL .txt` still opens the device.
+    let stem = cleaned
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    let port = |prefix| {
+        stem.strip_prefix(prefix).is_some_and(|n: &str| {
+            (n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+                || ["\u{B9}", "\u{B2}", "\u{B3}"].contains(&n)
+        })
+    };
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || port("COM")
+        || port("LPT");
 
     if cleaned.is_empty() {
         "attachment.bin".into()
@@ -443,6 +469,21 @@ pub fn terminal_safe(value: &str) -> String {
 #[cfg(test)]
 mod message_tests {
     use super::*;
+
+    #[test]
+    fn filenames_drop_disguising_characters_and_windows_devices() {
+        // U+202E would display `invoice\u{202E}fdp.exe` as `invoiceexe.pdf`.
+        assert_eq!(safe_filename("invoice\u{202E}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(
+            safe_filename("\u{200B}report\u{2066}.pdf\u{FEFF}"),
+            "report.pdf"
+        );
+        for device in ["NUL .txt", "CONOUT$", "conin$.log", "COM\u{B9}.txt", "lpt3"] {
+            assert!(safe_filename(device).starts_with('_'), "{device}");
+        }
+
+        assert_eq!(safe_filename("COMPUTER.txt"), "COMPUTER.txt");
+    }
 
     fn metadata(raw: &[u8]) -> crate::storage::Email {
         crate::storage::Email {

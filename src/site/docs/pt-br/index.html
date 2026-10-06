@@ -1527,7 +1527,7 @@ Reopen A Persistent Inbox
   });
 });</code></pre></div></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Opção</th><th scope="col">O que resta ao fechar a caixa de entrada</th></tr></thead><tbody><tr><td>Caixa temporária padrão</td><td>Nada fica em disco após a limpeza. Ideal para testes isolados.</td></tr><tr><td>Perfil persistente</td><td>Identidade, endereço, mensagens criptografadas e quais mensagens já foram tratadas.</td></tr><tr><td>Credenciais exportadas</td><td>Apenas identidade e endereço, sem histórico de mensagens.</td></tr></tbody></table></div>
-<aside class="callout callout-warn"><p><strong>Credenciais são segredos.</strong> As credenciais exportadas contêm a chave de recuperação. Armazene-as com segurança, mantenha os perfis fora do controle de versão e nunca registre nenhum dos dois em logs.</p></aside>
+<aside class="callout callout-warn"><p><strong>Credenciais são segredos.</strong> As credenciais exportadas contêm a chave de recuperação. Armazene-as com segurança, mantenha os perfis fora do controle de versão e nunca registre nenhum dos dois em logs. No Linux e no macOS, um diretório de perfil reutilizado deve pertencer a você e não pode permitir escrita por outros usuários.</p></aside>
 <h2 id="sdk-frameworks"><span class="visually-hidden"></span>Dicas para frameworks de teste</h2>
 <p>Crie a caixa de entrada no setup do teste e feche-a no teardown, mesmo quando uma asserção falhar. Use uma caixa separada para cada teste paralelo. As mesmas APIs funcionam com xUnit, NUnit, MSTest, pytest e JUnit.</p>
 <ul>

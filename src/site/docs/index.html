@@ -1527,7 +1527,7 @@ Reopen A Persistent Inbox
   });
 });</code></pre></div></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Option</th><th scope="col">What survives closing the inbox</th></tr></thead><tbody><tr><td>Default temporary inbox</td><td>Nothing on disk after cleanup. Best for isolated tests.</td></tr><tr><td>Persistent profile</td><td>Identity, address, encrypted messages, and which messages were handled.</td></tr><tr><td>Exported credentials</td><td>Identity and address only, no message history.</td></tr></tbody></table></div>
-<aside class="callout callout-warn"><p><strong>Credentials are secrets.</strong> Exported credentials contain the Recovery Key. Store them securely, keep profiles out of version control, and never log either.</p></aside>
+<aside class="callout callout-warn"><p><strong>Credentials are secrets.</strong> Exported credentials contain the Recovery Key. Store them securely, keep profiles out of version control, and never log either. On Linux and macOS, a reused profile directory must belong to you and must not be writable by other users.</p></aside>
 <h2 id="sdk-frameworks"><span class="visually-hidden"></span>Tips for test frameworks</h2>
 <p>Create the inbox in test setup and close it in teardown, even when an assertion fails. Use a separate inbox for each parallel test. The same APIs work with xUnit, NUnit, MSTest, pytest and JUnit.</p>
 <ul>
