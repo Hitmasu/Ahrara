@@ -3,6 +3,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+// Without a packaged asset for this platform, never load the native library from
+// the current directory or PATH, where another program could plant it.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.SafeDirectories)]
+
 namespace AhraraSdk;
 
 internal static partial class Native
