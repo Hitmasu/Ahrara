@@ -215,30 +215,44 @@ export class Inbox {
    * @returns {AsyncGenerator<import('./index.js').Email, void, unknown>}
    */
   async *waitForEmails({ timeoutMs, subject, from, filter, signal } = {}) {
+    yield* this.#stream({ timeoutMs, signal }, async (remaining) => [
+      await this.waitForEmail({
+        subject,
+        from,
+        filter,
+        signal,
+        timeoutMs: remaining,
+      }),
+    ]);
+  }
+
+  async *#stream({ timeoutMs, signal }, receive) {
     const deadline = deadlineFor(timeoutMs);
     while (true) {
       signal?.throwIfAborted();
       const remaining = deadline - performance.now();
       if (remaining <= 0) return;
 
-      let email;
+      let values;
       try {
-        email = await this.waitForEmail({
-          subject,
-          from,
-          filter,
-          signal,
-          timeoutMs: Number.isFinite(remaining)
-            ? Math.ceil(remaining)
-            : undefined,
-        });
+        values = await receive(
+          Number.isFinite(remaining) ? Math.ceil(remaining) : undefined,
+        );
       } catch (error) {
         if (error instanceof AhraraError && error.code === "timeout") return;
 
         throw error;
       }
 
-      yield email;
+      // A consumed email still yields its first value at the deadline.
+      for (const [index, value] of values.entries()) {
+        if (index) {
+          signal?.throwIfAborted();
+          if (performance.now() >= deadline) return;
+        }
+
+        yield value;
+      }
     }
   }
 
@@ -346,35 +360,18 @@ export class Inbox {
     );
   }
 
-  async *#searchValues(query, field, { timeoutMs, signal, ...options }) {
-    const deadline = deadlineFor(timeoutMs);
-    while (true) {
-      signal?.throwIfAborted();
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) return;
-
-      let result;
-      try {
-        result = await this.#search(query, {
-          ...options,
-          signal,
-          timeoutMs: Number.isFinite(remaining)
-            ? Math.ceil(remaining)
-            : undefined,
-        });
-      } catch (error) {
-        if (error instanceof AhraraError && error.code === "timeout") return;
-
-        throw error;
-      }
-
-      for (const value of result[field]) {
-        signal?.throwIfAborted();
-        if (performance.now() >= deadline) return;
-
-        yield value;
-      }
-    }
+  #searchValues(query, field, { timeoutMs, signal, ...options }) {
+    return this.#stream(
+      { timeoutMs, signal },
+      async (remaining) =>
+        (
+          await this.#search(query, {
+            ...options,
+            signal,
+            timeoutMs: remaining,
+          })
+        )[field],
+    );
   }
 
   /**

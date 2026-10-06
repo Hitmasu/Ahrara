@@ -20,12 +20,11 @@
     "README.md"
   ],
   "scripts": {
-    "prepack": "node scripts/package-native.mjs",
     "test": "node --test test/inbox.test.mjs",
     "test:types": "tsc --noEmit --strict --module nodenext --target es2022 test/types.ts",
     "test:playwright": "playwright test",
     "test:cypress": "cypress run --browser electron",
-    "format:check": "prettier --check index.js index.d.ts package.json package-lock.json \"*.config.*\" \"scripts/*.mjs\" \"test/**/*.{js,mjs,ts}\" \"cypress/**/*.js\""
+    "format:check": "prettier --check index.js index.d.ts package.json package-lock.json \"*.config.*\" \"test/**/*.{js,mjs,ts}\" \"cypress/**/*.js\""
   },
   "dependencies": {
     "koffi": "^3.0.0"
