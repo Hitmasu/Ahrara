@@ -13,6 +13,9 @@ use zeroize::Zeroizing;
 
 #[cfg(target_arch = "wasm32")]
 mod browser;
+pub mod i18n;
+
+use i18n::Strings;
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 // The browser app shows every page inside its own same-origin shell.
@@ -73,6 +76,9 @@ pub trait Backend {
     async fn custom_domain(&self) -> Result<Option<CustomDomain>>;
     async fn set_custom_domain(&self, domain: String, forwarding_address: String) -> Result<()>;
     async fn remove_custom_domain(&self) -> Result<()>;
+    /// The language chosen in Settings; none follows the browser's.
+    async fn language(&self) -> Option<String>;
+    async fn set_language(&self, language: Option<String>) -> Result<()>;
 
     // MIME work runs inline by default; the CLI moves it off its async workers.
     async fn parsed_email(&self, id: i64, max_body: usize) -> Result<ParsedEmail> {
@@ -104,16 +110,32 @@ fn missing(error: &anyhow::Error) -> bool {
 /// Answers one UI request. Adapters own access control, the body limit and
 /// their own routes (the CLI's login, server settings and events).
 pub async fn respond<B: Backend>(backend: &B, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let language = backend.language().await;
+    let t = strings(language.as_deref(), &request);
     let mode = backend.mode();
     let browser = mode.browser();
-    let mut response = route(backend, mode, request)
+    let ui = Ui { mode, t, language };
+    let mut response = route(backend, ui, request)
         .await
-        .unwrap_or_else(|error| failure(backend.not_found(&error)));
+        .unwrap_or_else(|error| failure(backend.not_found(&error), t));
     harden(response.headers_mut(), browser);
     response
 }
 
-fn failure(missing: bool) -> Response<Vec<u8>> {
+/// The language for a request: the saved choice, else the browser's.
+pub fn strings<B>(language: Option<&str>, request: &Request<B>) -> &'static Strings {
+    let accept = request.headers().get(header::ACCEPT_LANGUAGE);
+    i18n::negotiate(language, accept.and_then(|value| value.to_str().ok()))
+}
+
+/// What every page of one request shares.
+struct Ui {
+    mode: Mode,
+    t: &'static Strings,
+    language: Option<String>,
+}
+
+fn failure(missing: bool, t: &Strings) -> Response<Vec<u8>> {
     reply(
         if missing {
             StatusCode::NOT_FOUND
@@ -121,11 +143,7 @@ fn failure(missing: bool) -> Response<Vec<u8>> {
             StatusCode::BAD_REQUEST
         },
         "text/plain; charset=utf-8",
-        if missing {
-            "This item is no longer available. Go back and refresh."
-        } else {
-            "The request could not be completed. Check the form and try again."
-        },
+        if missing { t.not_found } else { t.bad_request },
     )
 }
 
@@ -164,9 +182,10 @@ pub fn harden(headers: &mut HeaderMap, browser: bool) {
 
 async fn route<B: Backend>(
     backend: &B,
-    mode: Mode,
+    ui: Ui,
     request: Request<Vec<u8>>,
 ) -> Result<Response<Vec<u8>>> {
+    let t = ui.t;
     let (parts, body) = request.into_parts();
     let post = match parts.method {
         Method::GET => false,
@@ -182,14 +201,14 @@ async fn route<B: Backend>(
     let segments: Vec<&str> = parts.uri.path().split('/').skip(1).collect();
 
     match (post, segments.as_slice()) {
-        (false, [""]) => inbox(backend, mode, serde_urlencoded::from_str(query)?).await,
+        (false, [""]) => inbox(backend, ui, serde_urlencoded::from_str(query)?).await,
         (false, ["emails", id]) => {
             let id = id.parse()?;
-            let mut page = Page::new(backend, mode, "email", "Email").await?;
+            let mut page = Page::new(backend, ui, "email", t.email).await?;
             let mut email = backend.parsed_email(id, 256 * 1024).await?;
             email.date = mail::local_date(&email.date, "%Y-%m-%d %H:%M:%S %:z");
             page.size = bytes(email.metadata.size_bytes.max(0) as usize);
-            page.received = date(&email.metadata.received_at);
+            page.received = date(&email.metadata.received_at, t);
             if email.html_available {
                 page.remote_resources = backend.html_email(id, false).await?.remote_resources;
             }
@@ -207,7 +226,7 @@ async fn route<B: Backend>(
         }
         (false, ["emails", id, "raw"]) => {
             let id = id.parse()?;
-            let mut page = Page::new(backend, mode, "email", "Raw EML").await?;
+            let mut page = Page::new(backend, ui, "email", t.raw_eml).await?;
             let (_, raw) = backend.email(id).await?;
             page.raw = Some(String::from_utf8_lossy(&raw).into_owned());
             page.email = Some(backend.parsed_email(id, 1).await?);
@@ -241,7 +260,7 @@ async fn route<B: Backend>(
         }
         (false, ["addresses"]) => {
             let query: AddressQuery = serde_urlencoded::from_str(query)?;
-            let mut page = Page::new(backend, mode, "addresses", "Addresses").await?;
+            let mut page = Page::new(backend, ui, "addresses", t.addresses).await?;
             page.custom_domain = backend.custom_domain().await?;
             page.addresses = backend.addresses(query.after_id.unwrap_or(0), 21).await?;
             if page.addresses.len() > 20 {
@@ -290,9 +309,21 @@ async fn route<B: Backend>(
             backend.change_address(id.parse()?, enabled).await?;
             Ok(redirect("/addresses"))
         }
-        (false, ["settings"]) => Page::new(backend, mode, "settings", "Settings")
+        (false, ["settings"]) => Page::new(backend, ui, "settings", t.settings)
             .await?
             .response(),
+        (true, ["settings", "language"]) => {
+            let language = form()?.language.filter(|l| !l.is_empty());
+            if language
+                .as_deref()
+                .is_some_and(|code| !i18n::LANGUAGES.iter().any(|s| s.code == code))
+            {
+                bail!("unknown language")
+            }
+
+            backend.set_language(language).await?;
+            Ok(redirect("/settings"))
+        }
         // The browser app's host serves these files itself.
         #[cfg(not(target_arch = "wasm32"))]
         (false, ["assets", name]) => Ok(asset(name)),
@@ -300,8 +331,9 @@ async fn route<B: Backend>(
     }
 }
 
-async fn inbox<B: Backend>(backend: &B, mode: Mode, q: InboxQuery) -> Result<Response<Vec<u8>>> {
-    let mut page = Page::new(backend, mode, "inbox", "Inbox").await?;
+async fn inbox<B: Backend>(backend: &B, ui: Ui, q: InboxQuery) -> Result<Response<Vec<u8>>> {
+    let t = ui.t;
+    let mut page = Page::new(backend, ui, "inbox", t.inbox).await?;
     let filters = Filters {
         address: Some(q.address.clone()).filter(|a| !a.is_empty()),
         limit: Some(21),
@@ -313,7 +345,7 @@ async fn inbox<B: Backend>(backend: &B, mode: Mode, q: InboxQuery) -> Result<Res
         page.next = emails.last().map(|e| e.id).unwrap_or(0);
     }
 
-    page.rows = emails.into_iter().map(Into::into).collect();
+    page.rows = emails.into_iter().map(|email| Row::new(email, t)).collect();
     page.query = q.q;
     page.address = q.address;
     page.previous = q.before.is_some();
@@ -344,6 +376,7 @@ struct Action {
     label: Option<String>,
     domain: Option<String>,
     forwarding_address: Option<String>,
+    language: Option<String>,
     #[serde(default)]
     confirm: bool,
 }
@@ -357,8 +390,8 @@ struct Row {
     size: String,
 }
 
-impl From<Email> for Row {
-    fn from(e: Email) -> Self {
+impl Row {
+    fn new(e: Email, t: &Strings) -> Self {
         Self {
             id: e.id,
             from: if e.from_header.is_empty() {
@@ -367,19 +400,19 @@ impl From<Email> for Row {
                 e.from_header
             },
             subject: if e.subject.is_empty() {
-                "(no subject)".into()
+                t.no_subject.into()
             } else {
                 e.subject
             },
-            received: date(&e.received_at),
+            received: date(&e.received_at, t),
             recipient: e.recipient,
             size: bytes(e.size_bytes.max(0) as usize),
         }
     }
 }
 
-fn date(s: &str) -> String {
-    mail::local_date(s, "%b %d, %H:%M %:z")
+fn date(s: &str, t: &Strings) -> String {
+    mail::local_date(s, t.date_format)
 }
 
 pub fn bytes(n: usize) -> String {
@@ -405,6 +438,9 @@ struct Page {
     fingerprint: String,
     route: String,
     mode: Mode,
+    t: &'static Strings,
+    /// The saved language; none follows the browser's.
+    language: Option<String>,
     query: String,
     address: String,
     rows: Vec<Row>,
@@ -423,12 +459,20 @@ struct Page {
 
 impl Page {
     fn timestamp(&self, value: &str) -> String {
-        date(value)
+        date(value, self.t)
+    }
+
+    fn languages(&self) -> [&'static Strings; 3] {
+        i18n::LANGUAGES
+    }
+
+    fn selected(&self, code: &str) -> bool {
+        self.language.as_deref() == Some(code)
     }
 
     async fn new<B: Backend>(
         backend: &B,
-        mode: Mode,
+        Ui { mode, t, language }: Ui,
         section: &'static str,
         title: &'static str,
     ) -> Result<Self> {
@@ -454,6 +498,8 @@ impl Page {
             fingerprint,
             route,
             mode,
+            t,
+            language,
             query: String::new(),
             address: String::new(),
             rows: vec![],
@@ -569,6 +615,7 @@ mod tests {
     #[derive(Default)]
     struct Memory {
         labels: RefCell<Vec<Option<String>>>,
+        language: RefCell<Option<String>>,
     }
 
     impl Backend for Memory {
@@ -650,12 +697,32 @@ mod tests {
         async fn remove_custom_domain(&self) -> Result<()> {
             Ok(())
         }
+
+        async fn language(&self) -> Option<String> {
+            self.language.borrow().clone()
+        }
+
+        async fn set_language(&self, language: Option<String>) -> Result<()> {
+            *self.language.borrow_mut() = language;
+            Ok(())
+        }
     }
 
     fn send(backend: &Memory, method: &str, path: &str, body: &str) -> Response<Vec<u8>> {
+        send_as(backend, method, path, body, "")
+    }
+
+    fn send_as(
+        backend: &Memory,
+        method: &str,
+        path: &str,
+        body: &str,
+        languages: &str,
+    ) -> Response<Vec<u8>> {
         let request = Request::builder()
             .method(method)
             .uri(path)
+            .header(header::ACCEPT_LANGUAGE, languages)
             .body(body.as_bytes().to_vec())
             .unwrap();
         // The in-memory backend never waits.
@@ -688,6 +755,41 @@ mod tests {
         let settings = send(&backend, "GET", "/settings", "");
         assert!(text(&settings).contains("fingerprint-value"));
         assert!(!text(&settings).contains("Web Page"));
+    }
+
+    #[test]
+    fn pages_follow_the_saved_language_then_the_browser() {
+        let backend = Memory::default();
+        let inbox = send_as(&backend, "GET", "/", "", "pt-BR,pt;q=0.9");
+        assert!(text(&inbox).contains("<html lang=\"pt-BR\">"));
+        assert!(text(&inbox).contains("Caixa de entrada"));
+        let missing = send_as(&backend, "GET", "/emails/2", "", "es");
+        assert_eq!(text(&missing), i18n::ES.not_found);
+
+        let chosen = send(
+            &backend,
+            "POST",
+            "/settings/language",
+            "csrf=token&language=es",
+        );
+        assert_eq!(chosen.status(), StatusCode::SEE_OTHER);
+        let settings = send_as(&backend, "GET", "/settings", "", "pt-BR");
+        assert!(text(&settings).contains("<option value=\"es\" selected>Español</option>"));
+        assert!(text(&settings).contains(i18n::ES.language_auto));
+        let unknown = send(
+            &backend,
+            "POST",
+            "/settings/language",
+            "csrf=token&language=xx",
+        );
+        assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+        send(
+            &backend,
+            "POST",
+            "/settings/language",
+            "csrf=token&language=",
+        );
+        assert!(text(&send(&backend, "GET", "/", "")).contains("<html lang=\"en\">"));
     }
 
     #[test]

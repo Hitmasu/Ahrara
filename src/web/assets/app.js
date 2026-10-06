@@ -1,4 +1,6 @@
 'use strict';
+// The page's language, from its data-strings attribute.
+const strings = JSON.parse(document.body.dataset.strings ?? '{}');
 const notice = document.querySelector('#notice');
 let noticeTimer;
 function notify(text) {
@@ -11,8 +13,8 @@ function notify(text) {
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-copy]');
   if (!button) return;
-  try { await navigator.clipboard.writeText(button.dataset.copy); notify(button.dataset.copied ?? 'Address copied'); }
-  catch { notify('Clipboard unavailable. Select the address to copy it.'); }
+  try { await navigator.clipboard.writeText(button.dataset.copy); notify(button.dataset.copied ?? strings.copied); }
+  catch { notify(strings.clipboard); }
 });
 document.addEventListener('click', event => {
   if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -50,7 +52,7 @@ async function refresh() {
       document.querySelector('#live-content')?.replaceWith(updated);
       document.querySelectorAll('[data-count]').forEach(el => { el.textContent = updated.dataset.total; });
     }
-  } catch { notify('Unable to update the page. Refresh to try again.'); }
+  } catch { notify(strings.refreshFailed); }
   finally { refreshing = false; if (pending) { pending = false; refresh(); } }
 }
 // The browser app announces the same events from its workers.
@@ -67,18 +69,18 @@ events.addEventListener('open', refresh);
 for (const type of ['email_received', 'email_deleted', 'emails_cleared', 'address_created', 'address_updated', 'address_deleted', 'resync']) {
   events.addEventListener(type, () => {
     refresh();
-    if (type === 'email_received') notify('New email received');
-    if (document.body.dataset.page === 'email' && (type === 'email_deleted' || type === 'emails_cleared')) notify('Email history changed. Return to the inbox to refresh.');
+    if (type === 'email_received') notify(strings.newEmail);
+    if (document.body.dataset.page === 'email' && (type === 'email_deleted' || type === 'emails_cleared')) notify(strings.historyChanged);
   });
 }
 events.addEventListener('connection_state_changed', event => {
   const state = JSON.parse(event.data);
   document.querySelectorAll('[data-connection]').forEach(el => {
-    el.textContent = state.connected ? 'Connected' : 'Disconnected';
+    el.textContent = state.connected ? strings.connected : strings.disconnected;
     el.classList.toggle('online', state.connected);
   });
 });
-for (const type of ['mcp_state_changed', 'web_settings_changed']) events.addEventListener(type, () => notify('Settings changed. Reload this page to see the latest preferences.'));
+for (const type of ['mcp_state_changed', 'web_settings_changed']) events.addEventListener(type, () => notify(strings.settingsChanged));
 events.addEventListener('session_expired', () => { events.close(); location.assign('/login'); });
 window.addEventListener('pagehide', () => events.close());
 
@@ -87,7 +89,7 @@ document.addEventListener('submit', event => {
   if (!event.target.matches('[data-load-images]')) return;
   document.querySelector('.html-view').open = true;
   document.querySelector('[data-remote-notice]').hidden = true;
-  document.querySelector('[data-image-state]').textContent = 'Images allowed for this view · external stylesheets blocked';
+  document.querySelector('[data-image-state]').textContent = strings.imagesAllowed;
 });
 document.addEventListener('click', event => {
   if (event.target.closest('[data-keep-blocked]')) document.querySelector('[data-remote-notice]').hidden = true;
@@ -97,5 +99,5 @@ document.addEventListener('click', event => {
 document.addEventListener('submit', event => { if (event.target.matches('[data-persist]')) navigator.storage?.persist?.(); });
 const storage = document.querySelector('[data-storage]');
 if (storage) navigator.storage?.persisted?.().then(persisted => {
-  storage.textContent = persisted ? 'Persistent' : 'Best effort: the browser may clear it when space runs low';
+  storage.textContent = persisted ? strings.persistent : strings.bestEffort;
 });

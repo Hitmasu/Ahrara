@@ -86,7 +86,8 @@ that relay's `AHRARA_SERVER_PUBLIC_KEY`. The relay must list the app's origin in
 `AHRARA_WEB_ORIGINS`. The host must apply `dist/web/_headers` and answer paths
 without a file with `index.html`. The pages and routes in `src/web` also serve the
 CLI's Web page; `src/web/www` holds the browser's shell, Service Worker and
-connection worker.
+connection worker. Their text lives in `src/web/src/i18n.rs`, where every string
+needs its English, Brazilian Portuguese and Spanish version.
 
 ## Checks
 

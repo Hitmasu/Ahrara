@@ -23,7 +23,7 @@ self.addEventListener('fetch', event => {
 });
 async function answer(request, url) {
   await ready;
-  const reply = await wasm_bindgen.respond(request.method, url, new Uint8Array(await request.arrayBuffer()));
+  const reply = await wasm_bindgen.respond(request.method, url, new Uint8Array(await request.arrayBuffer()), navigator.languages.join(','));
   const target = reply.headers.find(([name]) => name === 'location');
   if (target) return Response.redirect(new URL(target[1], request.url), reply.status);
   return new Response(reply.body, { status: reply.status, headers: reply.headers });

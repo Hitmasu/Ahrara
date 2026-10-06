@@ -2,7 +2,10 @@
 //! `respond`, and a dedicated worker keeps the relay connection with `Engine`.
 //! JavaScript only moves bytes: records are sealed here with a key derived from
 //! the Identity, as the CLI encrypts its database.
-use crate::{Backend, Mode, Page, Status, failure, harden, html, missing, redirect, verify};
+use crate::{
+    Backend, Mode, Page, Status, Ui, failure, harden, html, i18n::Strings, missing, redirect,
+    verify,
+};
 use ahrara_core::{
     auth::{self, Identity},
     mail,
@@ -511,6 +514,20 @@ impl Backend for Browser {
             .map_err(js)?;
         Ok(())
     }
+
+    async fn language(&self) -> Option<String> {
+        kv("language").await.ok()?.as_string()
+    }
+
+    async fn set_language(&self, language: Option<String>) -> Result<()> {
+        match language {
+            Some(language) => set_kv("language", &language.into()).await,
+            None => idb::remove(Array::of1(&"kv".into()), &"language".into())
+                .await
+                .map(drop)
+                .map_err(js),
+        }
+    }
 }
 
 #[derive(Template)]
@@ -518,6 +535,7 @@ impl Backend for Browser {
 struct Welcome {
     csrf: String,
     error: bool,
+    t: &'static Strings,
 }
 
 #[derive(Template)]
@@ -525,6 +543,7 @@ struct Welcome {
 struct Backup {
     csrf: String,
     recovery: Zeroizing<String>,
+    t: &'static Strings,
 }
 
 #[derive(Deserialize)]
@@ -545,17 +564,34 @@ fn page(template: impl Template, status: StatusCode) -> Result<Response<Vec<u8>>
 }
 
 /// Answers one request from the UI frame, as the CLI's local server would.
-/// Resolves to `{status, headers: [[name, value]], body}`.
+/// `languages` is the browser's preference list. Resolves to
+/// `{status, headers: [[name, value]], body}`.
 #[wasm_bindgen]
-pub async fn respond(method: String, url: String, body: Vec<u8>) -> Result<Object, JsError> {
-    let request = Request::builder()
+pub async fn respond(
+    method: String,
+    url: String,
+    body: Vec<u8>,
+    languages: String,
+) -> Result<Object, JsError> {
+    let mut request = Request::builder()
         .method(method.as_str())
         .uri(url)
         .body(body)
         .map_err(|error| JsError::new(&error.to_string()))?;
-    let mut response = answer(request)
+    if let Ok(value) = http::HeaderValue::from_str(&languages) {
+        request
+            .headers_mut()
+            .insert(http::header::ACCEPT_LANGUAGE, value);
+    }
+
+    let language = kv("language")
         .await
-        .unwrap_or_else(|error| failure(missing(&error)));
+        .ok()
+        .and_then(|value| value.as_string());
+    let t = crate::strings(language.as_deref(), &request);
+    let mut response = answer(request, t, language)
+        .await
+        .unwrap_or_else(|error| failure(missing(&error), t));
     harden(response.headers_mut(), true);
     let headers = Array::new();
     for (name, value) in response.headers() {
@@ -572,7 +608,11 @@ pub async fn respond(method: String, url: String, body: Vec<u8>) -> Result<Objec
     ]))
 }
 
-async fn answer(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
+async fn answer(
+    request: Request<Vec<u8>>,
+    t: &'static Strings,
+    language: Option<String>,
+) -> Result<Response<Vec<u8>>> {
     let csrf = csrf().await?;
     let post = request.method() == Method::POST;
     let path = request.uri().path().to_owned();
@@ -584,7 +624,14 @@ async fn answer(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
 
     let Some(mut browser) = Browser::load().await? else {
         return match (post, path.as_str()) {
-            (false, "/welcome") => page(Welcome { csrf, error: false }, StatusCode::OK),
+            (false, "/welcome") => page(
+                Welcome {
+                    csrf,
+                    error: false,
+                    t,
+                },
+                StatusCode::OK,
+            ),
             (true, "/welcome") => {
                 let form = form()?;
                 let identity = match form.action.as_str() {
@@ -592,7 +639,14 @@ async fn answer(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
                     "import" => {
                         let recovery = Zeroizing::new(form.recovery_key.unwrap_or_default());
                         let Ok(identity) = Identity::from_recovery(&recovery) else {
-                            return page(Welcome { csrf, error: true }, StatusCode::BAD_REQUEST);
+                            return page(
+                                Welcome {
+                                    csrf,
+                                    error: true,
+                                    t,
+                                },
+                                StatusCode::BAD_REQUEST,
+                            );
                         };
                         // An imported key is already saved elsewhere.
                         set_kv("backup", &true.into()).await?;
@@ -619,6 +673,7 @@ async fn answer(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
             Backup {
                 csrf: csrf.clone(),
                 recovery: browser.identity.export(),
+                t,
             },
             StatusCode::OK,
         ),
@@ -642,7 +697,12 @@ async fn answer(request: Request<Vec<u8>>) -> Result<Response<Vec<u8>>> {
                 bail!("confirmation required")
             }
 
-            let mut page = Page::new(&browser, Mode::Browser, "settings", "Settings").await?;
+            let ui = Ui {
+                mode: Mode::Browser,
+                t,
+                language,
+            };
+            let mut page = Page::new(&browser, ui, "settings", t.settings).await?;
             page.recovery = Some(browser.identity.export());
             page.response()
         }

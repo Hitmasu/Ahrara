@@ -3,7 +3,10 @@ use ahrara_core::{
     mail::{Attachment, HtmlEmail, ParsedEmail},
     storage::{Address, CustomDomain, Email, Filters},
 };
-use ahrara_web::{LocalSettings, Mode, Status};
+use ahrara_web::{
+    LocalSettings, Mode, Status,
+    i18n::{Strings, negotiate},
+};
 use anyhow::Result;
 use askama::Template;
 use axum::{
@@ -177,11 +180,20 @@ async fn guard(State(core): State<Arc<Core>>, request: Request, next: Next) -> R
     response
 }
 
-async fn login(State(core): State<Arc<Core>>) -> WebResult<Html<String>> {
+fn strings(core: &Core, headers: &HeaderMap) -> &'static Strings {
+    let accept = headers.get(header::ACCEPT_LANGUAGE);
+    negotiate(
+        core.web.settings().language.as_deref(),
+        accept.and_then(|value| value.to_str().ok()),
+    )
+}
+
+async fn login(State(core): State<Arc<Core>>, headers: HeaderMap) -> WebResult<Html<String>> {
     // Login must not query or render inbox/Identity metadata before authentication.
     let page = Login {
         csrf: core.web.csrf.clone(),
         error: false,
+        t: strings(&core, &headers),
     };
 
     Ok(Html(page.render().map_err(anyhow::Error::from)?))
@@ -192,6 +204,7 @@ async fn login(State(core): State<Arc<Core>>) -> WebResult<Html<String>> {
 struct Login {
     csrf: String,
     error: bool,
+    t: &'static Strings,
 }
 
 #[derive(Deserialize)]
@@ -250,6 +263,7 @@ async fn settings_action(
 async fn sign_in(
     State(core): State<Arc<Core>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(mut form): Form<Action>,
 ) -> WebResult<Response> {
     form.check(&core)?;
@@ -287,6 +301,7 @@ async fn sign_in(
                 Login {
                     csrf: core.web.csrf.clone(),
                     error: true,
+                    t: strings(&core, &headers),
                 }
                 .render()
                 .map_err(anyhow::Error::from)?,
@@ -362,32 +377,34 @@ async fn events(
     })
 }
 
-impl ahrara_web::Backend for Core {
+/// The Web UI's view of the profile. Owning the Arc lets preferences persist
+/// off the async workers.
+struct Web(Arc<Core>);
+
+impl ahrara_web::Backend for Web {
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
 
     fn mode(&self) -> Mode {
-        let settings = self.web.settings();
+        let settings = self.0.web.settings();
         Mode::Cli(LocalSettings {
-            url: self.web_url(),
+            url: self.0.web_url(),
             lan_enabled: settings.lan_enabled,
             lan_no_auth_acknowledged: settings.lan_no_auth_acknowledged,
             password: settings.password_hash.is_some(),
             api_enabled: settings.api_enabled,
             mcp_enabled: settings.mcp_enabled,
-            mcp_auth_required: self.mcp_auth_required(),
+            mcp_auth_required: self.0.mcp_auth_required(),
         })
     }
 
     fn csrf(&self) -> &str {
-        &self.web.csrf
+        &self.0.web.csrf
     }
 
-    // The receiver's inherent methods share names with this trait's.
     async fn status(&self) -> Result<Status> {
-        let receiver: &ahrara_core::core::Core = self;
-        let status = receiver.status().await?;
+        let status = self.0.status().await?;
         Ok(Status {
             connected: status.connected,
             emails: status.emails_count,
@@ -397,8 +414,9 @@ impl ahrara_web::Backend for Core {
     }
 
     async fn latest_enabled_address(&self) -> Result<Option<Address>> {
-        self.storage
-            .latest_enabled_address(self.identity.fingerprint())
+        self.0
+            .storage
+            .latest_enabled_address(self.0.identity.fingerprint())
             .await
     }
 
@@ -408,69 +426,78 @@ impl ahrara_web::Backend for Core {
         before: Option<i64>,
         search: String,
     ) -> Result<Vec<Email>> {
-        self.storage
-            .inbox_page(filters, self.identity.fingerprint(), before, Some(search))
+        self.0
+            .storage
+            .inbox_page(filters, self.0.identity.fingerprint(), before, Some(search))
             .await
     }
 
     async fn addresses(&self, after_id: i64, limit: u32) -> Result<Vec<Address>> {
-        self.storage
-            .addresses(self.identity.fingerprint(), after_id, limit, false)
+        self.0
+            .storage
+            .addresses(self.0.identity.fingerprint(), after_id, limit, false)
             .await
     }
 
     async fn email(&self, id: i64) -> Result<(Email, Vec<u8>)> {
-        self.storage.email(id).await
+        self.0.storage.email(id).await
     }
 
     async fn create_address(&self, label: Option<String>) -> Result<()> {
-        let receiver: &ahrara_core::core::Core = self;
-        receiver.create_address(label).await.map(drop)
+        self.0.create_address(label).await.map(drop)
     }
 
     async fn change_address(&self, id: i64, enabled: Option<bool>) -> Result<()> {
-        let receiver: &ahrara_core::core::Core = self;
-        receiver
+        self.0
             .change_address(id.to_string(), enabled)
             .await
             .map(drop)
     }
 
     async fn delete_email(&self, id: i64) -> Result<()> {
-        self.delete_emails(Some(id)).await.map(drop)
+        self.0.delete_emails(Some(id)).await.map(drop)
     }
 
     async fn custom_domain(&self) -> Result<Option<CustomDomain>> {
-        self.storage
-            .custom_domain(self.identity.fingerprint())
+        self.0
+            .storage
+            .custom_domain(self.0.identity.fingerprint())
             .await
     }
 
     async fn set_custom_domain(&self, domain: String, forwarding_address: String) -> Result<()> {
-        self.storage
-            .set_custom_domain(self.identity.fingerprint(), domain, forwarding_address)
+        self.0
+            .storage
+            .set_custom_domain(self.0.identity.fingerprint(), domain, forwarding_address)
             .await
             .map(drop)
     }
 
     async fn remove_custom_domain(&self) -> Result<()> {
-        self.storage
-            .remove_custom_domain(self.identity.fingerprint())
+        self.0
+            .storage
+            .remove_custom_domain(self.0.identity.fingerprint())
             .await
     }
 
+    async fn language(&self) -> Option<String> {
+        self.0.web.settings().language
+    }
+
+    async fn set_language(&self, language: Option<String>) -> Result<()> {
+        self.0.set_language(language).await
+    }
+
     async fn parsed_email(&self, id: i64, max_body: usize) -> Result<ParsedEmail> {
-        self.get_email(id, max_body).await
+        self.0.get_email(id, max_body).await
     }
 
     async fn html_email(&self, id: i64, allow_remote: bool) -> Result<HtmlEmail> {
-        let receiver: &ahrara_core::core::Core = self;
-        receiver.html_email(id, allow_remote).await
+        self.0.html_email(id, allow_remote).await
     }
 
     async fn attachment(&self, id: i64, attachment_id: &str) -> Result<(Attachment, Vec<u8>)> {
-        let receiver: &ahrara_core::core::Core = self;
-        receiver.attachment(id, attachment_id.to_owned()).await
+        self.0.attachment(id, attachment_id.to_owned()).await
     }
 
     fn not_found(&self, error: &anyhow::Error) -> bool {
@@ -484,7 +511,7 @@ async fn shared(State(core): State<Arc<Core>>, request: Request) -> Response {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
 
-    ahrara_web::respond(&*core, Request::from_parts(parts, body.into()))
+    ahrara_web::respond(&Web(core), Request::from_parts(parts, body.into()))
         .await
         .map(Body::from)
 }
@@ -502,6 +529,7 @@ pub fn router(core: Arc<Core>) -> Router {
         .route("/addresses/domain", post(shared))
         .route("/addresses/{id}", post(shared))
         .route("/settings", get(shared).post(settings_action))
+        .route("/settings/language", post(shared))
         .route("/login", get(login).post(sign_in))
         .route("/logout", post(logout))
         .route("/events", get(events))

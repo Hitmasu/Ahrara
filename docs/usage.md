@@ -84,7 +84,9 @@ matches the `To` header or delivery recipient as a case-insensitive substring.
 Web starts automatically without a password when you run `ahrara`. Open the
 URL shown in the terminal's **Web** row, or select
 **/ → Web Page → Open Web Page**. You can search messages, filter by address,
-view HTML, and download EML or attachments.
+view HTML, and download EML or attachments. The page follows the browser's
+language among English, Brazilian Portuguese and Spanish; **Settings → Language**
+chooses another for the profile.
 
 HTML is sandboxed with scripts blocked. **Load images** permits external images
 and may disclose your IP to their servers; inline CID images remain local.

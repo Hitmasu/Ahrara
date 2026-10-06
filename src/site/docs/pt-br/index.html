@@ -205,25 +205,26 @@ xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 <h2 id="receive-web"><span class="visually-hidden"></span>Ler no navegador</h2>
 <p>A interface Web inicia junto com o <code>ahrara</code>. Abra a URL da linha <strong>Web</strong> do terminal ou escolha <strong>/ → Web Page → Open Web Page</strong>. Ela lê a mesma caixa de entrada que o terminal.</p>
 <ul><li>Pesquise mensagens e filtre por endereço.</li><li>Veja o HTML e baixe anexos ou o EML original.</li><li>Crie, desative ou exclua endereços.</li></ul>
-<p>Imagens remotas ficam bloqueadas até você selecionar <strong>Load images</strong>, o que contata os servidores das imagens e pode compartilhar seu endereço IP com eles. Imagens incluídas no e-mail continuam locais.</p>
+<p>Imagens remotas ficam bloqueadas até você selecionar <strong>Carregar imagens</strong>, o que contata os servidores das imagens e pode compartilhar seu endereço IP com eles. Imagens incluídas no e-mail continuam locais.</p>
+<p>A interface segue o idioma do navegador: inglês, português do Brasil ou espanhol. Escolha outro em <strong>Configurações → Idioma</strong>.</p>
 <p>A Web abre no seu próprio computador sem senha. Para definir uma, escolha <strong>/ → Web Page → Reset Password</strong>. Para abri-la em outro dispositivo, veja <a href="#config-lan">acesso a partir de outro dispositivo</a>.</p>
 <h2 id="receive-app"><span class="visually-hidden"></span>Usar sem instalar</h2>
 <p>Abra <a href="https://app.ahrara.dev">app.ahrara.dev</a> para usar a mesma interface sem instalar nada. O navegador se conecta ao relay por conta própria e guarda a identidade, os endereços e as mensagens no próprio armazenamento, criptografados como a caixa de entrada da CLI.</p>
 <ul><li>Na primeira visita, crie uma identidade e guarde a Recovery Key exibida, ou importe uma chave que você já tem.</li><li>Mantenha uma aba aberta para receber e-mails. As abas compartilham uma conexão; no celular, só enquanto o app está em primeiro plano.</li><li>Uma identidade recebe em um lugar por vez: feche a CLI antes de usar a chave dela no navegador, e vice-versa.</li></ul>
-<p>Para levar uma identidade da CLI ao navegador, copie-a com <code>ahrara auth export --copy</code>, importe-a e adicione cada endereço em <strong>Addresses → Add an existing address</strong>. Para voltar, copie a chave em <strong>Settings → Show Recovery Key</strong>, registre-a em um novo perfil da CLI com <code>ahrara auth set --stdin</code> e rode <code>ahrara address add</code> com cada endereço. As mensagens ficam onde chegaram.</p>
+<p>Para levar uma identidade da CLI ao navegador, copie-a com <code>ahrara auth export --copy</code>, importe-a e adicione cada endereço em <strong>Endereços → Adicionar um endereço existente</strong>. Para voltar, copie a chave em <strong>Configurações → Mostrar Recovery Key</strong>, registre-a em um novo perfil da CLI com <code>ahrara auth set --stdin</code> e rode <code>ahrara address add</code> com cada endereço. As mensagens ficam onde chegaram.</p>
 <aside class="callout callout-warn"><p><strong>Guarde sua Recovery Key.</strong> O navegador pode apagar os dados do site quando falta espaço ou quando você limpa o histórico. Sem a chave, os endereços não podem ser recuperados.</p></aside>
 <h2 id="receive-addresses"><span class="visually-hidden"></span>Criar e gerenciar endereços</h2>
 <p>Dê a cada cadastro ou fluxo de trabalho seu próprio endereço para saber de onde veio cada e-mail.</p>
-<div class="table-wrap"><table><thead><tr><th scope="col">Onde</th><th scope="col">Como</th></tr></thead><tbody><tr><td>Interface Web</td><td>Abra <strong>Addresses</strong> e selecione <strong>Create address</strong></td></tr><tr><td>Scripts</td><td><code>ahrara address create</code></td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th scope="col">Onde</th><th scope="col">Como</th></tr></thead><tbody><tr><td>Interface Web</td><td>Abra <strong>Endereços</strong> e selecione <strong>Criar endereço</strong></td></tr><tr><td>Scripts</td><td><code>ahrara address create</code></td></tr></tbody></table></div>
 <p>Desativar um endereço interrompe a entrega para ele. Excluir um endereço mantém as mensagens que ele já recebeu; exclua-as separadamente na caixa de entrada.</p>
 <h2 id="receive-domain"><span class="visually-hidden"></span>Usar seu próprio domínio</h2>
 <ol class="steps">
 <li>Crie um endereço Ahrara e mantenha o cliente em execução.</li>
 <li>Verifique esse endereço como destino no seu provedor de encaminhamento de e-mail e configure um catch-all para o seu domínio.</li>
-<li>Na Web, abra <strong>Addresses → Custom domain</strong>, informe o domínio e o destino do encaminhamento e selecione <strong>Save domain</strong>.</li>
-<li>Use <strong>Create address</strong> para gerar endereços nesse domínio.</li>
+<li>Na Web, abra <strong>Endereços → Domínio próprio</strong>, informe o domínio e o destino do encaminhamento e selecione <strong>Salvar domínio</strong>.</li>
+<li>Use <strong>Criar endereço</strong> para gerar endereços nesse domínio.</li>
 </ol>
-<p>Cada identidade armazena um domínio padrão. <strong>Remove default domain</strong> volta a usar <code>@ahrara.dev</code> nos novos endereços; os endereços existentes não mudam.</p>
+<p>Cada identidade armazena um domínio padrão. <strong>Remover domínio padrão</strong> volta a usar <code>@ahrara.dev</code> nos novos endereços; os endereços existentes não mudam.</p>
 <h2 id="receive-profiles"><span class="visually-hidden"></span>Manter a caixa de entrada entre execuções</h2>
 <p>Um perfil guarda sua identidade, seus endereços, as mensagens e os anexos salvos, além das configurações para abri-los. Ele fica no seu computador; não existe conta no servidor.</p>
 <ul>

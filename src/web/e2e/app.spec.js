@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import nodemailer from 'nodemailer';
+import { app } from './playwright.config.js';
 
 const mailer = nodemailer.createTransport({
   host: '127.0.0.1',
@@ -152,4 +153,23 @@ test('moves an Identity to another browser and hands the connection between tabs
   await expect(ui(other).getByRole('link', { name: 'After the handover' })).toBeVisible({ timeout: 60_000 });
   expect(seen).toEqual([]);
   await second.close();
+});
+
+test('Settings chooses the language', async ({ page }) => {
+  await onboard(page);
+  await ui(page).getByRole('link', { name: 'Settings' }).click();
+  await ui(page).getByLabel('Language').selectOption('es');
+  await ui(page).getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(ui(page).getByRole('heading', { name: 'Configuración', level: 1 })).toBeVisible();
+  await expect(page).toHaveTitle('Configuración · Ahrara');
+});
+
+test('follows the browser language', async ({ browserName, playwright }) => {
+  // Playwright's locale emulation does not reach Service Workers; Firefox's own preference does.
+  test.skip(browserName !== 'firefox', 'headless Chromium cannot change the Service Worker language');
+  const browser = await playwright.firefox.launch({ firefoxUserPrefs: { 'intl.accept_languages': 'pt-BR, pt' } });
+  const page = await browser.newPage({ baseURL: app });
+  await page.goto('/');
+  await expect(ui(page).getByRole('heading', { name: 'Sua caixa de entrada, neste navegador.' })).toBeVisible();
+  await browser.close();
 });

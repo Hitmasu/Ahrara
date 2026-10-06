@@ -1483,3 +1483,52 @@ async fn html_remote_resources_require_per_view_consent() {
         assert!(!page.contains("data-remote-notice"));
     }
 }
+
+async fn page_in(app: Router, path: &str, language: &str) -> String {
+    let mut request = Request::builder()
+        .uri(path)
+        .header(header::HOST, "127.0.0.1:8787")
+        .header(header::ACCEPT_LANGUAGE, language)
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(ConnectInfo(
+        "127.0.0.1:45678".parse::<SocketAddr>().unwrap(),
+    ));
+    let response = app.oneshot(request).await.unwrap();
+    String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn web_language_follows_the_browser_until_a_saved_choice() {
+    let (_dir, core) = profile();
+    let app = ahrara::web::router(core.clone());
+    let settings = page_in(app.clone(), "/settings", "pt-BR,pt;q=0.9").await;
+
+    assert!(settings.contains("<html lang=\"pt-BR\">") && settings.contains("Configurações"));
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/settings/language",
+            &form(&core, "language=es"),
+            None
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let restored = Core::open(core.config.clone()).unwrap().0;
+
+    assert_eq!(restored.web.settings().language.as_deref(), Some("es"));
+    assert!(
+        page_in(ahrara::web::router(restored), "/login", "pt-BR")
+            .await
+            .contains("Iniciar sesión")
+    );
+}

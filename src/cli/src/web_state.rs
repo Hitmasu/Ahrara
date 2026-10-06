@@ -27,6 +27,8 @@ pub struct Settings {
     pub lan_no_auth_acknowledged: bool,
     pub mcp_enabled: bool,
     pub password_hash: Option<String>,
+    /// The Web page's language; none follows the browser's.
+    pub language: Option<String>,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             lan_no_auth_acknowledged: false,
             mcp_enabled: true,
             password_hash: None,
+            language: None,
         }
     }
 }
@@ -279,6 +282,27 @@ impl Core {
                 json!({"changed": action}),
             );
 
+            Ok(())
+        })
+        .await?
+    }
+
+    pub async fn set_language(self: &std::sync::Arc<Self>, language: Option<String>) -> Result<()> {
+        let core = self.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut current = core.web.settings.lock().unwrap();
+            let next = Settings {
+                language,
+                ..current.clone()
+            };
+            private_write(
+                &core.config.profile_dir().join("interfaces.toml"),
+                toml::to_string(&next)?.as_bytes(),
+                true,
+            )?;
+            *current = next;
+            drop(current);
+            core.emit("web_settings_changed", json!({"changed": "language"}));
             Ok(())
         })
         .await?

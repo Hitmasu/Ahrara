@@ -1,9 +1,9 @@
 <aside class="sidebar">
-<a class="brand" href="/" aria-label="Ahrara inbox"><img src="/assets/logo.png" width="44" height="44" alt=""><span>Ahrara<small>Simple. Private. Yours.</small></span></a>
-<nav aria-label="Main navigation">
-<a href="/" {% if section == "inbox" || section == "email" %}aria-current="page"{% endif %}><svg><use href="#inbox"/></svg>Inbox <span class="count" data-count>{{ total }}</span></a>
-<a href="/addresses" {% if section == "addresses" %}aria-current="page"{% endif %}><svg><use href="#addresses"/></svg>Addresses</a>
-<a href="/settings" {% if section == "settings" %}aria-current="page"{% endif %}><svg><use href="#settings"/></svg>Settings</a>
+<a class="brand" href="/" aria-label="{{ t.home }}"><img src="/assets/logo.png" width="44" height="44" alt=""><span>Ahrara<small>{{ t.tagline }}</small></span></a>
+<nav aria-label="{{ t.navigation }}">
+<a href="/" {% if section == "inbox" || section == "email" %}aria-current="page"{% endif %}><svg><use href="#inbox"/></svg>{{ t.inbox }} <span class="count" data-count>{{ total }}</span></a>
+<a href="/addresses" {% if section == "addresses" %}aria-current="page"{% endif %}><svg><use href="#addresses"/></svg>{{ t.addresses }}</a>
+<a href="/settings" {% if section == "settings" %}aria-current="page"{% endif %}><svg><use href="#settings"/></svg>{{ t.settings }}</a>
 </nav>
-<footer class="sidebar-footer"><span class="connection {% if connected %}online{% endif %}" data-connection>{% if connected %}Connected{% else %}Disconnected{% endif %}</span><small>v{{ version }}</small></footer>
+<footer class="sidebar-footer"><span class="connection {% if connected %}online{% endif %}" data-connection>{% if connected %}{{ t.connected }}{% else %}{{ t.disconnected }}{% endif %}</span><small>v{{ version }}</small></footer>
 </aside>
