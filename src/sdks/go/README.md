@@ -38,7 +38,7 @@ interpret all string conditions as case-insensitive Rust regex patterns.
 value; other patterns match anywhere, so use `^` / `$` for a full match. Use
 `(?-i)` for case sensitivity; `RegexOptions` queries are case-sensitive unless
 `IgnoreCase` is set. Header names stay literal. Invalid patterns fail before
-consuming mail; omitting `Regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+consuming mail; omitting `Regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 ```go
 match, err := inbox.WaitForRegexMatch(ctx,
@@ -164,15 +164,28 @@ Use `RawEmail` for original bytes and `GetHTML` for the HTML part. Native failur
 are `*ahrara.Error` with a stable `Code`. Closed inbox operations return
 `ahrara.ErrClosed`; waits and streams return standard context errors.
 
+## Native library
+
+The SDK runs Ahrara's Rust core as a native library, which Go modules cannot
+carry. On first use it downloads the library for your platform from the
+matching [GitHub Release](https://github.com/Hitmasu/Ahrara/releases), checks it
+against the SHA-256 pinned in the module version and keeps it in the user cache
+directory. Each later run checks the cached copy again before loading it. Linux,
+macOS and Windows on x64 and ARM64 are supported, and Linux needs glibc 2.17 or later.
+
+Where GitHub is unreachable, download `ahrara-native-<os>-<arch>` from that
+release yourself and set `AHRARA_NATIVE_LIBRARY` to its absolute path. Builds need
+cgo and a C compiler. On Windows, install a GCC such as MinGW-w64.
+
 ## Connection settings
 
 For a private relay, use `ServerURL`, `ServerPublicKey`, `TLSCAPath`, and
 `ConnectTimeoutMS`. Source builds without an embedded relay key also require
-`ServerPublicKey`. See the [connection guide](../../../docs/sdks.md#connection-settings).
+`ServerPublicKey`. See the [connection guide](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#connection-settings).
 
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-go-test` against a development relay, or `make sdk-test` for the
 complete matrix with an isolated relay. All builds and tests run in Docker.

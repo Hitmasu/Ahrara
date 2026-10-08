@@ -181,9 +181,9 @@ cargo add ahrara-core --path ../Ahrara/src/core</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-label">Cargo.toml</span></div><pre data-syntax="toml"><code>[patch.crates-io]
 mailparse = { path = "../Ahrara/src/third_party/mailparse" }</code></pre></div>
 <h3 id="install-k6">k6</h3>
-<p>k6 needs a custom binary built with the Ahrara extension. Stock k6 can’t load it.</p>
+<p>k6 needs a custom binary built with the Ahrara extension. Stock k6 can’t load it. Build it with cgo enabled.</p>
 <div class="code"><div class="code-bar"><span class="code-label">Shell</span></div><pre data-syntax="shell"><code>go install go.k6.io/xk6/cmd/xk6@latest
-xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
+CGO_ENABLED=1 xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 
 <h2 id="install-frameworks"><span class="visually-hidden"></span>Test frameworks</h2>
 <p>Playwright and Cypress use the Node.js package, <code>npm install @ahrara/sdk</code>. Cypress specs run in the browser, so they reach the SDK through <code>cy.task</code>: see <a href="#sdk-cypress">Cypress setup</a>.</p>

@@ -251,11 +251,12 @@ $(SDK_TESTS): export AHRARA_TEST_SMTP_ADDRESS ?= localhost:2525
 $(SDK_TESTS): export AHRARA_TEST_TLS_CA ?= /repo/.dev/certs/ca.pem
 $(SDK_TESTS): export AHRARA_TEST_SERVER_PUBLIC_KEY ?= $(shell cat .dev/certs/transport-public.txt 2>/dev/null)
 GO_DOCKER = docker run --rm --network host -i -v "$(CURDIR):/repo" -w /repo --user "$(shell id -u):$(shell id -g)" \
-	-e HOME=/tmp -e GOPATH=/repo/.dev/go -e GOCACHE=/repo/.dev/go-build -e GOFLAGS=-modcacherw \
+	-v "$${AHRARA_NATIVE_LIBRARY:-$$SDK_NATIVE_LIBRARY}:/ahrara-native/libahrara_native.so:ro" \
+	-e AHRARA_NATIVE_LIBRARY=/ahrara-native/libahrara_native.so -e HOME=/tmp -e GOPATH=/repo/.dev/go -e GOCACHE=/repo/.dev/go-build -e GOFLAGS=-modcacherw \
 	-e AHRARA_TEST_SERVER_URL -e AHRARA_TEST_SMTP_ADDRESS -e AHRARA_TEST_TLS_CA -e AHRARA_TEST_SERVER_PUBLIC_KEY \
 	golang:1.27.1-bookworm sh -s
 
-.PHONY: sdk-test sdk-dotnet-test sdk-java-test sdk-javascript-test sdk-python-test sdk-go-package sdk-go-test sdk-k6-test
+.PHONY: sdk-test sdk-dotnet-test sdk-java-test sdk-javascript-test sdk-python-test sdk-go-test sdk-k6-test
 
 sdk-dotnet-test: sdk-native
 	set -euo pipefail
@@ -352,45 +353,20 @@ sdk-python-test: sdk-native
 	    python ahrara-package-smoke.py /repo/src/sdks/python/tests
 	  '
 
-sdk-go-package: sdk-native
-	docker run --rm -i --user "$$(id -u):$$(id -g)" -v "$$PWD:/work" -v "$$SDK_NATIVE_LIBRARY:/ahrara-native/library:ro" -w /work ahrara-builder:$$SDK_DOCKER_ARCH sh -s -- /ahrara-native/library "$${SDK_OS:-linux}" "$${SDK_ARCH:-amd64}" <<'AHRARA_PACKAGE'
-	set -eu
-
-	# Run inside the Docker build image. No Rust compiler is needed by SDK consumers.
-	case "$$2" in
-	  linux) library=libahrara_native.so ;;
-	  darwin) library=libahrara_native.dylib ;;
-	  windows) library=ahrara_native.dll ;;
-	  *) printf 'Unsupported native platform\n' >&2; exit 2 ;;
-	esac
-	case "$$3" in amd64|arm64) ;; *) printf 'Unsupported native architecture\n' >&2; exit 2 ;; esac
-	destination="/work/src/sdks/go/native/$$2-$$3"
-	mkdir -p "$$destination"
-	staged=$$(mktemp "$$destination/.native.XXXXXX")
-	trap 'rm -f "$$staged"' EXIT INT TERM
-	cp "$$1" "$$staged"
-	mv -f "$$staged" "$$destination/$$library"
-	AHRARA_PACKAGE
-
-sdk-go-test: sdk-go-package
+sdk-go-test: sdk-native
 	$(GO_DOCKER) <<'AHRARA_GO'
 	set -eu
-
-	# The integration suite deliberately exercises the embedded asset, without a
-	# loader override.
-	unset AHRARA_NATIVE_LIBRARY
 	cd src/sdks/go
 	go vet ./...
 	go test -race -count=1 -v ./...
 	AHRARA_GO
 
-sdk-k6-test: sdk-go-package
+sdk-k6-test: sdk-native
 	$(GO_DOCKER) <<'AHRARA_GO'
 	set -eu
 
 	# Run inside the Go Docker development image from the repository root.
 	repo=$$(pwd)
-	unset AHRARA_NATIVE_LIBRARY
 
 	cd src/sdks/k6
 	go build -buildvcs=false -o "$$repo/.dev/ahrara-k6" ./cmd/k6

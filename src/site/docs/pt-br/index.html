@@ -181,9 +181,9 @@ cargo add ahrara-core --path ../Ahrara/src/core</code></pre></div>
 <div class="code"><div class="code-bar"><span class="code-label">Cargo.toml</span></div><pre data-syntax="toml"><code>[patch.crates-io]
 mailparse = { path = "../Ahrara/src/third_party/mailparse" }</code></pre></div>
 <h3 id="install-k6">k6</h3>
-<p>O k6 precisa de um binário personalizado, gerado com a extensão do Ahrara. O k6 padrão não consegue carregá-la.</p>
+<p>O k6 precisa de um binário personalizado, gerado com a extensão do Ahrara. O k6 padrão não consegue carregá-la. Gere o binário com o cgo habilitado.</p>
 <div class="code"><div class="code-bar"><span class="code-label">Shell</span></div><pre data-syntax="shell"><code>go install go.k6.io/xk6/cmd/xk6@latest
-xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
+CGO_ENABLED=1 xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest</code></pre></div>
 
 <h2 id="install-frameworks"><span class="visually-hidden"></span>Frameworks de teste</h2>
 <p>Playwright e Cypress usam o pacote Node.js, <code>npm install @ahrara/sdk</code>. Os specs do Cypress rodam no navegador, então acessam o SDK via <code>cy.task</code>: veja a <a href="#sdk-cypress">configuração do Cypress</a>.</p>

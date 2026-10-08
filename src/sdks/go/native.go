@@ -45,11 +45,8 @@ static void free_ahrara(char *response) { free_fn(response); }
 import "C"
 
 import (
-	"embed"
 	"errors"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -58,58 +55,14 @@ import (
 var nativeOnce sync.Once
 var nativeError error
 
-// Release packaging stages native/<goos>-<goarch>/<library>. The placeholder
-// keeps source-only checkouts buildable without committing generated binaries.
-//
-//go:embed native
-var nativeAssets embed.FS
-
-func nativePath() (string, func(), error) {
-	if path := os.Getenv("AHRARA_NATIVE_LIBRARY"); path != "" {
-		return path, func() {}, nil
-	}
-
-	name := "libahrara_native.so"
-	if runtime.GOOS == "darwin" {
-		name = "libahrara_native.dylib"
-	}
-	if runtime.GOOS == "windows" {
-		name = "ahrara_native.dll"
-	}
-
-	asset, err := nativeAssets.ReadFile("native/" + runtime.GOOS + "-" + runtime.GOARCH + "/" + name)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil, errors.New("no embedded Ahrara native library for this platform; set AHRARA_NATIVE_LIBRARY to its absolute path")
-	}
-	if err != nil {
-		return "", nil, err
-	}
-
-	directory, err := os.MkdirTemp("", "ahrara-native-")
-	if err != nil {
-		return "", nil, err
-	}
-
-	path := filepath.Join(directory, name)
-	if err := os.WriteFile(path, asset, 0500); err != nil {
-		_ = os.RemoveAll(directory)
-		return "", nil, err
-	}
-
-	// POSIX permits removing an already loaded shared object. Windows keeps
-	// its DLL mapped until process exit, so it remains in the private temp dir.
-	return path, func() { _ = os.RemoveAll(directory) }, nil
-}
-
 func nativeCall(request []byte) ([]byte, error) {
 	nativeOnce.Do(func() {
-		path, cleanup, err := nativePath()
+		path, err := nativeLibrary()
 		if err != nil {
 			nativeError = err
 			return
 		}
 
-		defer cleanup()
 		if !filepath.IsAbs(path) || strings.ContainsRune(path, 0) {
 			nativeError = errors.New("AHRARA_NATIVE_LIBRARY must be an absolute path without NUL bytes")
 			return

@@ -5,8 +5,17 @@ create an address, trigger an email through your application, and wait for its
 message, verification code, or link.
 
 This requires a custom k6 binary built with the Ahrara extension. A stock k6
-binary cannot load it. The inbox connects directly to the relay, and waiting for
-mail blocks only the current virtual user.
+binary cannot load it. Build it with [xk6](https://github.com/grafana/xk6) and
+cgo, which the extension needs:
+
+```sh
+go install go.k6.io/xk6/cmd/xk6@latest
+CGO_ENABLED=1 xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest
+```
+
+The extension uses the [Go SDK](https://github.com/Hitmasu/Ahrara/blob/main/src/sdks/go/README.md#native-library),
+which downloads Ahrara's native library on first use. The inbox connects directly
+to the relay, and waiting for mail blocks only the current virtual user.
 
 ```javascript
 import ahrara from 'k6/x/ahrara';
@@ -69,7 +78,7 @@ interpret all string conditions as case-insensitive Rust regex patterns.
 other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
 case sensitivity; regex queries are case-sensitive unless `ignoreCase` is set.
 Header names stay literal. Invalid patterns fail before consuming mail; omitting
-`regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+`regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 ```javascript
 const match = inbox.waitForRegexMatch(
@@ -158,6 +167,6 @@ Attachment fields are `id`, `filename`, `contentType`, `contentDisposition` and
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-k6-test` against a development relay, or `make sdk-test` for the
 complete matrix with an isolated relay. All builds and tests run in Docker.

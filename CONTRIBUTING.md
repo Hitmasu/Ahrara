@@ -147,12 +147,20 @@ Release builds embed the verified relay public key using
 | JavaScript | `src/sdks/javascript/native/<platform>-<arch>/` |
 | Python | `src/sdks/python/ahrara/native/` |
 | Java | `src/sdks/java/src/main/resources/native/<platform>-<arch>/` |
-| Go / k6 | `src/sdks/go/native/<goos>-<goarch>/`, staged by `make sdk-go-package` |
+| Go / k6 | None: downloaded from the GitHub Release on first use |
 
-Packages for the language bindings must include their native assets; the Rust
-SDK is consumed as source. Linux x64 is the currently validated SDK platform.
-Validate each additional target natively before advertising it. Generated
-packages, binaries, profiles, and logs belong in ignored directories.
+`make sdk-native-release PLATFORM=<platform> ARCH=<arch>` builds the release
+library as `dist/ahrara-native-<platform>-<arch>.<so|dylib|dll>`. Linux builds
+target glibc 2.17. `make sdk-stage` copies all six into the layouts above, and
+`make sdk-packages` builds the npm package, one Python wheel per platform and the
+NuGet package in `dist/packages/`. Both need `make licenses`, whose third-party notices
+ship in every package. The Go SDK bundles nothing: the release workflow tags a
+commit pinning each library's SHA-256, and the SDK downloads and verifies its
+platform's library on first use. Its tests and source checkouts set
+`AHRARA_NATIVE_LIBRARY`. The Rust SDK is consumed as source. `make sdk-test` runs
+on Linux x64, and the release workflow loads every library on its own platform
+before publishing. Generated packages, binaries, profiles, and logs belong in ignored
+directories.
 
 ## Project layout
 

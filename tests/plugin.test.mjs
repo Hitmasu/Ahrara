@@ -129,6 +129,8 @@ test('SDK packages are released with the CLI version', async () => {
     'src/sdks/python/pyproject.toml': (await read('src/sdks/python/pyproject.toml')).match(/^version = "([^"]+)"/m)[1],
     'src/sdks/dotnet/src/Ahrara/Ahrara.csproj': (await read('src/sdks/dotnet/src/Ahrara/Ahrara.csproj')).match(/<Version>([^<]+)</)[1],
     'src/sdks/java/pom.xml': (await read('src/sdks/java/pom.xml')).match(/<artifactId>ahrara<\/artifactId>\s*<version>([^<]+)</)[1],
+    // The k6 tag requires the Go SDK tag cut from the same release.
+    'src/sdks/k6/go.mod': (await read('src/sdks/k6/go.mod')).match(/src\/sdks\/go v(\S+)/)[1],
   };
   for (const [name, value] of Object.entries(versions)) assert.equal(value, version, `${name} version`);
 });
