@@ -847,6 +847,53 @@ async fn http_shutdown_closes_web_api_and_mcp_streams_promptly() {
     }
 }
 
+#[tokio::test]
+async fn mcp_lan_accepts_private_hosts_and_rejects_dns_rebinding() {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let (_dir, core) = profile_with_config(|cfg| cfg.api_bind = address.to_string());
+    core.update_interfaces("mcp", true, false, None)
+        .await
+        .unwrap();
+    core.update_interfaces("lan", true, true, None)
+        .await
+        .unwrap();
+    let mut server = ahrara::api::HttpServer::new(core.clone(), false)
+        .await
+        .unwrap();
+    let token = Zeroizing::new(std::fs::read_to_string(&core.config.api_token_path).unwrap());
+    let client = reqwest::Client::builder()
+        .add_root_certificate(
+            reqwest::Certificate::from_pem(&std::fs::read(&core.config.api_tls_cert_path).unwrap())
+                .unwrap(),
+        )
+        // HTTP/2 would send the URL authority instead of the Host header under test.
+        .http1_only()
+        .build()
+        .unwrap();
+    let initialize = |host: &str| {
+        client
+            .post(format!("https://{address}/mcp"))
+            .header(header::HOST, format!("{host}:{}", address.port()))
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .bearer_auth(token.as_str())
+            .json(&mcp_initialize())
+            .send()
+    };
+
+    assert_eq!(
+        initialize("evil.example").await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        initialize("192.168.1.10").await.unwrap().status(),
+        StatusCode::OK
+    );
+    server.stop().await;
+}
+
 fn mcp_request(token: &str, payload: serde_json::Value) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -1249,6 +1296,8 @@ async fn mcp_http_sessions_auth_lan_and_revocation() {
     lan.extensions_mut().insert(ConnectInfo(
         "192.168.1.10:4567".parse::<SocketAddr>().unwrap(),
     ));
+    // The version header follows negotiation; on initialize it must match the body.
+    lan.headers_mut().remove("mcp-protocol-version");
     let response = app.clone().oneshot(lan).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);

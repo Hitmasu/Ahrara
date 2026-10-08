@@ -572,7 +572,7 @@ fn cli_end_to_end() {
 #[test]
 #[ignore = "requires Docker SMTP/WSS server"]
 fn mcp_stdio_end_to_end() {
-    use rmcp::{ServiceExt, model::CallToolRequestParam, transport::async_rw::AsyncRwTransport};
+    use rmcp::{ServiceExt, model::CallToolRequestParams, transport::async_rw::AsyncRwTransport};
     let p = TestProfile::new();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (mut process, client) = runtime.block_on(async {
@@ -599,10 +599,12 @@ fn mcp_stdio_end_to_end() {
     p.ready();
     let tool = |name: &str, arguments: Value| {
         let result = runtime
-            .block_on(client.call_tool(CallToolRequestParam {
-                name: name.to_owned().into(),
-                arguments: arguments.as_object().cloned(),
-            }))
+            .block_on(
+                client.call_tool(
+                    CallToolRequestParams::new(name.to_owned())
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                ),
+            )
             .unwrap();
         assert_ne!(result.is_error, Some(true));
         result.structured_content.unwrap()

@@ -778,7 +778,7 @@ mod tests {
         updater: Updater,
         manifest: Manifest,
         requests: Arc<AtomicUsize>,
-        handle: axum_server::Handle,
+        handle: axum_server::Handle<std::net::SocketAddr>,
         task: tokio::task::JoinHandle<()>,
     }
 
@@ -806,6 +806,7 @@ mod tests {
         .await
         .unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let base = format!("https://{}", listener.local_addr().unwrap());
         let key = SigningKey::generate(&mut rand::rngs::OsRng);
         let m = manifest(&format!("{base}/binary"), b"verified-binary");
@@ -858,6 +859,7 @@ mod tests {
         let h = handle.clone();
         let task = tokio::spawn(async move {
             axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
                 .handle(h)
                 .serve(app.into_make_service())
                 .await

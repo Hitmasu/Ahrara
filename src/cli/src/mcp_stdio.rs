@@ -146,14 +146,17 @@ pub async fn serve(mut cfg: Config) -> Result<()> {
     }
 
     let https = cfg.api_https || settings.lan_enabled;
-    let mut client = reqwest::Client::builder()
+    // reqwest 0.13 with `rustls-no-provider` panics unless a provider is installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut client = rmcp_reqwest::Client::builder()
         .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(rmcp_reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3));
     if https {
         for path in std::iter::once(&cfg.api_tls_cert_path).chain(cfg.tls_ca_path.iter()) {
-            for cert in reqwest::Certificate::from_pem_bundle(&std::fs::read(path)?)? {
-                client = client.add_root_certificate(cert);
+            for cert in rmcp_reqwest::Certificate::from_pem_bundle(&std::fs::read(path)?)? {
+                // The server is always on loopback, so only the local roots can apply.
+                client = client.tls_certs_only([cert]);
             }
         }
     }

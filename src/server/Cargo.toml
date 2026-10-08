@@ -12,7 +12,7 @@ tunnel = ["dep:h2", "dep:libcfd-rpc", "dep:tokio-tungstenite", "futures-util/io"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "=0.8.9", features = ["ws"] }
-axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 base64 = "0.22"
 ed25519-dalek = "2.2"
 futures-util = { version = "0.3", features = ["sink"] }

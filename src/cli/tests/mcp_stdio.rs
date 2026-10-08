@@ -57,22 +57,24 @@ async fn agents_share_one_receiver_and_closing_one_keeps_the_other_alive() {
 
     assert_eq!(tools.len(), 17);
     let result = a
-        .call_tool(CallToolRequestParam {
-            name: "ahrara_create_address".into(),
-            arguments: json!({"label": "Agent test"}).as_object().cloned(),
-        })
+        .call_tool(
+            CallToolRequestParams::new("ahrara_create_address")
+                .with_arguments(json!({"label": "Agent test"}).as_object().unwrap().clone()),
+        )
         .await
         .unwrap();
 
     assert_ne!(result.is_error, Some(true));
     let address = result.structured_content.unwrap();
     let result = b
-        .call_tool(CallToolRequestParam {
-            name: "ahrara_get_address".into(),
-            arguments: json!({"address_or_id": address["address"]})
-                .as_object()
-                .cloned(),
-        })
+        .call_tool(
+            CallToolRequestParams::new("ahrara_get_address").with_arguments(
+                json!({"address_or_id": address["address"]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await
         .unwrap();
 
@@ -92,12 +94,9 @@ async fn agents_share_one_receiver_and_closing_one_keeps_the_other_alive() {
     );
     assert!(!b.list_all_tools().await.unwrap().is_empty());
     // Reception can be stopped while the shared MCP server remains attachable.
-    b.call_tool(CallToolRequestParam {
-        name: "ahrara_stop".into(),
-        arguments: None,
-    })
-    .await
-    .unwrap();
+    b.call_tool(CallToolRequestParams::new("ahrara_stop"))
+        .await
+        .unwrap();
     let (mut third, c) = client(&path).await;
 
     assert_eq!(

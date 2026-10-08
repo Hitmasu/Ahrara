@@ -579,12 +579,14 @@ pub fn router(core: Arc<Core>) -> Router {
         .with_state(core)
 }
 
+type ServerHandle = axum_server::Handle<std::net::SocketAddr>;
+
 pub struct HttpServer {
     core: Arc<Core>,
     _ownership: crate::core::Ownership,
     active: Option<(
         std::net::SocketAddr,
-        axum_server::Handle,
+        ServerHandle,
         CancellationToken,
         tokio::task::JoinHandle<std::io::Result<()>>,
     )>,
@@ -667,6 +669,8 @@ impl HttpServer {
             None
         };
         let listener = std::net::TcpListener::bind(address)?;
+        // axum-server 0.8 hands the listener to tokio as is, which requires non-blocking.
+        listener.set_nonblocking(true)?;
         let handle = axum_server::Handle::new();
         let serving = handle.clone();
         let shutdown = CancellationToken::new();
@@ -678,13 +682,13 @@ impl HttpServer {
             let service = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
             match tls {
                 Some(tls) => {
-                    axum_server::from_tcp_rustls(listener, tls)
+                    axum_server::from_tcp_rustls(listener, tls)?
                         .handle(serving)
                         .serve(service)
                         .await
                 }
                 None => {
-                    axum_server::from_tcp(listener)
+                    axum_server::from_tcp(listener)?
                         .handle(serving)
                         .serve(service)
                         .await
