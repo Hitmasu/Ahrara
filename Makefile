@@ -14,6 +14,11 @@ CARGO = $(DOCKER) --platform linux/$(DOCKER_ARCH) -w /work/src/cli \
 	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY -e AHRARA_WEB_RELAY_URL \
 	ahrara-builder:$(DOCKER_ARCH) cargo
 WEB_OUT ?= dist/web
+ZIGBUILD = $(DOCKER) --platform linux/amd64 \
+	-e CARGO_HOME=/work/.dev/cargo -e CARGO_TARGET_DIR=/work/.dev/cross-target \
+	-e CARGO_ZIGBUILD_CACHE_DIR=/work/.dev/zigbuild -e ZIG_GLOBAL_CACHE_DIR=/work/.dev/zig \
+	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY ahrara-builder:cross cargo zigbuild --locked --release
+VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' src/cli/Cargo.toml | head -n 1)
 
 .PHONY: dev-certs server cli check test client-lint client-test openapi openapi-check e2e mcp-e2e api-e2e web-e2e toolchain cargo
 
@@ -80,17 +85,52 @@ release: cross-toolchain
 		windows-aarch64) target=aarch64-pc-windows-gnullvm; suffix=.exe ;;
 		*) echo 'Unsupported release platform/architecture.' >&2; exit 1 ;;
 	esac
-	$(DOCKER) --platform linux/amd64 -w /work/src/cli \
-		-e CARGO_HOME=/work/.dev/cargo -e CARGO_TARGET_DIR=/work/.dev/cross-target \
-		-e CARGO_ZIGBUILD_CACHE_DIR=/work/.dev/zigbuild -e ZIG_GLOBAL_CACHE_DIR=/work/.dev/zig \
-		-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY ahrara-builder:cross \
-		cargo zigbuild --locked --release --bin ahrara --target "$$target"
+	$(ZIGBUILD) --manifest-path /work/src/cli/Cargo.toml --bin ahrara --target "$$target"
 	mkdir -p dist
 	cp ".dev/cross-target/$$target/release/ahrara$$suffix" "dist/ahrara-$(PLATFORM)-$(ARCH)$$suffix"
 
 cross-toolchain:
 	@mkdir -p .dev/cargo .dev/cross-target .dev/zigbuild .dev/zig
 	docker build --platform linux/amd64 --target cross -f src/cli/Dockerfile.builder -t ahrara-builder:cross .
+
+# The SDKs' native core for one release platform, built like `release` with the
+# production relay key. Linux libraries target glibc 2.17 (manylinux2014).
+# ponytail: Zig's Mach-O linker ignores rustc's export list and cargo-zigbuild drops the
+# Windows .def, so those libraries also export internal symbols (harmless, about 2 MB);
+# restrict them once the cross linker honors export lists.
+.PHONY: sdk-native-release
+sdk-native-release: cross-toolchain
+	test -n "$${AHRARA_SERVER_PUBLIC_KEY:-}" || { echo 'AHRARA_SERVER_PUBLIC_KEY is required' >&2; exit 1; }
+	case "$(PLATFORM)-$(ARCH)" in
+		linux-x86_64|linux-aarch64) target=$(ARCH)-unknown-linux-gnu; glibc=.2.17; file=libahrara_native.so ;;
+		darwin-x86_64|darwin-aarch64) target=$(ARCH)-apple-darwin; glibc=; file=libahrara_native.dylib ;;
+		windows-x86_64) target=x86_64-pc-windows-gnu; glibc=; file=ahrara_native.dll ;;
+		windows-aarch64) target=aarch64-pc-windows-gnullvm; glibc=; file=ahrara_native.dll ;;
+		*) echo 'Unsupported release platform/architecture.' >&2; exit 1 ;;
+	esac
+	$(ZIGBUILD) --manifest-path /work/src/native/Cargo.toml --lib --target "$$target$$glibc"
+	mkdir -p dist
+	output="dist/ahrara-native-$(PLATFORM)-$(ARCH).$${file##*.}"
+	cp ".dev/cross-target/$$target/release/$$file" "$$output"
+	if [[ -n $$glibc ]] && $(DOCKER) -w /work ahrara-builder:cross readelf -W --dyn-syms "$$output" | grep -E 'GLIBC_2\.(1[89]|[2-9][0-9])' >&2; then
+		echo "$$output needs a glibc newer than 2.17" >&2; exit 1
+	fi
+
+# Third-party notices shipped with release binaries and SDK packages. The CLI's
+# dependencies include every crate in the SDKs' native core.
+.PHONY: licenses
+licenses: toolchain
+	mkdir -p dist
+	$(CARGO) about generate --locked -c /work/scripts/about.toml /work/scripts/about.hbs > dist/ahrara-third-party-licenses.md
+	# cargo-about lists crate licenses; these C libraries are compiled into the binaries.
+	crate() { ls -d .dev/cargo/registry/src/*/"$$1-$$(grep -A1 "^name = \"$$1\"$$" src/cli/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" | head -n 1; }
+	{
+		printf '## SQLCipher\n\nBundled by libsqlite3-sys.\n\n```text\n'
+		cat "$$(crate libsqlite3-sys)/sqlcipher/LICENSE"
+		printf '```\n\n## OpenSSL\n\nBundled by openssl-src.\n\n```text\n'
+		cat "$$(crate openssl-src)/openssl/LICENSE.txt"
+		printf '```\n'
+	} >> dist/ahrara-third-party-licenses.md
 
 check: toolchain client-lint
 	$(CARGO) fmt --manifest-path /work/src/core/Cargo.toml --all -- --check
@@ -232,9 +272,9 @@ sdk-dotnet-test: sdk-native
 	    cp /ahrara-native/libahrara_native.so src/sdks/dotnet/runtimes/linux-x64/native/
 	    dotnet pack src/sdks/dotnet/src/Ahrara/Ahrara.csproj -p:PackageOutputPath=/repo/dist/sdks/dotnet --nologo
 	    # Force a fresh restore of this locally built package, including its native asset.
-	    rm -rf /repo/.dev/nuget/ahrara/0.1.0
+	    rm -rf /repo/.dev/nuget/ahrara/$(VERSION)
 	    dotnet test src/sdks/dotnet/tests/Ahrara.FrameworkTests/Ahrara.FrameworkTests.csproj \
-	      -p:UsePackagedAhrara=true -p:RestoreAdditionalProjectSources=/repo/dist/sdks/dotnet \
+	      -p:UsePackagedAhrara=true -p:AhraraVersion=$(VERSION) -p:RestoreAdditionalProjectSources=/repo/dist/sdks/dotnet \
 	      --nologo --logger "trx;LogFileName=dotnet.trx"
 	  '
 
@@ -253,7 +293,7 @@ sdk-java-test: sdk-native
 	    cp /ahrara-native/libahrara_native.so src/sdks/java/src/main/resources/native/linux-x86_64/
 	    mvn -B -q -Dmaven.repo.local=/repo/.dev/maven/repository -f src/sdks/java/pom.xml \
 	      package dependency:build-classpath -Dmdep.outputFile=target/test-classpath.txt
-	    java -cp "src/sdks/java/target/ahrara-0.1.0.jar:src/sdks/java/target/test-classes:$$(cat src/sdks/java/target/test-classpath.txt)" \
+	    java -cp "src/sdks/java/target/ahrara-$(VERSION).jar:src/sdks/java/target/test-classes:$$(cat src/sdks/java/target/test-classpath.txt)" \
 	      dev.ahrara.PackagingSmoke
 	  '
 
@@ -280,7 +320,7 @@ sdk-javascript-test: sdk-native
 	    install -D /native/libahrara_native.so "native/$$(node -p process.platform)-$$(node -p process.arch)/libahrara_native.so"
 	    npm pack --pack-destination /repo/dist/javascript
 	    consumer=$$(mktemp -d)
-	    npm install --prefix "$$consumer" --silent /repo/dist/javascript/ahrara-sdk-0.1.0.tgz
+	    npm install --prefix "$$consumer" --silent /repo/dist/javascript/ahrara-sdk-$(VERSION).tgz
 	    cp test/package-smoke.mjs "$$consumer/"
 	    unset AHRARA_NATIVE_LIBRARY
 	    node "$$consumer/package-smoke.mjs" /repo/src/sdks/javascript/test/support.mjs
@@ -398,3 +438,56 @@ sdk-test: dev-certs sdk-native
 	make sdk-javascript-test
 	make sdk-python-test
 	make sdk-go-test sdk-k6-test
+
+# Release packages for the registries, from the six libraries made by
+# sdk-native-release and the notices made by licenses. Go downloads its library
+# from the GitHub Release instead.
+SDK_TARGETS = linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64 windows-x86_64 windows-aarch64
+WHEEL_TAGS = linux-x86_64=manylinux_2_17_x86_64.manylinux2014_x86_64 \
+	linux-aarch64=manylinux_2_17_aarch64.manylinux2014_aarch64 \
+	darwin-x86_64=macosx_11_0_x86_64 darwin-aarch64=macosx_11_0_arm64 \
+	windows-x86_64=win_amd64 windows-aarch64=win_arm64
+
+.PHONY: sdk-stage sdk-packages
+sdk-stage:
+	test -f dist/ahrara-third-party-licenses.md || { echo 'Run make licenses first' >&2; exit 1; }
+	rm -rf src/sdks/javascript/native src/sdks/dotnet/runtimes src/sdks/java/src/main/resources/native
+	for target in $(SDK_TARGETS); do
+		library=$$(echo dist/ahrara-native-$$target.*)
+		test -f "$$library" || { echo "Missing $$library; run make sdk-native-release for $$target" >&2; exit 1; }
+		case $$target in linux-*) file=libahrara_native.so ;; darwin-*) file=libahrara_native.dylib ;; *) file=ahrara_native.dll ;; esac
+		os=$${target%-*}; arch=$${target#*-}; arch=$${arch/x86_64/x64}; arch=$${arch/aarch64/arm64}
+		node=$${os/windows/win32}; rid=$${os/darwin/osx}; rid=$${rid/windows/win}
+		install -D -m 644 "$$library" "src/sdks/javascript/native/$$node-$$arch/$$file"
+		install -D -m 644 "$$library" "src/sdks/dotnet/runtimes/$$rid-$$arch/native/$$file"
+		install -D -m 644 "$$library" "src/sdks/java/src/main/resources/native/$$target/$$file"
+	done
+	for sdk in javascript python dotnet java; do
+		cp dist/ahrara-third-party-licenses.md "src/sdks/$$sdk/LICENSE-THIRD-PARTY.md"
+	done
+
+# Release packages go to dist/packages, apart from the ones the sdk-*-test targets build.
+sdk-packages: sdk-stage
+	rm -rf dist/packages
+	mkdir -p dist/packages/npm dist/packages/pypi dist/packages/nuget
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD:/repo" -w /repo/src/sdks/javascript \
+		node:24-bookworm npm pack --pack-destination /repo/dist/packages/npm
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$$PWD:/repo" -w /repo \
+		-e DOTNET_CLI_HOME=/repo/.dev/dotnet-home -e NUGET_PACKAGES=/repo/.dev/nuget mcr.microsoft.com/dotnet/sdk:10.0 \
+		dotnet pack src/sdks/dotnet/src/Ahrara/Ahrara.csproj -c Release -p:PackageOutputPath=/repo/dist/packages/nuget --nologo
+	docker run --rm -i --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD:/repo" -w /repo/src/sdks/python \
+		python:3.13-slim bash -s -- $(WHEEL_TAGS) <<'AHRARA_WHEELS'
+	set -euo pipefail
+	python -m venv /tmp/venv
+	. /tmp/venv/bin/activate
+	pip install --quiet build==1.6.1
+	# One wheel per platform, each holding only its own library.
+	for pair in "$$@"; do
+	  target=$${pair%%=*}
+	  case $$target in linux-*) file=libahrara_native.so ;; darwin-*) file=libahrara_native.dylib ;; *) file=ahrara_native.dll ;; esac
+	  rm -rf build ahrara/native
+	  install -D -m 644 /repo/dist/ahrara-native-$$target.* "ahrara/native/$$file"
+	  AHRARA_WHEEL_PLATFORM=$${pair#*=} python -m build --wheel --outdir /repo/dist/packages/pypi
+	done
+	rm -rf build ahrara/native
+	AHRARA_WHEELS

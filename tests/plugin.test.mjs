@@ -119,6 +119,20 @@ test('host manifests point at packaged resources and OpenCode preserves existing
   assert.equal(existing.mcp.ahrara.type, 'remote');
 });
 
+test('SDK packages are released with the CLI version', async () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const read = (name) => fs.readFile(path.join(root, name), 'utf8');
+  const version = (await read('src/cli/Cargo.toml')).match(/^version = "([^"]+)"/m)[1];
+  const versions = {
+    'src/native/Cargo.toml': (await read('src/native/Cargo.toml')).match(/^version = "([^"]+)"/m)[1],
+    'src/sdks/javascript/package.json': JSON.parse(await read('src/sdks/javascript/package.json')).version,
+    'src/sdks/python/pyproject.toml': (await read('src/sdks/python/pyproject.toml')).match(/^version = "([^"]+)"/m)[1],
+    'src/sdks/dotnet/src/Ahrara/Ahrara.csproj': (await read('src/sdks/dotnet/src/Ahrara/Ahrara.csproj')).match(/<Version>([^<]+)</)[1],
+    'src/sdks/java/pom.xml': (await read('src/sdks/java/pom.xml')).match(/<artifactId>ahrara<\/artifactId>\s*<version>([^<]+)</)[1],
+  };
+  for (const [name, value] of Object.entries(versions)) assert.equal(value, version, `${name} version`);
+});
+
 test('launcher speaks real MCP and releases its server after EOF', { skip: !process.env.AHRARA_TEST_BINARY, timeout: 25_000 }, async () => {
   const directory = await fs.mkdtemp(path.join(tmpdir(), 'ahrara-launcher-'));
   const socket = createServer();

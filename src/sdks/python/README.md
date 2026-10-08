@@ -94,7 +94,7 @@ value; other patterns match anywhere, so use `^` / `$` for a full match. Use
 stay literal. Invalid patterns fail before consuming mail; omitting `regex` keeps
 literal matching. Robot Framework accepts the same dictionary, for example
 `&{filter}=    Create Dictionary    regex=${TRUE}    subject=^Verify$`. See the
-[shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 ```python
 match = inbox.wait_for_regex_match(
@@ -202,6 +202,6 @@ CRUD, attachment, raw-email, HTML, `Wait For Regex Match/Matches`, and
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-python-test` against a development relay, or `make sdk-test` for the
 complete matrix with an isolated relay. All builds and tests run in Docker.

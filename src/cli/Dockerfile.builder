@@ -5,16 +5,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends musl-tools=1.2.
 ARG TARGETARCH
 RUN rustup component add rustfmt clippy && rustup target add wasm32-unknown-unknown && \
     case "$TARGETARCH" in amd64) rustup target add x86_64-unknown-linux-musl ;; arm64) rustup target add aarch64-unknown-linux-musl ;; *) exit 1 ;; esac
-# Must match the wasm-bindgen version in src/web/Cargo.lock.
-RUN cargo install --locked --version 0.2.129 wasm-bindgen-cli && rm -rf /usr/local/cargo/registry
+# Must match the wasm-bindgen version in src/web/Cargo.lock. cargo-about writes the
+# third-party license file shipped with release binaries and SDK packages.
+RUN cargo install --locked --version 0.2.129 wasm-bindgen-cli && \
+    cargo install --locked --version 0.9.2 --features cli cargo-about && cargo about --version && \
+    rm -rf /usr/local/cargo/registry
 WORKDIR /work/src/cli
 
 FROM native AS cross
 COPY --from=cross-tools /usr/local/zig-x86_64-linux-0.16.0 /opt/zig
 COPY --from=cross-tools /opt/MacOSX11.3.sdk /opt/MacOSX11.3.sdk
 ENV PATH="/opt/zig:${PATH}" SDKROOT=/opt/MacOSX11.3.sdk MACOSX_DEPLOYMENT_TARGET=11.0
-RUN rustup target add aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin \
-    x86_64-pc-windows-gnu aarch64-pc-windows-gnullvm
+RUN rustup target add aarch64-unknown-linux-musl aarch64-unknown-linux-gnu x86_64-apple-darwin \
+    aarch64-apple-darwin x86_64-pc-windows-gnu aarch64-pc-windows-gnullvm
 
 # openssl-src does not map Windows ARM64 yet. Build the same locked source directly.
 ADD --checksum=sha256:46eb8fb9fb3b61ce1c0f8a026c4c1a0714d3a9e138e7fbde78753ce2babc3846 \
@@ -28,7 +31,9 @@ RUN mkdir /tmp/openssl && tar -xf /tmp/openssl.crate -C /tmp/openssl --strip-com
 ENV AARCH64_PC_WINDOWS_GNULLVM_OPENSSL_NO_VENDOR=1 \
     AARCH64_PC_WINDOWS_GNULLVM_OPENSSL_STATIC=1 \
     AARCH64_PC_WINDOWS_GNULLVM_OPENSSL_DIR=/opt/openssl-aarch64
-ADD --checksum=sha256:9e3cf73485edbd45905c8aadbc0fdf869c7ddc3848f0c898229f2680db52e44b \
-    https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.4/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz /tmp/zigbuild.tar.xz
-RUN tar -xJf /tmp/zigbuild.tar.xz -C /usr/local/cargo/bin --strip-components=1 \
-    cargo-zigbuild-x86_64-unknown-linux-musl/cargo-zigbuild && rm /tmp/zigbuild.tar.xz
+# cargo-zigbuild 0.23.4 plus its fix for macOS cdylib links with Zig 0.16
+# (rust-cross/cargo-zigbuild#479), which the SDKs' native core needs.
+# ponytail: built from the fix commit; return to the checksummed release binary once a release includes it.
+RUN cargo install --locked --git https://github.com/rust-cross/cargo-zigbuild \
+        --rev 110abf59ba07cb84ed71b31c8cd81eefdc37bcec cargo-zigbuild && \
+    rm -rf /usr/local/cargo/registry /usr/local/cargo/git

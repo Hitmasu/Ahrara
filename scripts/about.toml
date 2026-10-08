@@ -1,0 +1,16 @@
+# cargo-about configuration for make licenses. Only code shipped in release
+# binaries counts; build and dev dependencies are left out.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
+]

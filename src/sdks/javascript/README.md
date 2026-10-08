@@ -68,7 +68,7 @@ value; other patterns match anywhere, so use `^` / `$` for a full match. Use
 `(?-i)` for case sensitivity; regex queries below are case-sensitive unless
 `ignoreCase` is set. Header names and the top-level `subject`/`from` wait
 options stay literal. Invalid patterns fail before consuming mail; omitting
-`regex` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+`regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 ```js
 const match = await inbox.waitForRegexMatch('code=(?<code>[0-9]+)', {
@@ -158,6 +158,6 @@ the native library; see `cypress.config.js`. Node/Jest/Vitest use the same API.
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-javascript-test` against a development relay, or `make sdk-test` for
 the complete matrix with an isolated relay. All builds and tests run in Docker.

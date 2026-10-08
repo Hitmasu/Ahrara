@@ -135,7 +135,7 @@ match the whole value; other patterns match anywhere, so use `^` / `$` for a ful
 match. Use `(?-i)` for case sensitivity; `RegexQuery` is case-sensitive unless
 `IgnoreCase` is set. Header names stay literal. Patterns use the shared Rust
 engine, not `System.Text.RegularExpressions.Regex`. Omitting `Regex` preserves
-literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 An operation filter retains nonmatching stored mail. Set `InboxOptions.Filter`
 to discard nonmatching incoming mail **before local storage**; this global filter
@@ -225,6 +225,6 @@ The API follows [.NET MailMessage ownership and attachment conventions](https://
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-dotnet-test` against a development relay, or `make sdk-test` for the
 complete matrix with an isolated relay. All builds and tests run in Docker.

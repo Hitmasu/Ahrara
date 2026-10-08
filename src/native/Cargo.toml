@@ -21,8 +21,13 @@ zeroize = "1.8"
 [patch.crates-io]
 mailparse = { path = "../third_party/mailparse" }
 
+# Size over speed: every SDK package ships this library for six platforms, and
+# the SDKs mostly wait on the network. Measured on Linux x64: 14% smaller, no
+# slower; the npm and NuGet packages shrink 7%.
 [profile.release]
-lto = "thin"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
 strip = true
 
 [profile.dev]

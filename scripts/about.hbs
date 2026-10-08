@@ -1,0 +1,18 @@
+# Third-party licenses
+
+Ahrara release binaries and SDK packages include the open source software
+listed below. Ahrara itself is licensed under the MIT License. Each Rust crate's
+source code, including the MPL-2.0 ones, is published on https://crates.io under
+the name and version shown. The bundled SQLCipher and OpenSSL licenses follow
+the crate licenses.
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by {{#each used_by}}{{#if @index}}, {{/if}}{{{crate.name}}} {{{crate.version}}}{{/each}}.
+
+```text
+{{{text}}}
+```
+
+{{/each}}

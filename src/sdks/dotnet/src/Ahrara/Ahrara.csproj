@@ -8,13 +8,18 @@
     <PackageId>Ahrara</PackageId>
     <Version>0.1.0</Version>
     <Description>Disposable inboxes backed by the embedded Ahrara Rust core.</Description>
+    <Authors>Ahrara contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://ahrara.dev</PackageProjectUrl>
+    <PackageTags>email;disposable-email;testing;qa;automation</PackageTags>
     <RepositoryUrl>https://github.com/Hitmasu/Ahrara</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
   <ItemGroup>
     <NativeLibraryAsset Include="../../runtimes/*/native/*ahrara_native*" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE-THIRD-PARTY.md" Pack="true" PackagePath="/" Condition="Exists('../../LICENSE-THIRD-PARTY.md')" />
     <None Include="../../runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <Target Name="RequireNativeAssetsForPackaging" BeforeTargets="GenerateNuspec">

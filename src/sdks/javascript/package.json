@@ -3,6 +3,22 @@
   "version": "0.1.0",
   "description": "Disposable email inboxes powered by the shared Ahrara Rust core",
   "license": "MIT",
+  "homepage": "https://ahrara.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hitmasu/Ahrara.git",
+    "directory": "src/sdks/javascript"
+  },
+  "bugs": "https://github.com/Hitmasu/Ahrara/issues",
+  "keywords": [
+    "email",
+    "disposable-email",
+    "testing",
+    "qa",
+    "playwright",
+    "cypress",
+    "automation"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -17,8 +33,12 @@
     "index.js",
     "index.d.ts",
     "native",
-    "README.md"
+    "README.md",
+    "LICENSE-THIRD-PARTY.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test test/inbox.test.mjs",
     "test:types": "tsc --noEmit --strict --module nodenext --target es2022 test/types.ts",

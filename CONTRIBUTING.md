@@ -103,6 +103,7 @@ Run the checks relevant to your change before submitting a pull request:
 | Web pages or the browser app | `make web-app-e2e` (Chromium and Firefox in Docker against an isolated relay) |
 | Updater or release tooling | `make update-test` |
 | Install scripts or release workflow | `make client-lint client-test` (ShellCheck, actionlint and `tests/test_install.py`) |
+| SDK release packages | `make sdk-native-release` for each platform, then `make licenses sdk-packages` |
 | Agent plugin | `make test` (includes native stdio, launcher, and installer checks) |
 | Any contribution | Review the diff and scan for secrets with Gitleaks |
 

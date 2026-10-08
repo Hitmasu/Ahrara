@@ -111,7 +111,7 @@ Recipient, envelope sender, and Message-ID patterns must match the whole value;
 other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
 case sensitivity; `RegexQuery` is case-sensitive unless `ignoreCase` is true.
 Header names stay literal. Invalid patterns fail before consuming mail; omitting
-`.regex(true)` keeps literal matching. See the [shared filter rules](../../../docs/sdks.md#filters-and-extraction).
+`.regex(true)` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
 
 ## Persistent profiles and identity import
 
@@ -167,6 +167,6 @@ storage; missing resources and other native errors propagate through
 ## Development
 
 For source builds and native package preparation, see
-[SDK development](../../../CONTRIBUTING.md#sdk-development). Run
+[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
 `make sdk-java-test` against a development relay, or `make sdk-test` for the
 complete matrix with an isolated relay. All builds and tests run in Docker.

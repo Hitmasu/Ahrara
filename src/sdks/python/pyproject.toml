@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,20 @@ description = "Disposable email inboxes powered by the shared Ahrara Rust core"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+authors = [{ name = "Ahrara contributors" }]
+keywords = ["email", "disposable email", "testing", "qa", "automation", "robot framework"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Email",
+    "Topic :: Software Development :: Testing",
+    "Framework :: Robot Framework :: Library",
+]
+
+[project.urls]
+Homepage = "https://ahrara.dev"
+Documentation = "https://ahrara.dev/docs/"
+Source = "https://github.com/Hitmasu/Ahrara"
+Issues = "https://github.com/Hitmasu/Ahrara/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "robotframework>=7", "build>=1", "black>=25", "mypy>=1"]
