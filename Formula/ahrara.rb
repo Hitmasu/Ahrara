@@ -1,5 +1,5 @@
 class Ahrara < Formula
-  desc "Temporary email with a local inbox for developers and AI agents"
+  desc "Disposable email with a local inbox for AI agents, QA and automation"
   homepage "https://ahrara.dev"
   license "MIT"
 

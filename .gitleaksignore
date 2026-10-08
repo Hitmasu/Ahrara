@@ -1,0 +1,2 @@
+# Upstream go-smtp test fixture (localhostKey), removed from the tree; not a secret.
+17fc20406b466d31159df790ed2af21bfbb83eb1:server/third_party/go-smtp/client_test.go:private-key:911
