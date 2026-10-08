@@ -19,7 +19,9 @@ Never publish real email, Recovery Keys, tokens, or credentials.
 - SQLCipher encrypts the local inbox, WAL, and exported snapshots with a key
   derived from the Recovery Identity. Anyone with the Identity file or Recovery
   Key and the database can decrypt it. Runtime memory, earlier plaintext copies,
-  exported EML, and attachments are outside this protection.
+  exported EML, and attachments are outside this protection. On Linux and macOS,
+  an Identity file readable by other users is refused until its permissions are
+  fixed.
 - Database import validates integrity before replacing data. It requires the matching Recovery Key, an offline destination, and explicit
   `--replace` to overwrite an existing inbox. Identity replacement is refused
   while an inbox exists.
@@ -47,6 +49,8 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   database records.
 - MCP saves attachments only into the `attachments` directory next to the
   profile database, never overwriting existing files.
-- Email is untrusted input, including when passed to an AI agent.
+- Email is untrusted input, including when passed to an AI agent. Bidi overrides
+  and isolates are removed from the From, To, Cc and Subject shown, so they cannot
+  reorder them.
 
 See the [user guide](docs/usage.md) for configuration and backups.

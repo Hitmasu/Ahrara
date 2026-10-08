@@ -91,9 +91,12 @@ pub fn summary(raw: &[u8]) -> Summary {
         .map(|x| x.0)
         .unwrap_or_default();
     let header = |name| {
-        headers
-            .get_first_value(name)
-            .map(|s| s.chars().take(4096).collect::<String>())
+        headers.get_first_value(name).map(|s| {
+            without_bidi_controls(&s)
+                .chars()
+                .take(4096)
+                .collect::<String>()
+        })
     };
     Summary {
         from: header("From").unwrap_or_default(),
@@ -254,6 +257,16 @@ fn invisible(c: char) -> bool {
     )
 }
 
+/// Embeddings, overrides and isolates reorder the text after them, so a header
+/// could display `invoice\u{202E}fdp.exe` as `invoiceexe.pdf`. Marks such as
+/// U+200F only steer neighbouring characters and stay for right-to-left text.
+fn without_bidi_controls(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        .collect()
+}
+
 pub fn safe_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = base
@@ -340,7 +353,7 @@ pub fn parse(metadata: crate::model::Email, raw: &[u8], max_body: usize) -> Resu
         }
     };
     result.cc = truncate_utf8(
-        &parsed.headers.get_first_value("Cc").unwrap_or_default(),
+        &without_bidi_controls(&parsed.headers.get_first_value("Cc").unwrap_or_default()),
         4096,
     );
     result.date = truncate_utf8(
@@ -510,6 +523,28 @@ mod message_tests {
         }
 
         assert_eq!(safe_filename("COMPUTER.txt"), "COMPUTER.txt");
+    }
+
+    #[test]
+    fn displayed_headers_drop_bidi_overrides_but_keep_marks() {
+        // Subject `invoice\u{202E}fdp.exe` and From `bank\u{2067}moc.evil\u{2069}.com`, in RFC 2047.
+        let raw = concat!(
+            "From: =?UTF-8?B?YmFua+KBp21vYy5ldmls4oGpLmNvbQ==?= <x@example.test>\r\n",
+            "To: =?UTF-8?B?16nXnNeV150g4oCPQQ==?= <to@example.test>\r\n",
+            "Cc: =?UTF-8?B?Y29weeKArmVsaWZ0eGV0?= <cc@example.test>\r\n",
+            "Subject: =?UTF-8?B?aW52b2ljZeKArmZkcC5leGU=?=\r\n\r\nbody\r\n"
+        )
+        .as_bytes();
+        let headers = summary(raw);
+
+        assert_eq!(headers.subject, "invoicefdp.exe");
+        assert_eq!(headers.from, "bankmoc.evil.com <x@example.test>");
+        // U+200F, a mark legitimate right-to-left text uses, stays.
+        assert_eq!(headers.to, "שלום \u{200F}A <to@example.test>");
+        assert_eq!(
+            parse(metadata(raw), raw, 1024).unwrap().cc,
+            "copyeliftxet <cc@example.test>"
+        );
     }
 
     fn metadata(raw: &[u8]) -> crate::model::Email {
