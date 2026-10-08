@@ -1,0 +1,11 @@
+# Keeps the workflow's SHA-pinned actions current. Security updates for the
+# lockfiles come from the repository's Dependabot security updates setting.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
