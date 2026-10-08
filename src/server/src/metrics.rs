@@ -24,6 +24,62 @@ const EMAILS: &str = "ahrara_emails_total";
 const REFUSED: &str = "ahrara_recipients_refused_total";
 const RULES: &str = "ahrara_rule_hits_total";
 
+/// Every word each labelled counter takes. All are exported from the start,
+/// because Prometheus' increase() misses a series whose first sample is 1.
+const WORDS: [(&str, &[&str]); 3] = [
+    (
+        EMAILS,
+        &[
+            "delivered",
+            "recipient_refused",
+            "too_large",
+            "expired",
+            "ack_timeout",
+            "nack",
+            "client_disconnected",
+            "sender_error",
+            "forwarding_invalid",
+        ],
+    ),
+    (
+        REFUSED,
+        &[
+            "offline",
+            "invalid_address",
+            "cooldown",
+            "busy",
+            "rejected",
+            "too_many",
+            "retried",
+            "reconnected",
+            "offer_unavailable",
+        ],
+    ),
+    (
+        RULES,
+        &[
+            "origin_not_allowed",
+            "clients_limit",
+            "clients_per_source_limit",
+            "handshake_timeout",
+            "invalid_hello",
+            "invalid_public_key",
+            "authentication_failed",
+            "proof_of_work_failed",
+            "identity_in_use",
+            "protocol_violation",
+            "smtp_routing_only",
+            "smtp_sessions_limit",
+            "smtp_sessions_per_source_limit",
+            "smtp_starttls_required",
+            "smtp_too_large",
+            "smtp_syntax_errors",
+            "smtp_no_progress",
+            "delivery_cooldown",
+        ],
+    ),
+];
+
 /// Counters split by one fixed word, keyed by (metric, word).
 static LABELLED: Mutex<BTreeMap<(&str, &str), u64>> = Mutex::new(BTreeMap::new());
 
@@ -32,6 +88,12 @@ pub fn add(counter: &AtomicU64, value: usize) {
 }
 
 fn count(metric: &'static str, word: &'static str) {
+    debug_assert!(
+        WORDS
+            .iter()
+            .any(|(name, words)| *name == metric && words.contains(&word)),
+        "{word} is not listed for {metric}"
+    );
     *LABELLED.lock().unwrap().entry((metric, word)).or_default() += 1;
 }
 
@@ -164,20 +226,18 @@ pub fn render(broker: &Broker) -> String {
     );
 
     let labelled = LABELLED.lock().unwrap().clone();
-    for (name, label, help) in [
-        (EMAILS, "result", "Messages that reached DATA, by outcome."),
-        (
-            REFUSED,
-            "reason",
-            "Recipients refused before DATA, by reason.",
-        ),
-        (RULES, "rule", "Protection rules applied, by rule."),
-    ] {
+    for ((name, words), (label, help)) in WORDS.iter().zip([
+        ("result", "Messages that reached DATA, by outcome."),
+        ("reason", "Recipients refused before DATA, by reason."),
+        ("rule", "Protection rules applied, by rule."),
+    ]) {
         let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} counter");
-        for ((_, word), value) in labelled
-            .range((name, "")..)
-            .take_while(|((metric, _), _)| *metric == name)
-        {
+        let unlisted = labelled
+            .keys()
+            .filter(|(metric, word)| metric == name && !words.contains(word))
+            .map(|(_, word)| *word);
+        for word in words.iter().copied().chain(unlisted) {
+            let value = labelled.get(&(*name, word)).copied().unwrap_or(0);
             let _ = writeln!(out, "{name}{{{label}=\"{word}\"}} {value}");
         }
     }
@@ -303,5 +363,19 @@ mod tests {
             !text.contains("198.51.100.7"),
             "metrics never name an address"
         );
+    }
+
+    #[test]
+    fn outcomes_are_exported_before_they_first_happen() {
+        // Prometheus' increase() misses a series that is born at 1.
+        let text = render(&Broker::encrypted([1; 32]));
+
+        for line in [
+            "ahrara_emails_total{result=\"forwarding_invalid\"} ",
+            "ahrara_recipients_refused_total{reason=\"busy\"} ",
+            "ahrara_rule_hits_total{rule=\"smtp_starttls_required\"} ",
+        ] {
+            assert!(text.contains(line), "{line} missing");
+        }
     }
 }
