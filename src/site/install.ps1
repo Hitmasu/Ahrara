@@ -10,6 +10,7 @@
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     $manifestUrl = if ($env:AHRARA_MANIFEST_URL) { $env:AHRARA_MANIFEST_URL } else { 'https://github.com/Hitmasu/Ahrara/releases/latest/download/stable.json' }
+    if ($manifestUrl -notlike 'https://*') { throw 'Ahrara install: the manifest URL must use https' }
     $dest = if ($env:AHRARA_INSTALL_DIR) { $env:AHRARA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\Ahrara' }
     $exe = Join-Path $dest 'ahrara.exe'
     $receipt = "$exe.install.json"

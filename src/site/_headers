@@ -1,3 +1,8 @@
+# The hash allows the docs pages' inline theme script; recompute it if that script changes.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-tLC+HMWEIqt9asXvK5knNyPZy7AtvYUzwdiTDIQIhQ0='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
 /install.sh
   Content-Type: text/plain; charset=utf-8
 /install.ps1
