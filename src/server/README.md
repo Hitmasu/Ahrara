@@ -118,6 +118,10 @@ Unix socket, which only cloudflared reaches. Keep that header: if a Cloudflare
 Transform Rule removes it, connections have no source and are not limited, and the
 relay logs `client_source_unknown` once.
 
+`AHRARA_MAX_CLIENTS` (default 100000, up to 10000000) caps the WebSocket connections
+of all sources together, including those without a source, so many sources cannot
+exhaust the relay's memory. An idle connection takes about 3 KB.
+
 The first quarter of a source's connections is free. Each further connection must
 prove work before authenticating: a SHA-256 hash over its login challenge with 12
 to 20 leading zero bits, about 4 thousand to 1 million attempts, rising toward the

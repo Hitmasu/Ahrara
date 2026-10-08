@@ -10,12 +10,14 @@ use tokio::time::Instant;
 
 const MAX_SETTING: usize = 1024;
 const MAX_CLIENTS_PER_SOURCE: usize = 100_000;
+const MAX_CLIENTS: usize = 10_000_000;
 const MAX_PENALTIES: usize = 4096;
 const FAILURE_WINDOW: Duration = Duration::from_secs(300);
 const COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeLimits {
+    pub clients: usize,
     pub clients_per_source: usize,
     pub smtp_sessions: usize,
     pub smtp_per_source: usize,
@@ -28,6 +30,8 @@ pub struct RuntimeLimits {
 impl Default for RuntimeLimits {
     fn default() -> Self {
         Self {
+            // About 290 MB of idle sessions; many sources must not exhaust memory.
+            clients: 100_000,
             clients_per_source: 100,
             smtp_sessions: 256,
             smtp_per_source: 16,
@@ -77,6 +81,7 @@ impl RuntimeLimits {
             defaults.smtp_per_source.min(smtp_sessions),
             smtp_sessions,
         )?;
+        let clients = number("AHRARA_MAX_CLIENTS", defaults.clients, MAX_CLIENTS)?;
         let clients_per_source = number(
             "AHRARA_MAX_CLIENTS_PER_SOURCE",
             defaults.clients_per_source,
@@ -89,6 +94,7 @@ impl RuntimeLimits {
         };
 
         Ok(Self {
+            clients,
             clients_per_source,
             smtp_sessions,
             smtp_per_source,
@@ -174,7 +180,7 @@ fn source_key(ip: IpAddr) -> IpAddr {
 pub struct Admission {
     settings: RuntimeLimits,
     sources: Mutex<Sources>,
-    clients: Mutex<HashMap<IpAddr, usize>>,
+    clients: Mutex<Sources>,
     penalties: Mutex<HashMap<Route, Penalty>>,
 }
 
@@ -183,18 +189,23 @@ impl Admission {
         Arc::new(Self {
             settings,
             sources: Mutex::new(Sources::default()),
-            clients: Mutex::new(HashMap::new()),
+            clients: Mutex::new(Sources::default()),
             penalties: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Admits a client connection, refusing its source at the limit.
+    /// Admits a client connection, refusing its source or the relay at their limits.
     pub fn try_client(self: &Arc<Self>, source: Option<IpAddr>) -> Option<ClientPermit> {
+        let mut clients = self.clients.lock().unwrap();
+        if clients.active >= self.settings.clients {
+            return None;
+        }
         let Some(source) = source.map(source_key) else {
             // Only a Cloudflare rule removing cf-connecting-ip hides the source. One
             // shared quota would then refuse almost every client, so do not limit.
             static UNKNOWN: Once = Once::new();
             UNKNOWN.call_once(|| crate::event("client_source_unknown", serde_json::json!({})));
+            clients.active += 1;
             return Some(ClientPermit {
                 admission: self.clone(),
                 source: None,
@@ -202,14 +213,14 @@ impl Admission {
             });
         };
         let limit = self.settings.clients_per_source;
-        let mut clients = self.clients.lock().unwrap();
-        let active = clients.entry(source).or_default();
+        let active = clients.counts.entry(source).or_default();
         if *active >= limit {
             return None;
         }
 
         let work = work_bits(*active, limit);
         *active += 1;
+        clients.active += 1;
         Some(ClientPermit {
             admission: self.clone(),
             source: Some(source),
@@ -316,14 +327,15 @@ pub struct ClientPermit {
 
 impl Drop for ClientPermit {
     fn drop(&mut self) {
+        let mut clients = self.admission.clients.lock().unwrap();
+        clients.active -= 1;
         let Some(source) = self.source else {
             return;
         };
-        let mut clients = self.admission.clients.lock().unwrap();
-        let active = clients.get_mut(&source).unwrap();
+        let active = clients.counts.get_mut(&source).unwrap();
         *active -= 1;
         if *active == 0 {
-            clients.remove(&source);
+            clients.counts.remove(&source);
         }
     }
 }
@@ -417,6 +429,35 @@ mod tests {
         for value in ["0", "100001", "-1", "forever", ""] {
             assert!(configured(&[("AHRARA_MAX_CLIENTS_PER_SOURCE", value)]).is_err());
         }
+        assert_eq!(
+            configured(&[("AHRARA_MAX_CLIENTS", "10000000")])
+                .unwrap()
+                .clients,
+            10_000_000
+        );
+        for value in ["0", "10000001", "forever"] {
+            assert!(configured(&[("AHRARA_MAX_CLIENTS", value)]).is_err());
+        }
+    }
+
+    #[test]
+    fn clients_from_every_source_share_one_global_limit() {
+        let admission = Admission::new(RuntimeLimits {
+            clients: 3,
+            ..RuntimeLimits::default()
+        });
+        let held = [
+            admission.try_client(Some(ip("192.0.2.1"))),
+            admission.try_client(Some(ip("2001:db8::1"))),
+            admission.try_client(None),
+        ];
+
+        assert!(held.iter().all(Option::is_some));
+        assert!(admission.try_client(Some(ip("198.51.100.1"))).is_none());
+        assert!(admission.try_client(None).is_none());
+        drop(held);
+
+        assert!(admission.try_client(None).is_some());
     }
 
     #[test]
@@ -444,14 +485,14 @@ mod tests {
         assert_eq!(admission.try_client(source).unwrap().work, 20);
         drop(held);
 
-        assert!(admission.clients.lock().unwrap().is_empty());
+        assert!(admission.clients.lock().unwrap().counts.is_empty());
         let unknown: Vec<_> = (0..9)
             .map(|_| admission.try_client(None).unwrap())
             .collect();
 
         assert!(unknown.iter().all(|client| client.work == 0));
         drop(unknown);
-        assert!(admission.clients.lock().unwrap().is_empty());
+        assert!(admission.clients.lock().unwrap().counts.is_empty());
         let limit = RuntimeLimits::default().clients_per_source;
 
         assert_eq!(work_bits(limit / 4 - 1, limit), 0);
