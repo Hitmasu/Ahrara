@@ -12,19 +12,19 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { checkBinary, command, install, platform, release } from '../src/plugin/ahrara.mjs';
 import opencode from '../.opencode/plugins/ahrara.mjs';
 
-function fixture(version = '0.1.0', expires = Math.floor(Date.now() / 1000) + 3600) {
+function fixture(version = '0.1.0') {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const key = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
   const binary = Buffer.from('synthetic executable, never run');
   const artifact = { url: 'https://github.com/Hitmasu/Ahrara/releases/download/v0.1.0/ahrara-linux-x86_64', sha256: createHash('sha256').update(binary).digest('hex'), size: binary.length };
   const envelope = (change = {}) => {
-    const payload = Buffer.from(JSON.stringify({ schema_version: 1, expires_at: expires, channels: { direct: { version, artifacts: { 'linux-x86_64': artifact } } }, ...change }));
+    const payload = Buffer.from(JSON.stringify({ schema_version: 1, channels: { direct: { version, artifacts: { 'linux-x86_64': artifact } } }, ...change }));
     return Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, Buffer.concat([Buffer.from('ahrara-release-v1\0'), payload]), privateKey).toString('base64') }));
   };
   return { key, binary, artifact, envelope };
 }
 
-test('six native targets; verify signatures, expiry, safe metadata and executable bytes', () => {
+test('six native targets; verify signatures, safe metadata and executable bytes', () => {
   for (const os of ['linux', 'darwin', 'win32']) for (const arch of ['x64', 'arm64']) assert.match(platform(os, arch), /^(linux|darwin|windows)-(x86_64|aarch64)$/);
   assert.throws(() => platform('linux', 'ia32'));
   const f = fixture();
@@ -37,7 +37,6 @@ test('six native targets; verify signatures, expiry, safe metadata and executabl
   const changed = JSON.parse(bytes);
   changed.payload = Buffer.from('{}').toString('base64');
   assert.throws(() => release(Buffer.from(JSON.stringify(changed)), f.key, 'linux-x86_64'), /signature/);
-  assert.throws(() => release(f.envelope({ expires_at: 1 }), f.key, 'linux-x86_64'), /expired/);
   assert.throws(() => release(bytes, f.key, 'windows-aarch64'), /platform/);
   for (const invalid of [
     { version: '../escape', artifacts: { 'linux-x86_64': f.artifact } },
@@ -57,7 +56,6 @@ test('concurrent installs publish complete binaries, reuse offline and reject co
     assert.deepEqual(await fs.readFile(a), f.binary);
     assert.equal(JSON.parse(await fs.readFile(`${a}.install.json`)).method, 'plugin');
     const before = downloads;
-    await fs.writeFile(path.join(directory, 'linux-x86_64.json'), f.envelope({ expires_at: 1 }));
     assert.equal(await install(options), a);
     assert.equal(downloads, before);
     const rollback = f.envelope({ channels: { direct: { version: '0.0.9', artifacts: { 'linux-x86_64': f.artifact } } } });

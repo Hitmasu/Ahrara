@@ -53,7 +53,7 @@ class InstallShTest(unittest.TestCase):
             "direct": {"artifacts": {TARGET: artifact(sha256 or hashlib.sha256(data).hexdigest(), len(data), name)}, "version": "0.1.0"},
             "pip": {"artifacts": {TARGET: artifact("1" * 64, 2, "pip-binary")}, "version": "9.9.9"},
         }
-        payload = json.dumps({"channels": channels, "expires_at": 4102444800, "schema_version": 1},
+        payload = json.dumps({"channels": channels, "schema_version": 1},
                              separators=(",", ":"), sort_keys=True).encode()
         envelope = {"payload": base64.b64encode(payload).decode(), "signature": base64.b64encode(b"unchecked").decode()}
         (self.fixtures / "stable.json").write_text(json.dumps(envelope))

@@ -15,7 +15,8 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 
-const MANIFEST_URL: &str = "https://ahrara.dev/releases/stable.json";
+// The signature, not the host, makes the manifest trustworthy; updates only move forward.
+const MANIFEST_URL: &str = "https://github.com/Hitmasu/Ahrara/releases/latest/download/stable.json";
 const SIGNING_CONTEXT: &[u8] = b"ahrara-release-v1\0";
 const MANIFEST_LIMIT: u64 = 128 * 1024;
 const BINARY_LIMIT: u64 = 256 * 1024 * 1024;
@@ -173,7 +174,6 @@ struct SignedManifest {
 #[serde(deny_unknown_fields)]
 struct Manifest {
     schema_version: u32,
-    expires_at: u64,
     channels: BTreeMap<String, Release>,
 }
 
@@ -192,7 +192,7 @@ struct Artifact {
     size: u64,
 }
 
-fn verify_manifest(bytes: &[u8], key: &VerifyingKey, now: u64) -> Result<Manifest> {
+fn verify_manifest(bytes: &[u8], key: &VerifyingKey) -> Result<Manifest> {
     ensure!(
         bytes.len() as u64 <= MANIFEST_LIMIT,
         "release manifest is too large"
@@ -212,10 +212,6 @@ fn verify_manifest(bytes: &[u8], key: &VerifyingKey, now: u64) -> Result<Manifes
     ensure!(
         manifest.schema_version == 1,
         "unsupported release manifest version"
-    );
-    ensure!(
-        manifest.expires_at > now,
-        "release manifest expired; try again after it is refreshed"
     );
 
     for (channel, release) in &manifest.channels {
@@ -454,7 +450,7 @@ pub async fn run(check: bool) -> Result<UpdateStatus> {
     };
     let updater = Updater::official()?;
     let bytes = updater.fetch_manifest().await?;
-    let manifest = verify_manifest(&bytes, &updater.key, now())?;
+    let manifest = verify_manifest(&bytes, &updater.key)?;
     let installed = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let mut result = status(&manifest, method, &installed, &platform()?);
     if check || !result.update_available {
@@ -555,7 +551,7 @@ async fn cached_notice(
             .fetch_manifest()
             .await
             .ok()
-            .filter(|bytes| verify_manifest(bytes, &updater.key, time).is_ok());
+            .filter(|bytes| verify_manifest(bytes, &updater.key).is_ok());
         let cache = CheckCache {
             checked_at: time,
             manifest: fetched.as_ref().map(|b| STANDARD.encode(b)),
@@ -565,7 +561,7 @@ async fn cached_notice(
         fetched
     };
     let Some(bytes) = bytes else { return Ok(None) };
-    let manifest = verify_manifest(&bytes, &updater.key, time)?;
+    let manifest = verify_manifest(&bytes, &updater.key)?;
     let result = status(
         &manifest,
         method,
@@ -645,36 +641,33 @@ mod tests {
     fn manifest(url: &str, bytes: &[u8]) -> Manifest {
         Manifest {
             schema_version: 1,
-            expires_at: now() + 3600,
             channels: BTreeMap::from([("direct".into(), release("0.10.0", url, bytes))]),
         }
     }
 
     #[test]
-    fn signatures_expiration_schema_urls_and_versions_are_checked() {
+    fn signatures_schema_urls_and_versions_are_checked() {
         let key = SigningKey::generate(&mut rand::rngs::OsRng);
         let mut m = manifest("https://example.test/binary", b"binary");
         let bytes = sign(&m, &key);
 
-        assert!(verify_manifest(&bytes, &key.verifying_key(), now()).is_ok());
+        assert!(verify_manifest(&bytes, &key.verifying_key()).is_ok());
         let wrong = SigningKey::generate(&mut rand::rngs::OsRng);
 
-        assert!(verify_manifest(&bytes, &wrong.verifying_key(), now()).is_err());
+        assert!(verify_manifest(&bytes, &wrong.verifying_key()).is_err());
         let mut tampered: SignedManifest = serde_json::from_slice(&bytes).unwrap();
         tampered.payload = STANDARD.encode(b"changed");
 
         assert!(
             verify_manifest(
                 &serde_json::to_vec(&tampered).unwrap(),
-                &key.verifying_key(),
-                now()
+                &key.verifying_key()
             )
             .is_err()
         );
-        assert!(verify_manifest(&bytes, &key.verifying_key(), m.expires_at).is_err());
         m.schema_version = 2;
 
-        assert!(verify_manifest(&sign(&m, &key), &key.verifying_key(), now()).is_err());
+        assert!(verify_manifest(&sign(&m, &key), &key.verifying_key()).is_err());
         m.schema_version = 1;
 
         for url in [
@@ -685,7 +678,7 @@ mod tests {
         ] {
             m.channels
                 .insert("direct".into(), release("0.10.0", url, b"binary"));
-            assert!(verify_manifest(&sign(&m, &key), &key.verifying_key(), now()).is_err());
+            assert!(verify_manifest(&sign(&m, &key), &key.verifying_key()).is_err());
         }
 
         m.channels.insert(
@@ -693,14 +686,9 @@ mod tests {
             release("0.10.0-beta.1", "https://example.test/bin", b"binary"),
         );
 
-        assert!(verify_manifest(&sign(&m, &key), &key.verifying_key(), now()).is_err());
+        assert!(verify_manifest(&sign(&m, &key), &key.verifying_key()).is_err());
         assert!(
-            verify_manifest(
-                &vec![0; MANIFEST_LIMIT as usize + 1],
-                &key.verifying_key(),
-                now()
-            )
-            .is_err()
+            verify_manifest(&vec![0; MANIFEST_LIMIT as usize + 1], &key.verifying_key()).is_err()
         );
     }
 
@@ -902,7 +890,7 @@ mod tests {
     async fn https_manifest_download_integrity_limits_and_tls_failure() {
         let mut s = server().await;
         let bytes = s.updater.fetch_manifest().await.unwrap();
-        verify_manifest(&bytes, &s.updater.key, now()).unwrap();
+        verify_manifest(&bytes, &s.updater.key).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let artifact = &s.manifest.channels["direct"].artifacts[&platform().unwrap()];
         let downloaded = s.updater.download(artifact, dir.path()).await.unwrap();

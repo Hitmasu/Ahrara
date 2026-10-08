@@ -39,9 +39,9 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   origin can read the inbox, so it must be served only from a trusted host with
   HTTPS. The relay accepts browser connections only from origins listed in
   `AHRARA_WEB_ORIGINS`.
-- The `install.sh` and `install.ps1` installers come from the same host as the
-  release manifest. They check each binary's size and SHA-256 against it, while
-  `ahrara update` also verifies the manifest's Ed25519 signature. The Go SDK
+- The `install.sh` and `install.ps1` installers check each binary's size and
+  SHA-256 against the release manifest. `ahrara update` and the agent plugin also
+  verify its Ed25519 signature and only move to newer versions. The Go SDK
   downloads its native library from the GitHub Release and loads it only if it
   matches the SHA-256 pinned in the module version, which the Go checksum
   database records.

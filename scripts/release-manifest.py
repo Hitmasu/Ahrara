@@ -13,7 +13,6 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-import time
 import tomllib
 
 CONTEXT = b"ahrara-release-v1\0"
@@ -63,8 +62,6 @@ def generate(args):
         raise ValueError("release signing key must be Ed25519")
     if public_der[len(prefix):].hex() != args.public_key.lower():
         raise ValueError("signing key does not match the public key embedded in release builds")
-    if not 1 <= args.valid_days <= 90:
-        raise ValueError("manifest validity must be between 1 and 90 days")
     with tempfile.TemporaryDirectory(prefix="ahrara-release-") as work:
         work = Path(work)
         message_file, signature_file = work / "message", work / "signature"
@@ -116,9 +113,8 @@ def generate(args):
             if channels.get(channel, {}).get("version") != version:
                 channels[channel] = {"version": version, "artifacts": {}}
             channels[channel]["artifacts"][target] = artifacts[target]
-        payload = json.dumps({"schema_version": 1,
-                              "expires_at": int(time.time()) + args.valid_days * 86400,
-                              "channels": channels}, separators=(",", ":"), sort_keys=True).encode()
+        payload = json.dumps({"schema_version": 1, "channels": channels},
+                             separators=(",", ":"), sort_keys=True).encode()
         message_file.write_bytes(CONTEXT + payload)
         signature = openssl("pkeyutl", "-sign", "-inkey", args.key, "-rawin", "-in", message_file)
         envelope = {"payload": base64.b64encode(payload).decode(),
@@ -159,7 +155,6 @@ def main():
     parser.add_argument("--plugin-key-output", type=Path, help="also generate src/plugin/release-key.json for review and commit")
     parser.add_argument("--previous", type=Path, help="previous signed manifest, preserving channel availability")
     parser.add_argument("--available", action="append", default=[], help="already-published channel=platform; repeat as needed")
-    parser.add_argument("--valid-days", type=int, default=30)
     args = parser.parse_args()
     try:
         generate(args)

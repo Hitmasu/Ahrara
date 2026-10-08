@@ -67,7 +67,9 @@ the root of `https://app.ahrara.dev` on a host that applies its `_headers` file 
 serves `index.html` for paths without a file.
 
 Only the public key is embedded in binaries. Builds without it cannot check or
-apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json`.
+apply updates. The updater, the plugin and the installers read the `stable.json`
+asset of the latest GitHub Release. Its signature makes it trustworthy, and the
+updater and the plugin only move to newer versions, so it never expires.
 
 ## Publish
 
@@ -82,9 +84,8 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
    releases are not overwritten, and registries never accept a version twice. A
    failed `sdk-publish`, `maven`, `go` or `installers` job can be re-run. Each
    skips what is already published.
-3. Deploy the `ahrara-static-site` artifact to the host of `https://ahrara.dev`. It
-   contains `install.sh`, `install.ps1` and the generated `releases/stable.json`,
-   so deploy the artifact rather than the repository. The host must apply its
+3. Deploy the `ahrara-static-site` artifact, which includes `install.sh` and
+   `install.ps1`, to the host of `https://ahrara.dev`. The host must apply its
    `_headers` file.
 4. Review and commit the generated `Formula/ahrara.rb` from the
    `ahrara-homebrew-formula` artifact or release asset, and check that
@@ -101,15 +102,14 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
 6. Mark a channel/platform as available only when installable. The workflow's
    `available` input accepts space-separated pairs such as `brew=darwin-aarch64`.
 
-The plugin downloads `stable.json` from the latest GitHub Release, independently
-of static-site deployment. Test an installation and a later launch through the
-repository plugin.
+Test an installation and a later launch through the repository plugin.
 
-## Refresh the manifest
+## Add a channel to a published release
 
-Manifests expire after 30 days by default, with a 90-day maximum. Before expiry,
-download the existing release's original six binaries into `dist/` and its signed
-manifest. With Python 3.11+ and OpenSSL 3, run:
+The workflow's `available` input only applies when it publishes a version. To mark
+a channel such as `brew=darwin-aarch64` available afterwards, download the release's
+original six binaries into `dist/` and its `stable.json`, then re-sign with Python
+3.11+ and OpenSSL 3:
 
 ```sh
 python3 scripts/release-manifest.py \
@@ -117,16 +117,14 @@ python3 scripts/release-manifest.py \
   --key /secure/release-signing.pem \
   --public-key '<64-character-public-key-hex>' \
   --previous /path/to/previous-stable.json \
-  --output src/site/releases/stable.json \
-  --homebrew-output Formula/ahrara.rb \
-  --plugin-key-output src/plugin/release-key.json
+  --available brew=darwin-aarch64 \
+  --output stable.json
 ```
 
-Replace placeholders with the matching release values, then republish the static
-manifest and replace the `stable.json` asset on the corresponding latest GitHub
-Release so plugin installations also receive the refresh. The tool verifies the previous signature and preserves availability;
-use `--available channel=platform` to add a published channel. Changed binary
-bytes require a new version.
+Then replace the release's `stable.json` asset
+(`gh release upload vX.Y.Z stable.json --clobber`). The tool verifies the previous
+signature and keeps the channels already published. Changed binary bytes require a
+new version.
 
 ## Installation ownership and keys
 

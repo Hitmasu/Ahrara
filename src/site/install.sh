@@ -20,7 +20,7 @@ sha256() {
 	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1
 }
 
-manifest_url=${AHRARA_MANIFEST_URL:-https://ahrara.dev/releases/stable.json}
+manifest_url=${AHRARA_MANIFEST_URL:-https://github.com/Hitmasu/Ahrara/releases/latest/download/stable.json}
 dest=${AHRARA_INSTALL_DIR:-$HOME/.ahrara/bin}
 exe=$dest/ahrara
 

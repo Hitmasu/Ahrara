@@ -198,14 +198,14 @@ jobs:
           umask 022
           args=()
           if [ "$INITIAL_RELEASE" != true ]; then
-            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://ahrara.dev/releases/stable.json -o previous.json
+            gh release download --pattern stable.json --output previous.json
             args+=(--previous previous.json)
           fi
           read -r -a availability <<< "$AVAILABLE"
           for entry in "${availability[@]}"; do args+=(--available "$entry"); done
           python3 scripts/release-manifest.py --version "$RELEASE_VERSION" --assets dist \
             --key "$key_file" --public-key "$AHRARA_UPDATE_PUBLIC_KEY" \
-            --output src/site/releases/stable.json --homebrew-output Formula/ahrara.rb \
+            --output dist/stable.json --homebrew-output Formula/ahrara.rb \
             --plugin-key-output src/plugin/release-key.json "${args[@]}"
       - name: Prepare plugin verification key for review and commit
         uses: actions/upload-artifact@v4
@@ -226,19 +226,19 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo 'Release exists; use the documented manifest refresh procedure. Binaries are immutable.' >&2
+            echo 'Release exists; binaries are immutable, so publish a new version.' >&2
             exit 1
           fi
           gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" \
             --title "Ahrara $RELEASE_VERSION" --generate-notes \
-            dist/ahrara-* src/site/releases/stable.json Formula/ahrara.rb
+            dist/ahrara-* dist/stable.json Formula/ahrara.rb
       - name: Prepare static site for its existing hosting pipeline
         uses: actions/upload-artifact@v4
         with:
           name: ahrara-static-site
           path: src/site/
           if-no-files-found: error
-  # The site is not deployed yet, so the scripts read the manifest attached to the new release.
+  # The scripts read the manifest of the latest release, which is now this one.
   installers:
     needs: publish
     strategy:
@@ -250,11 +250,9 @@ jobs:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve the release manifest
+      - name: Resolve the release version
         shell: bash
-        run: |
-          echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
-          echo "AHRARA_MANIFEST_URL=https://github.com/$GITHUB_REPOSITORY/releases/download/v${RELEASE_REF#v}/stable.json" >> "$GITHUB_ENV"
+        run: echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
       - name: Install with install.sh
         if: runner.os != 'Windows'
         shell: bash

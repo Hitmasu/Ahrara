@@ -193,7 +193,7 @@ contents or introducing helpers solely to wrap lines.
 Preview the site with `python3 -m http.server 8080 --bind 127.0.0.1 --directory src/site`.
 Static hosting publishes the contents of `src/site/`, including the CLI installers
 `install.sh` and `install.ps1`. The host must apply `src/site/_headers`, which serves
-them as plain text and keeps `releases/stable.json` cacheable for at most five minutes.
+them as plain text.
 
 The landing page and the documentation each exist in English, Brazilian Portuguese
 and Spanish. The pages of each part share one stylesheet and one script, and both

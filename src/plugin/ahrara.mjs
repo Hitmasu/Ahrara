@@ -30,7 +30,7 @@ function httpsURL(value) {
   return url;
 }
 
-export function release(bytes, publicKey, target, now = Date.now() / 1000, installed = false) {
+export function release(bytes, publicKey, target) {
   if (bytes.length > manifestLimit) throw new Error('Release manifest is too large.');
   if (!/^[0-9a-f]{64}$/i.test(publicKey ?? '')) {
     throw new Error('This plugin has no release verification key. The maintainer must publish src/plugin/release-key.json first.');
@@ -51,10 +51,7 @@ export function release(bytes, publicKey, target, now = Date.now() / 1000, insta
     throw new Error('Release signature verification failed.');
   }
   const manifest = JSON.parse(payload);
-  if (manifest.schema_version !== 1 || !Number.isSafeInteger(manifest.expires_at)) {
-    throw new Error('Invalid release manifest.');
-  }
-  if (!installed && manifest.expires_at <= now) throw new Error('Release manifest expired.');
+  if (manifest.schema_version !== 1) throw new Error('Invalid release manifest.');
   const selected = manifest.channels?.direct;
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(selected?.version ?? '')) {
     throw new Error('Invalid stable release version.');
@@ -149,7 +146,7 @@ export async function install({ directory = cacheDirectory(), publicKey, target 
   let previous;
   try {
     const bytes = await fs.readFile(index);
-    previous = release(bytes, publicKey, target, undefined, true);
+    previous = release(bytes, publicKey, target);
     checkBinary(await fs.readFile(location(previous)), previous);
     if (!update) return location(previous); // Installed binaries also work offline after manifest expiry.
   } catch (error) {
