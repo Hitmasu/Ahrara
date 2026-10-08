@@ -137,7 +137,8 @@ relay where supported; paths must resolve inside the containers.
 Rust uses `ahrara-core` directly. Other bindings call the versioned
 [C interface](src/native/include/ahrara.h). Native packages must match the OS,
 architecture, and C runtime. `AHRARA_NATIVE_LIBRARY` is an absolute-path
-development override pointing to a compiled library, not a CLI executable.
+override pointing to a compiled library, not a CLI executable, for development
+and offline Go builds. Every SDK honours it, so it is as trusted as `LD_PRELOAD`.
 Release builds embed the verified relay public key using
 `AHRARA_SERVER_PUBLIC_KEY`.
 
