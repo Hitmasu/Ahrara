@@ -404,9 +404,10 @@ async fn run() -> Result<()> {
     }
     if let Command::Database { command } = command {
         let _guard = Ownership::acquire(&cfg, "database", "")?;
-        let identity = auth::Identity::load(&cfg).map_err(|_| {
-            anyhow::anyhow!("Identity is required; register its Recovery Key with auth set --stdin")
-        })?;
+        if !cfg.identity_path.exists() {
+            bail!("Identity is required; register its Recovery Key with auth set --stdin")
+        }
+        let identity = auth::Identity::load(&cfg)?;
         let key = identity.database_key();
         match command {
             Database::Export { path } => {

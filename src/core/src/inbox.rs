@@ -791,9 +791,9 @@ fn owned_profile(path: &Path) -> Result<()> {
     let metadata = std::fs::metadata(path)?;
     // SAFETY: geteuid has no preconditions and cannot fail.
     let user = unsafe { libc::geteuid() };
-    if metadata.uid() != user || metadata.mode() & 0o002 != 0 {
+    if metadata.uid() != user || metadata.mode() & 0o022 != 0 {
         bail!(
-            "invalid_argument: profile_path must belong to this user and not be writable by others"
+            "invalid_argument: profile_path must belong to this user and not be writable by group or others"
         )
     }
 
@@ -814,6 +814,9 @@ mod tests {
                 .unwrap()
         };
         mode(0o777);
+
+        assert!(owned_profile(directory.path()).is_err());
+        mode(0o775);
 
         assert!(owned_profile(directory.path()).is_err());
         mode(0o755);

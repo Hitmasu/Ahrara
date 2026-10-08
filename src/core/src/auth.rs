@@ -50,6 +50,17 @@ impl Identity {
     pub fn load(cfg: &Config) -> Result<Self> {
         let bytes =
             Zeroizing::new(std::fs::read(&cfg.identity_path).context("cannot read identity")?);
+        // Like SSH keys: a copy readable by others has to be fixed, not used.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::metadata(&cfg.identity_path)?.permissions().mode() & 0o077 != 0 {
+                bail!(
+                    "{} is readable by other users; run chmod 600 on it",
+                    cfg.identity_path.display()
+                )
+            }
+        }
         let seed: &[u8; 32] = bytes
             .as_slice()
             .try_into()
@@ -202,4 +213,31 @@ pub fn validate_api_token(value: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn identity_files_readable_by_others_are_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            identity_path: directory.path().join("identity.key"),
+            database_path: directory.path().join("inbox.db"),
+            ..Config::default()
+        };
+        Identity::load_or_create(&cfg).unwrap();
+        let mode = |mode| {
+            std::fs::set_permissions(&cfg.identity_path, std::fs::Permissions::from_mode(mode))
+                .unwrap()
+        };
+        mode(0o644);
+
+        assert!(Identity::load(&cfg).is_err());
+        mode(0o600);
+
+        assert!(Identity::load(&cfg).is_ok());
+    }
 }
