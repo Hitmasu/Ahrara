@@ -51,15 +51,30 @@ deployed separately.
   | Secret | Value |
   |---|---|
   | `AHRARA_RELEASE_SIGNING_KEY` | The release key's private PEM |
-  | `NPM_TOKEN` | npm granular access token that can publish `@ahrara/sdk` |
-  | `PYPI_API_TOKEN` | PyPI API token for the `ahrara` project |
-  | `NUGET_API_KEY` | nuget.org API key that can push `Ahrara` |
+  | `NUGET_USER` | The nuget.org profile name (not the email) that owns `Ahrara` |
+  | `NPM_TOKEN` | Only for the first release: npm granular access token that can publish to `@ahrara` |
   | `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD` | Central Portal user token |
   | `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` | ASCII-armored signing key and its passphrase. Publish the public key to a keyserver. |
 
 - Create the registry owners: the npm organization `ahrara`, PyPI and nuget.org
   accounts, and the Central Portal namespace `dev.ahrara`, verified with a DNS TXT
   record on `ahrara.dev`. Each name is claimed by its first upload.
+- NuGet, PyPI and npm publish through trusted publishing, with no stored token.
+  Each trusts the repository owner and name, the workflow file `client-release.yml`
+  and the environment `release`:
+  - On nuget.org, add a Trusted Publishing policy under your username, scoped to
+    push new packages and versions matching `Ahrara`. A policy for a private
+    repository stays active for 7 days until its first publish.
+  - On pypi.org, add a pending publisher for the project `ahrara` under Publishing
+    in your account. It becomes the project's trusted publisher on the first upload,
+    but does not reserve the name until then.
+  - npm only configures existing packages, so the first release publishes
+    `@ahrara/sdk` with `NPM_TOKEN`. Then add a GitHub Actions trusted publisher in
+    the package settings on npmjs.com and allow direct publishing: configurations
+    stage packages by default, and a staged version waits for approval on
+    npmjs.com. Finally, delete `NPM_TOKEN` and set the package to require
+    two-factor authentication and disallow tokens. npm tries trusted publishing
+    before the token, so the order of these steps is safe.
 - Commit `src/plugin/release-key.json` with `ed25519` set to the same value as
   `AHRARA_UPDATE_PUBLIC_KEY` before tagging, because plugins install from the
   default branch. Its checked-in null value deliberately prevents downloads until a
