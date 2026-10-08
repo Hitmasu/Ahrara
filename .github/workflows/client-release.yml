@@ -55,10 +55,15 @@ jobs:
           PY
       - name: Build client
         run: make release PLATFORM=${{ matrix.platform }} ARCH=${{ matrix.arch }}
-      # Includes the plugin tests, which check every plugin manifest against src/cli/Cargo.toml.
+      - name: Build the SDKs' native core
+        run: make sdk-native-release PLATFORM=${{ matrix.platform }} ARCH=${{ matrix.arch }}
+      # Includes the plugin tests, which check every plugin and SDK manifest against src/cli/Cargo.toml.
       - name: Validate updater and client on Linux
         if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
         run: make client-lint client-test
+      - name: Collect third-party licenses
+        if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
+        run: make licenses
       - uses: actions/upload-artifact@v4
         with:
           name: client-${{ matrix.platform }}-${{ matrix.arch }}
@@ -74,8 +79,86 @@ jobs:
           name: ahrara-web-app
           path: dist/web/
           if-no-files-found: error
-  publish:
+  sdk-packages:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: client-*
+          path: dist
+          merge-multiple: true
+      - name: Package the SDKs with the six native libraries
+        run: make sdk-packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-npm
+          path: dist/packages/npm/*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-python
+          path: dist/packages/pypi/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-nuget
+          path: dist/packages/nuget/*.nupkg
+          if-no-files-found: error
+  # Runs each binary and loads each native library on its own platform before anything is published.
+  smoke:
+    needs: [build, sdk-packages]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux, arch: x86_64, python: x64 }
+          - { runner: ubuntu-24.04-arm, platform: linux, arch: aarch64, python: arm64 }
+          - { runner: macos-15-intel, platform: darwin, arch: x86_64, python: x64 }
+          - { runner: macos-15, platform: darwin, arch: aarch64, python: arm64 }
+          - { runner: windows-2025, platform: windows, arch: x86_64, python: x64 }
+          - { runner: windows-11-arm, platform: windows, arch: aarch64, python: arm64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-python
+          path: wheels
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.python }}
+      - name: Run the CLI
+        run: |
+          binary=dist/ahrara-${{ matrix.platform }}-${{ matrix.arch }}
+          [ -f "$binary" ] || binary=$binary.exe
+          chmod +x "$binary"
+          test "$("$binary" --version)" = "ahrara ${RELEASE_REF#v}"
+      # pip picks the wheel by platform tag; the core's own argument check proves the library loads with ABI 1.
+      - name: Load the native core from its wheel
+        run: |
+          python -m pip install --quiet --no-index --find-links wheels ahrara
+          python - <<'PY'
+          from ahrara import _native
+          try:
+              _native.call({})
+          except _native.AhraraError as error:
+              assert error.code == "invalid_argument", error.code
+          else:
+              raise AssertionError("the native core accepted an empty request")
+          PY
+  publish:
+    needs: [build, smoke]
     runs-on: ubuntu-latest
     # The signing key is a secret of this protected environment, never of the repository.
     environment: release
@@ -155,3 +238,160 @@ jobs:
           name: ahrara-static-site
           path: src/site/
           if-no-files-found: error
+  # The site is not deployed yet, so the scripts read the manifest attached to the new release.
+  installers:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the release manifest
+        shell: bash
+        run: |
+          echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
+          echo "AHRARA_MANIFEST_URL=https://github.com/$GITHUB_REPOSITORY/releases/download/v${RELEASE_REF#v}/stable.json" >> "$GITHUB_ENV"
+      - name: Install with install.sh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh src/site/install.sh
+          test "$("$HOME/.ahrara/bin/ahrara" --version)" = "ahrara $RELEASE_VERSION"
+          grep -Eq '"method": *"sh"' "$HOME/.ahrara/bin/ahrara.install.json"
+      - name: Install with install.ps1 in Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Get-Content -Raw src/site/install.ps1 | Invoke-Expression
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Ahrara\ahrara.exe'
+          $version = & $exe --version
+          if ($version -ne "ahrara $env:RELEASE_VERSION") { throw "Unexpected version: $version" }
+          if ((Get-Content -Raw "$exe.install.json") -notmatch '"method":\s*"powershell"') { throw 'Missing powershell receipt' }
+  sdk-publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    # Registry tokens are secrets of this protected environment, like the signing key.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sdk-*
+          path: packages
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Every step skips versions already published, so a failed run can be re-run.
+      - name: Publish to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push packages/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --quiet twine==7.0.0
+          python -m twine check --strict packages/*.whl
+          python -m twine upload --skip-existing --non-interactive packages/*.whl
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version=${RELEASE_REF#v}
+          if npm view "@ahrara/sdk@$version" version >/dev/null 2>&1; then
+            echo "@ahrara/sdk $version is already published"
+            exit 0
+          fi
+          npm publish "packages/ahrara-sdk-$version.tgz" --access public --provenance
+  maven:
+    needs: smoke
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: client-*
+          path: dist
+          merge-multiple: true
+      - name: Stage the six native libraries
+        run: make sdk-stage
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Publish to Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          version=${RELEASE_REF#v}
+          if curl --fail --silent --head "https://repo1.maven.org/maven2/dev/ahrara/ahrara/$version/ahrara-$version.pom" >/dev/null; then
+            echo "dev.ahrara:ahrara $version is already published"
+            exit 0
+          fi
+          mvn -B -P release -DskipTests -f src/sdks/java/pom.xml deploy
+  # The Go SDK downloads its native library from the release, so the module tag
+  # must carry that release's checksums. They live in a commit outside main.
+  go:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      # The runner image's Go provides gofmt and the module proxy check.
+      - name: Tag the Go SDK and the k6 extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${RELEASE_REF#v}
+          gh release download "v$version" --pattern 'ahrara-native-*' --dir native
+          {
+            printf '// Code generated by the release workflow. DO NOT EDIT.\n\npackage ahrara\n\nvar (\n'
+            printf '\tnativeVersion = "%s"\n\tnativeSHA256 = map[string]string{\n' "$version"
+            for file in native/*; do printf '\t\t"%s": "%s",\n' "${file##*/}" "$(sha256sum "$file" | cut -d ' ' -f 1)"; done
+            printf '\t}\n)\n'
+          } > src/sdks/go/native_checksums.go
+          gofmt -w src/sdks/go/native_checksums.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --quiet -m "Go SDK $version native library checksums" src/sdks/go/native_checksums.go
+          for module in go k6; do
+            tag="src/sdks/$module/v$version"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              echo "$tag already exists"
+              continue
+            fi
+            git tag "$tag"
+            git push origin "refs/tags/$tag"
+          done
+          # Have the public proxy fetch both modules now instead of on the first user's request.
+          for module in go k6; do
+            GOPROXY=https://proxy.golang.org go list -m "github.com/Hitmasu/Ahrara/src/sdks/$module@v$version"
+          done

@@ -22,10 +22,14 @@ Each guide contains examples and the options for that language.
 | [Rust](../src/core/README.md) | Tokio runtime | Async calls, streams, or async callbacks. |
 | [k6](../src/sdks/k6/README.md) | Custom k6 binary with the Ahrara extension | Calls and synchronous callbacks within each virtual user. |
 
-Except for Rust, SDK packages need a native library matching the operating
-system and architecture. Linux x64 is the currently validated SDK platform.
-The JavaScript SDK runs in Node.js, not browser code; stock k6 cannot load the
-Ahrara extension.
+Except for Rust, the SDKs run the shared core as a native library built for
+Linux, macOS and Windows on x64 and ARM64. On Linux it needs glibc 2.17 or later,
+so Alpine and other musl-based systems are not supported. The .NET, JavaScript,
+Python and Java packages include it. The Go SDK, and with it the k6 extension,
+downloads it from the GitHub Release on first use, as the
+[Go guide](../src/sdks/go/README.md#native-library) explains. The full test suite runs on
+Linux x64. The JavaScript SDK runs in Node.js, not browser code; stock k6 cannot
+load the Ahrara extension.
 
 ## How an inbox works
 

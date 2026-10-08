@@ -39,6 +39,12 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   origin can read the inbox, so it must be served only from a trusted host with
   HTTPS. The relay accepts browser connections only from origins listed in
   `AHRARA_WEB_ORIGINS`.
+- The `install.sh` and `install.ps1` installers come from the same host as the
+  release manifest. They check each binary's size and SHA-256 against it, while
+  `ahrara update` also verifies the manifest's Ed25519 signature. The Go SDK
+  downloads its native library from the GitHub Release and loads it only if it
+  matches the SHA-256 pinned in the module version, which the Go checksum
+  database records.
 - MCP saves attachments only into the `attachments` directory next to the
   profile database, never overwriting existing files.
 - Email is untrusted input, including when passed to an AI agent.
