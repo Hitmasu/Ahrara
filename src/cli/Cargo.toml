@@ -28,7 +28,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
-rmcp = { version = "=0.8.5", features = ["server", "client", "transport-io", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "=2.1.0", features = ["server", "client", "transport-io", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
 rpassword = "7.4"
 rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
