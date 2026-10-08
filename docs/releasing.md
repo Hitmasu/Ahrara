@@ -17,9 +17,6 @@ deployed separately.
 
 ## Prerequisites
 
-- The repository must be public. The installers, the plugin, Homebrew and the Go
-  SDK download from it, npm provenance links to it, and the workflow's ARM runners
-  are free only for public repositories.
 - Set the same version in:
   - `src/cli/Cargo.toml` and `src/cli/Cargo.lock`, and `src/native/Cargo.toml` and
     `src/native/Cargo.lock`
@@ -36,58 +33,38 @@ deployed separately.
   version that differs from `src/cli/Cargo.toml`.
 - Set two repository variables:
   - `AHRARA_UPDATE_PUBLIC_KEY`: the Ed25519 public key of a dedicated release key,
-    as 64 hexadecimal characters. Never use a user Identity.
+    as 64 hexadecimal characters. Never use a user Identity. Plugins install from
+    the default branch, so `src/plugin/release-key.json` must hold the same key.
   - `AHRARA_SERVER_PUBLIC_KEY`: the production relay's verified
     `ahrara_server_v1_...` pin. Release binaries and native libraries embed it and
-    connect to `wss://relay.ahrara.dev`. The Tunnel must route `relay.ahrara.dev`
-    to the relay, whose WebSocket endpoint is `/`, while `ahrara.dev` serves the
-    static site.
+    connect to `wss://relay.ahrara.dev`.
 - Store the secrets below in the `release` environment, not in the repository. The
   workflow runs from the pushed tag, so anyone who can push a tag could otherwise
   change it to read them. Require reviewers for the environment, limit its
-  deployments to `v*` tags, and protect those tags with a ruleset. Leave the
-  `src/sdks/*` tags that the workflow creates outside the ruleset.
+  deployments to `v*` tags, and protect those tags with a ruleset that leaves the
+  workflow's `src/sdks/*` tags alone.
 
   | Secret | Value |
   |---|---|
   | `AHRARA_RELEASE_SIGNING_KEY` | The release key's private PEM |
   | `NUGET_USER` | The nuget.org profile name (not the email) that owns `Ahrara` |
-  | `NPM_TOKEN` | Only for the first release: npm granular access token that can publish to `@ahrara` |
-  | `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD` | Central Portal user token |
-  | `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` | ASCII-armored signing key and its passphrase. Publish the public key to a keyserver. |
+  | `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD` | Central Portal user token for the `dev.ahrara` namespace |
+  | `MAVEN_GPG_PRIVATE_KEY`, `MAVEN_GPG_PASSPHRASE` | ASCII-armored signing key and its passphrase, with the public key on a keyserver |
 
-- Create the registry owners: the npm organization `ahrara`, PyPI and nuget.org
-  accounts, and the Central Portal namespace `dev.ahrara`, verified with a DNS TXT
-  record on `ahrara.dev`. Each name is claimed by its first upload.
 - NuGet, PyPI and npm publish through trusted publishing, with no stored token.
-  Each trusts the repository owner and name, the workflow file `client-release.yml`
-  and the environment `release`:
-  - On nuget.org, add a Trusted Publishing policy under your username, scoped to
-    push new packages and versions matching `Ahrara`. A policy for a private
-    repository stays active for 7 days until its first publish.
-  - On pypi.org, add a pending publisher for the project `ahrara` under Publishing
-    in your account. It becomes the project's trusted publisher on the first upload,
-    but does not reserve the name until then.
-  - npm only configures existing packages, so the first release publishes
-    `@ahrara/sdk` with `NPM_TOKEN`. Then add a GitHub Actions trusted publisher in
-    the package settings on npmjs.com and allow direct publishing: configurations
-    stage packages by default, and a staged version waits for approval on
-    npmjs.com. Finally, delete `NPM_TOKEN` and set the package to require
-    two-factor authentication and disallow tokens. npm tries trusted publishing
-    before the token, so the order of these steps is safe.
-- Commit `src/plugin/release-key.json` with `ed25519` set to the same value as
-  `AHRARA_UPDATE_PUBLIC_KEY` before tagging, because plugins install from the
-  default branch. Its checked-in null value deliberately prevents downloads until a
-  release key is provisioned.
+  Each trusts the repository, the workflow file `client-release.yml` and the
+  environment `release`: a Trusted Publishing policy for `Ahrara` on nuget.org, a
+  trusted publisher for the `ahrara` project on PyPI, and one for `@ahrara/sdk` on
+  npm. The npm one must allow direct publishing, because npm configurations only
+  stage packages by default.
 - Run the relevant [checks](../CONTRIBUTING.md#checks), including `make update-test`
   and `make sdk-test`.
 
 The browser app is built by the same workflow as artifact `ahrara-web-app`, with
-the relay key from `AHRARA_SERVER_PUBLIC_KEY`. Before publishing it, set
-`AHRARA_WEB_ORIGINS=https://app.ahrara.dev` on the relay and deploy the relay.
-Publish the artifact's contents at the root of `https://app.ahrara.dev` on a host
-that applies its `_headers` file, such as Cloudflare Pages, and serves
-`index.html` for paths without a file.
+the relay key from `AHRARA_SERVER_PUBLIC_KEY`. The relay must list
+`https://app.ahrara.dev` in `AHRARA_WEB_ORIGINS`. Publish the artifact's contents at
+the root of `https://app.ahrara.dev` on a host that applies its `_headers` file and
+serves `index.html` for paths without a file.
 
 Only the public key is embedded in binaries. Builds without it cannot check or
 apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json`.
@@ -105,11 +82,10 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
    releases are not overwritten, and registries never accept a version twice. A
    failed `sdk-publish`, `maven`, `go` or `installers` job can be re-run. Each
    skips what is already published.
-3. Deploy the `ahrara-static-site` artifact to the host of `https://ahrara.dev`,
-   such as Cloudflare Pages (`npx wrangler pages deploy <artifact-directory>
-   --project-name <project>`). It contains `install.sh`, `install.ps1` and the
-   generated `releases/stable.json`, so deploy the artifact rather than the
-   repository. The host must apply its `_headers` file.
+3. Deploy the `ahrara-static-site` artifact to the host of `https://ahrara.dev`. It
+   contains `install.sh`, `install.ps1` and the generated `releases/stable.json`,
+   so deploy the artifact rather than the repository. The host must apply its
+   `_headers` file.
 4. Review and commit the generated `Formula/ahrara.rb` from the
    `ahrara-homebrew-formula` artifact or release asset, and check that
    `ahrara-plugin-key` matches `src/plugin/release-key.json`. The workflow does not
@@ -126,11 +102,8 @@ apply updates. The manifest endpoint is `https://ahrara.dev/releases/stable.json
    `available` input accepts space-separated pairs such as `brew=darwin-aarch64`.
 
 The plugin downloads `stable.json` from the latest GitHub Release, independently
-of static-site deployment. Test first installation and a subsequent launch with
-the repository plugin before announcing it.
-
-The checked-in bootstrap formula stays disabled until generated release URLs and
-checksums replace it.
+of static-site deployment. Test an installation and a later launch through the
+repository plugin.
 
 ## Refresh the manifest
 
