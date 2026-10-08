@@ -443,16 +443,17 @@ sdk-stage:
 	done
 
 # Release packages go to dist/packages, apart from the ones the sdk-*-test targets build.
+# Their images are pinned by digest, and setuptools by version in pyproject.toml.
 sdk-packages: sdk-stage
 	rm -rf dist/packages
 	mkdir -p dist/packages/npm dist/packages/pypi dist/packages/nuget
 	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD:/repo" -w /repo/src/sdks/javascript \
-		node:24-bookworm npm pack --pack-destination /repo/dist/packages/npm
+		node:24-bookworm@sha256:3d27e5c11e5786e309ec3e03f93ae536eb36e6e5eb3714d5eb3300a36157add0 npm pack --pack-destination /repo/dist/packages/npm
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$$PWD:/repo" -w /repo \
-		-e DOTNET_CLI_HOME=/repo/.dev/dotnet-home -e NUGET_PACKAGES=/repo/.dev/nuget mcr.microsoft.com/dotnet/sdk:10.0 \
+		-e DOTNET_CLI_HOME=/repo/.dev/dotnet-home -e NUGET_PACKAGES=/repo/.dev/nuget mcr.microsoft.com/dotnet/sdk:10.0@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317 \
 		dotnet pack src/sdks/dotnet/src/Ahrara/Ahrara.csproj -c Release -p:PackageOutputPath=/repo/dist/packages/nuget --nologo
 	docker run --rm -i --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD:/repo" -w /repo/src/sdks/python \
-		python:3.13-slim bash -s -- $(WHEEL_TAGS) <<'AHRARA_WHEELS'
+		python:3.13-slim@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c bash -s -- $(WHEEL_TAGS) <<'AHRARA_WHEELS'
 	set -euo pipefail
 	python -m venv /tmp/venv
 	. /tmp/venv/bin/activate
