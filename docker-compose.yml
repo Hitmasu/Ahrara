@@ -13,6 +13,7 @@ services:
     environment:
       AHRARA_UNIX_SOCKET: /run/ahrara/ahrara.sock
       AHRARA_WEB_ORIGINS: ${AHRARA_WEB_ORIGINS:-}
+      AHRARA_MAX_CLIENTS: ${AHRARA_MAX_CLIENTS:?set the most client connections this relay may hold}
     ulimits:
       nofile: 1048576
     ports:

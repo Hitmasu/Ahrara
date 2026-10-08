@@ -27,11 +27,19 @@ pub struct RuntimeLimits {
     pub command_timeout: Duration,
 }
 
+/// Tests run without a global cap; the relay itself never has a default one.
+#[cfg(test)]
 impl Default for RuntimeLimits {
     fn default() -> Self {
+        Self::with_clients(MAX_CLIENTS)
+    }
+}
+
+impl RuntimeLimits {
+    /// The global client cap depends on the host's memory, so it has no default.
+    fn with_clients(clients: usize) -> Self {
         Self {
-            // About 290 MB of idle sessions; many sources must not exhaust memory.
-            clients: 100_000,
+            clients,
             clients_per_source: 100,
             smtp_sessions: 256,
             smtp_per_source: 16,
@@ -41,9 +49,7 @@ impl Default for RuntimeLimits {
             command_timeout: Duration::from_secs(120),
         }
     }
-}
 
-impl RuntimeLimits {
     pub fn from_env() -> Result<Self> {
         Self::from_lookup(|key| {
             std::env::var_os(key)
@@ -57,13 +63,12 @@ impl RuntimeLimits {
     }
 
     fn from_lookup(mut get: impl FnMut(&str) -> Result<Option<String>>) -> Result<Self> {
-        let defaults = Self::default();
-        let mut number = |key: &str, default: usize, maximum: usize| -> Result<usize> {
+        let mut number = |key: &str, default: Option<usize>, maximum: usize| -> Result<usize> {
             let value = match get(key)? {
                 Some(value) => value
                     .parse::<usize>()
                     .map_err(|_| anyhow!("{key} must be an integer in 1..{maximum}"))?,
-                None => default,
+                None => default.ok_or_else(|| anyhow!("{key} is required"))?,
             };
             if !(1..=maximum).contains(&value) {
                 return Err(anyhow!("{key} must be in 1..{maximum}"));
@@ -71,25 +76,26 @@ impl RuntimeLimits {
 
             Ok(value)
         };
+        let clients = number("AHRARA_MAX_CLIENTS", None, MAX_CLIENTS)?;
+        let defaults = Self::with_clients(clients);
         let smtp_sessions = number(
             "AHRARA_SMTP_MAX_SESSIONS",
-            defaults.smtp_sessions,
+            Some(defaults.smtp_sessions),
             MAX_SETTING,
         )?;
         let smtp_per_source = number(
             "AHRARA_SMTP_MAX_SESSIONS_PER_SOURCE",
-            defaults.smtp_per_source.min(smtp_sessions),
+            Some(defaults.smtp_per_source.min(smtp_sessions)),
             smtp_sessions,
         )?;
-        let clients = number("AHRARA_MAX_CLIENTS", defaults.clients, MAX_CLIENTS)?;
         let clients_per_source = number(
             "AHRARA_MAX_CLIENTS_PER_SOURCE",
-            defaults.clients_per_source,
+            Some(defaults.clients_per_source),
             MAX_CLIENTS_PER_SOURCE,
         )?;
         let mut secs = |key: &str, default: Duration| -> Result<Duration> {
             Ok(Duration::from_secs(
-                number(key, default.as_secs() as usize, MAX_SETTING)? as u64,
+                number(key, Some(default.as_secs() as usize), MAX_SETTING)? as u64,
             ))
         };
 
@@ -363,10 +369,12 @@ impl Drop for SourcePermit {
 mod tests {
     use super::*;
 
+    /// Like the environment, with the required global cap unless `values` sets it.
     fn configured(values: &[(&str, &str)]) -> Result<RuntimeLimits> {
         RuntimeLimits::from_lookup(|key| {
             Ok(values
                 .iter()
+                .chain(&[("AHRARA_MAX_CLIENTS", "600000")])
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).into()))
         })
@@ -384,7 +392,17 @@ mod tests {
 
     #[test]
     fn settings_validate_every_bound_without_mutating_the_environment() {
-        assert_eq!(configured(&[]).unwrap(), RuntimeLimits::default());
+        assert!(
+            RuntimeLimits::from_lookup(|_| Ok(None)).is_err(),
+            "the global client cap has no default"
+        );
+        assert_eq!(
+            configured(&[]).unwrap(),
+            RuntimeLimits {
+                clients: 600_000,
+                ..RuntimeLimits::default()
+            }
+        );
         let small = configured(&[("AHRARA_SMTP_MAX_SESSIONS", "2")]).unwrap();
 
         assert_eq!(small.smtp_sessions, 2);

@@ -40,6 +40,7 @@ fn forwarding_end_to_end() {
     let server_dir = tempfile::tempdir().unwrap();
     let _server = Process(
         Command::new(p.ingress_binary())
+            .env("AHRARA_MAX_CLIENTS", "1000")
             .env("AHRARA_SMTP_BIND", format!("127.0.0.1:{smtp_port}"))
             .env("AHRARA_HTTPS_BIND", format!("127.0.0.1:{wss_port}"))
             .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
@@ -171,6 +172,7 @@ fn email_routing_end_to_end() {
         let server_dir = tempfile::tempdir().unwrap();
         let _server = Process(
             Command::new(p.ingress_binary())
+                .env("AHRARA_MAX_CLIENTS", "1000")
                 .env("AHRARA_SMTP_BIND", format!("127.0.0.1:{smtp_port}"))
                 .env("AHRARA_HTTPS_BIND", format!("127.0.0.1:{wss_port}"))
                 .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)
@@ -1305,6 +1307,7 @@ async fn reconnect_end_to_end() {
     let server = || {
         Process(
             Command::new(p.ingress_binary())
+                .env("AHRARA_MAX_CLIENTS", "1000")
                 .env("AHRARA_SMTP_BIND", &smtp)
                 .env("AHRARA_HTTPS_BIND", &https)
                 .env("AHRARA_TLS_CERT", &p.config.api_tls_cert_path)

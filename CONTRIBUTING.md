@@ -28,7 +28,7 @@ and run the Linux development client against that profile:
 
 ```sh
 make dev-certs
-docker compose up -d --build --wait server
+AHRARA_MAX_CLIENTS=1000 docker compose up -d --build --wait server
 make cli
 dist/ahrara --config .dev/profile/config.toml
 ```
@@ -50,7 +50,7 @@ Both directories are ignored by Git. The default development endpoints are:
 to these HTTPS endpoints. Do not use development certificates for public services.
 
 If port 8443 is busy, use `make dev-certs AHRARA_WSS_PORT=18443` and
-`AHRARA_WSS_PORT=18443 docker compose up -d --build --wait server`. Update
+`AHRARA_WSS_PORT=18443 AHRARA_MAX_CLIENTS=1000 docker compose up -d --build --wait server`. Update
 `server_url` in any existing profile. Set `AHRARA_UID` and `AHRARA_GID` for Compose
 if the generated files belong to a user other than `1000:1000`.
 

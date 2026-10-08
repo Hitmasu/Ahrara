@@ -11,7 +11,7 @@ From the repository root:
 ```sh
 make dev-certs
 docker compose build server
-docker compose up -d --wait server
+AHRARA_MAX_CLIENTS=1000 docker compose up -d --wait server
 ```
 
 `make dev-certs` builds the static server locally. The Dockerfile only packages
@@ -118,9 +118,10 @@ Unix socket, which only cloudflared reaches. Keep that header: if a Cloudflare
 Transform Rule removes it, connections have no source and are not limited, and the
 relay logs `client_source_unknown` once.
 
-`AHRARA_MAX_CLIENTS` (default 100000, up to 10000000) caps the WebSocket connections
-of all sources together, including those without a source, so many sources cannot
-exhaust the relay's memory. An idle connection takes about 3 KB.
+`AHRARA_MAX_CLIENTS` (required, up to 10000000) caps the WebSocket connections of
+all sources together, including those without a source, so many sources cannot
+exhaust the relay's memory. It has no default because it depends on the host's
+memory: an idle connection takes about 3 KB, and about 9 KB after delivering mail.
 
 The first quarter of a source's connections is free. Each further connection must
 prove work before authenticating: a SHA-256 hash over its login challenge with 12
@@ -150,7 +151,7 @@ Client → WSS → Cloudflare → encrypted Tunnel → cloudflared → Unix sock
    `unix:/run/ahrara/ahrara.sock`.
 2. Store the token in `.dev/cloudflared-token`, owned by the container's UID and
    readable only by that user (`chmod 600 .dev/cloudflared-token`).
-3. Run `docker compose --profile tunnel up -d`.
+3. Run `docker compose --profile tunnel up -d` with `AHRARA_MAX_CLIENTS` set.
 4. Clients connect to `wss://relay.ahrara.dev`. Supply the verified
    `server_public_key` when building release binaries or configuring a custom client.
 

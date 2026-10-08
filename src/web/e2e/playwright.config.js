@@ -28,6 +28,7 @@ export default defineConfig({
         AHRARA_TLS_KEY: `${root}.dev/certs/server-key.pem`,
         AHRARA_TRANSPORT_KEY_FILE: `${root}.dev/certs/transport.key`,
         AHRARA_WEB_ORIGINS: app,
+        AHRARA_MAX_CLIENTS: '1000',
       },
     },
   ],
