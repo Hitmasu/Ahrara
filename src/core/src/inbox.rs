@@ -54,7 +54,7 @@ pub struct InboxOptions {
 impl Default for InboxOptions {
     fn default() -> Self {
         Self {
-            server_url: "wss://ahrara.dev".into(),
+            server_url: "wss://relay.ahrara.dev".into(),
             server_public_key: option_env!("AHRARA_SERVER_PUBLIC_KEY")
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned),

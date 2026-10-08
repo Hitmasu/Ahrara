@@ -158,11 +158,11 @@ toolchain:
 cargo: toolchain
 	@$(CARGO) $(ARGS)
 
-# The browser app for static hosting. AHRARA_WEB_RELAY_URL (default wss://ahrara.dev)
+# The browser app for static hosting. AHRARA_WEB_RELAY_URL (default wss://relay.ahrara.dev)
 # and AHRARA_SERVER_PUBLIC_KEY select the relay it trusts.
 .PHONY: web
 web: toolchain
-	export AHRARA_WEB_RELAY_URL="$${AHRARA_WEB_RELAY_URL:-wss://ahrara.dev}"
+	export AHRARA_WEB_RELAY_URL="$${AHRARA_WEB_RELAY_URL:-wss://relay.ahrara.dev}"
 	[[ $$AHRARA_WEB_RELAY_URL =~ ^wss://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$$ ]] || { echo 'AHRARA_WEB_RELAY_URL must be a plain wss:// URL' >&2; exit 1; }
 	test -n "$${AHRARA_SERVER_PUBLIC_KEY:-}" || { echo 'AHRARA_SERVER_PUBLIC_KEY is required' >&2; exit 1; }
 	$(CARGO) rustc --locked --release --manifest-path /work/src/web/Cargo.toml --lib --crate-type cdylib --target wasm32-unknown-unknown

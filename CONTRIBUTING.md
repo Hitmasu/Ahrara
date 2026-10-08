@@ -81,7 +81,7 @@ in [Dockerfile.builder](src/cli/Dockerfile.builder). Validate release binaries o
 target OS before publishing.
 
 `make web` builds the browser app into `dist/web` for static hosting. It embeds
-the relay URL from `AHRARA_WEB_RELAY_URL` (default `wss://ahrara.dev`) and requires
+the relay URL from `AHRARA_WEB_RELAY_URL` (default `wss://relay.ahrara.dev`) and requires
 that relay's `AHRARA_SERVER_PUBLIC_KEY`. The relay must list the app's origin in
 `AHRARA_WEB_ORIGINS`. The host must apply `dist/web/_headers` and answer paths
 without a file with `index.html`. The pages and routes in `src/web` also serve the

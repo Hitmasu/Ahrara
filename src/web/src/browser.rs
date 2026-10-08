@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 const RELAY_URL: &str = match option_env!("AHRARA_WEB_RELAY_URL") {
     Some(url) => url,
-    None => "wss://ahrara.dev",
+    None => "wss://relay.ahrara.dev",
 };
 
 /// IndexedDB, through www/app/store.js. Every call is one transaction.

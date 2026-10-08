@@ -37,7 +37,7 @@ impl Config {
         let data = dirs.map_or_else(PathBuf::new, |dirs| dirs.data_local_dir().to_owned());
         let config = dirs.map_or_else(PathBuf::new, |dirs| dirs.config_dir().to_owned());
         Self {
-            server_url: "wss://ahrara.dev".into(),
+            server_url: "wss://relay.ahrara.dev".into(),
             server_public_key: option_env!("AHRARA_SERVER_PUBLIC_KEY")
                 .filter(|key| !key.is_empty())
                 .map(str::to_owned),

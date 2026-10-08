@@ -10,12 +10,12 @@ Ahrara reads `config.toml` from its user configuration directory
 Relative paths resolve against that file's directory. Use the same `--config`
 for every command working with a custom profile.
 
-Release binaries connect to `wss://ahrara.dev` automatically and include the
+Release binaries connect to `wss://relay.ahrara.dev` automatically and include the
 relay's verified public transport key. No relay configuration is needed for
 normal use. Override these settings only for your own relay or development:
 
 ```toml
-server_url = "wss://ahrara.dev"
+server_url = "wss://relay.ahrara.dev"
 server_public_key = "ahrara_server_v1_<relay-public-key>"
 database_path = "ahrara.db"
 identity_path = "identity.key"

@@ -142,12 +142,12 @@ The optional Compose `tunnel` profile connects a named Tunnel to the relay:
 Client → WSS → Cloudflare → encrypted Tunnel → cloudflared → Unix socket → relay
 ```
 
-1. Configure `ahrara.dev` as the Tunnel's public hostname with origin service
+1. Configure `relay.ahrara.dev` as the Tunnel's public hostname with origin service
    `unix:/run/ahrara/ahrara.sock`.
 2. Store the token in `.dev/cloudflared-token`, owned by the container's UID and
    readable only by that user (`chmod 600 .dev/cloudflared-token`).
 3. Run `docker compose --profile tunnel up -d`.
-4. Clients connect to `wss://ahrara.dev`. Supply the verified
+4. Clients connect to `wss://relay.ahrara.dev`. Supply the verified
    `server_public_key` when building release binaries or configuring a custom client.
 
 The relay serves WebSocket on the root path `/`, so the Tunnel needs no path rule.
@@ -176,7 +176,7 @@ configuration. The public hostname must already route to that Tunnel; do not
 start the separate `cloudflared` service for this deployment.
 
 The dashboard's origin service URL is ignored in this mode; clients still use
-`wss://ahrara.dev`.
+`wss://relay.ahrara.dev`.
 
 The connector speaks HTTP/2 to the edge and serves WebSocket upgrades on `/`
 and `GET /healthz`; other requests receive an error status. It is experimental;

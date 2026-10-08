@@ -22,7 +22,7 @@ and produces a signed update manifest and Homebrew formula. All build jobs run o
   those tags with a ruleset.
 - Set repository variable `AHRARA_SERVER_PUBLIC_KEY` to the production relay's
   verified `ahrara_server_v1_...` public pin. Release binaries embed it and connect
-  to `wss://ahrara.dev` automatically. The Tunnel must route `ahrara.dev` to the
+  to `wss://relay.ahrara.dev` automatically. The Tunnel must route `relay.ahrara.dev` to the
   relay, whose WebSocket endpoint is `/`.
 - Commit `src/plugin/release-key.json` with `ed25519` set to the same public value as
   `AHRARA_UPDATE_PUBLIC_KEY` before distributing the plugin. Its checked-in null

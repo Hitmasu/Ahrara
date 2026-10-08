@@ -242,7 +242,7 @@ See the [language guides](#choose-your-sdk) for examples.
 
 ## Connection settings
 
-The default relay is `wss://ahrara.dev`. Release builds include its verified
+The default relay is `wss://relay.ahrara.dev`. Release builds include its verified
 public transport key. For a custom relay or a source build without that key,
 provide the relay URL and verified public key in the SDK's creation options.
 A private certificate authority also requires its trusted CA file. The SDK does

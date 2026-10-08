@@ -24,7 +24,7 @@ fn default_relay_connects_at_the_domain_root() {
 
     assert_eq!(
         Config::load(Some(&path)).unwrap().server_url,
-        "wss://ahrara.dev"
+        "wss://relay.ahrara.dev"
     );
 }
 
