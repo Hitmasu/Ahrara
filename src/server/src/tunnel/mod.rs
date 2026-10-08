@@ -112,6 +112,7 @@ fn handshake(request: &Parts) -> Result<String, StatusCode> {
         return Err(StatusCode::NOT_FOUND);
     }
     if !crate::origin_allowed(request.headers.get("origin"), crate::web_origins()) {
+        crate::metrics::rule("origin_not_allowed", crate::client_ip(&request.headers));
         return Err(StatusCode::FORBIDDEN);
     }
     let key = request

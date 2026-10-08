@@ -41,8 +41,18 @@ enum WireSink {
     Tunnel(SplitSink<crate::tunnel::Socket, tokio_tungstenite::tungstenite::Message>),
 }
 
+/// Payload bytes of a WebSocket message, excluding its frame header.
+fn size(message: &Message) -> usize {
+    match message {
+        Message::Binary(bytes) | Message::Ping(bytes) | Message::Pong(bytes) => bytes.len(),
+        Message::Text(text) => text.len(),
+        Message::Close(_) => 0,
+    }
+}
+
 impl WireSink {
     async fn send(&mut self, message: Message) -> Result<()> {
+        crate::metrics::add(&crate::metrics::WEBSOCKET_OUT, size(&message));
         match self {
             Self::WebSocket(sink) => sink.send(message).await?,
             #[cfg(feature = "tunnel")]
@@ -69,7 +79,7 @@ enum WireReader {
 
 impl WireReader {
     async fn next(&mut self) -> Option<Result<Message>> {
-        match self {
+        let message = match self {
             Self::WebSocket(reader) => reader.next().await.map(|value| value.map_err(Into::into)),
             #[cfg(feature = "tunnel")]
             Self::Tunnel(reader) => reader
@@ -78,7 +88,12 @@ impl WireReader {
                 .map(|value| value.map(from_tunnel_message).map_err(Into::into)),
             #[cfg(test)]
             Self::Channel(reader) => reader.recv().await.map(Ok),
+        };
+        if let Some(Ok(message)) = &message {
+            crate::metrics::add(&crate::metrics::WEBSOCKET_IN, size(message));
         }
+
+        message
     }
 }
 
@@ -158,7 +173,12 @@ async fn handshake(connection: Connection, key: &[u8; 32]) -> Result<(Sink, Read
     let (mut sink, mut reader) = connection.split();
     let mut state = secure::responder(key)?;
     let message = loop {
-        match reader.next().await.context("connection closed")?? {
+        match reader
+            .next()
+            .await
+            .ok_or(Disconnected)?
+            .map_err(|_| Disconnected)?
+        {
             Message::Binary(message) => break message,
             Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
             Message::Pong(_) => {}
@@ -249,6 +269,18 @@ pub struct Broker {
     transport_key: Zeroizing<[u8; 32]>,
 }
 
+/// The client closed or lost the connection, which breaks no rule.
+#[derive(Debug)]
+struct Disconnected;
+
+impl std::fmt::Display for Disconnected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("disconnected")
+    }
+}
+
+impl std::error::Error for Disconnected {}
+
 /// The frame was sent, but the peer did not confirm it before the deadline.
 #[derive(Debug)]
 pub struct ReplyTimeout;
@@ -275,6 +307,15 @@ impl Broker {
     #[cfg(test)]
     pub fn encrypted(key: [u8; 32]) -> Arc<Self> {
         Self::encrypted_with_limits(key, crate::limits::RuntimeLimits::default())
+    }
+
+    /// Authenticated identities connected now.
+    pub fn connected(&self) -> usize {
+        self.peers.read().unwrap().len()
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.started.elapsed()
     }
 
     pub fn lookup(&self, route: &Route) -> Option<Arc<Peer>> {
@@ -350,10 +391,22 @@ impl Broker {
                     _ = closed.cancelled() => None,
                     _ = self.stopped.cancelled() => None,
                     result = timeout(Duration::from_secs(15), async {
-                        let (mut sink, mut reader, binding) = handshake(connection, &self.transport_key).await?;
-                        let identity = authenticate(&mut sink, &mut reader, &binding, client.work).await?;
+                        let (mut sink, mut reader, binding) = handshake(connection, &self.transport_key)
+                            .await
+                            .inspect_err(|error| {
+                                if !error.is::<Disconnected>() {
+                                    crate::metrics::rule("protocol_violation", client.source());
+                                }
+                            })?;
+                        let identity = authenticate(&mut sink, &mut reader, &binding, &client).await?;
                         Ok::<_, anyhow::Error>((sink, reader, identity))
-                    }) => result.ok().and_then(Result::ok),
+                    }) => match result {
+                        Ok(session) => session.ok(),
+                        Err(_) => {
+                            crate::metrics::rule("handshake_timeout", client.source());
+                            None
+                        }
+                    },
                 }
             })
             .await
@@ -375,6 +428,9 @@ impl Broker {
                 _ => false,
             };
             if !inserted {
+                if !self.stopped.is_cancelled() {
+                    crate::metrics::rule("identity_in_use", client.source());
+                }
                 let _ = Box::pin(peer.send(p::FAILURE, &json!({"code": "identity_in_use"}))).await;
 
                 return;
@@ -397,10 +453,6 @@ impl Broker {
                     {
                         peers.remove(&self.route);
                     }
-
-                    // Never log while holding the lock every login and delivery needs.
-                    drop(peers);
-                    crate::event("identity_disconnected", json!({}));
                 }
             }
 
@@ -409,7 +461,7 @@ impl Broker {
                 route,
                 peer: peer.clone(),
             };
-            crate::event("identity_connected", json!({}));
+            crate::metrics::CLIENT_SESSIONS.fetch_add(1, Ordering::Relaxed);
             if Box::pin(peer.send(
                 p::READY,
                 &json!({
@@ -432,6 +484,7 @@ impl Broker {
                         match frame {
                             Some(Ok(Message::Binary(raw))) => {
                                 let Ok((kind, payload)) = p::decode(&raw) else {
+                                    crate::metrics::rule("protocol_violation", client.source());
                                     break;
                                 };
                                 // Browsers cannot send WebSocket PINGs; echo their keepalive.
@@ -441,12 +494,12 @@ impl Broker {
                                     };
                                     Message::Binary(frame.into())
                                 } else {
-                                    if ![p::ACCEPT, p::REJECT, p::ACK, p::NACK].contains(&kind) {
-                                        break;
-                                    }
-
-                                    let Ok(mut reply) = serde_json::from_slice::<Reply>(payload)
+                                    let Some(mut reply) = [p::ACCEPT, p::REJECT, p::ACK, p::NACK]
+                                        .contains(&kind)
+                                        .then(|| serde_json::from_slice::<Reply>(payload).ok())
+                                        .flatten()
                                     else {
+                                        crate::metrics::rule("protocol_violation", client.source());
                                         break;
                                     };
                                     reply.kind = kind;
@@ -574,7 +627,12 @@ async fn read<T: DeserializeOwned>(
     expected: u8,
 ) -> Result<T> {
     loop {
-        match reader.next().await.context("disconnected")?? {
+        match reader
+            .next()
+            .await
+            .ok_or(Disconnected)?
+            .map_err(|_| Disconnected)?
+        {
             Message::Binary(raw) => {
                 let (kind, payload) = p::decode(&raw)?;
                 ensure!(kind == expected, "unexpected protocol frame");
@@ -593,8 +651,9 @@ async fn authenticate(
     sink: &mut Sink,
     reader: &mut Reader,
     binding: &[u8; 32],
-    work: u8,
+    client: &ClientPermit,
 ) -> Result<(Route, [u8; 32])> {
+    let work = client.work;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Hello {
@@ -644,6 +703,14 @@ async fn authenticate(
         Ok((p::derive_route(&public), Sha256::digest(public).into()))
     }
     .await;
+    if let Err(error) = &result
+        && !error.is::<Disconnected>()
+    {
+        crate::metrics::rule(
+            failure_code.unwrap_or("proof_of_work_failed"),
+            client.source(),
+        );
+    }
     if let (Err(_), Some(code)) = (&result, failure_code) {
         let _ = sink
             .send(Message::Binary(
@@ -918,15 +985,24 @@ mod tests {
                     &json!({"public_key": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes())}),
                 )
                 .await;
+            let sessions = crate::metrics::CLIENT_SESSIONS.load(Ordering::Relaxed);
+            let refused =
+                crate::metrics::labelled("ahrara_rule_hits_total", "proof_of_work_failed");
             client.authenticate(&key, client.binding, prove).await;
             if prove {
                 client.receive(p::READY).await;
                 drop(client);
+
+                assert!(crate::metrics::CLIENT_SESSIONS.load(Ordering::Relaxed) > sessions);
             } else {
                 // Older clients take any FAILURE as final, so the relay only closes.
                 let closed = timeout(Duration::from_secs(1), client.receive.recv()).await;
 
                 assert!(closed.unwrap().is_none());
+                assert!(
+                    crate::metrics::labelled("ahrara_rule_hits_total", "proof_of_work_failed")
+                        > refused
+                );
             }
 
             timeout(Duration::from_secs(1), task)

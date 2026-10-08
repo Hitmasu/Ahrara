@@ -2,6 +2,7 @@
 mod broker;
 mod data;
 mod limits;
+mod metrics;
 mod routing;
 #[allow(dead_code)]
 #[path = "../../core/src/secure.rs"]
@@ -128,14 +129,15 @@ async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !origin_allowed(headers.get("origin"), web_origins()) {
-        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
-    }
     // Only the TLS listener has a TCP peer; the Unix socket is cloudflared's.
     let source = match peer {
         Some(Extension(ConnectInfo(peer))) => Some(peer.ip()),
         None => client_ip(&headers),
     };
+    if !origin_allowed(headers.get("origin"), web_origins()) {
+        metrics::rule("origin_not_allowed", source);
+        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+    }
     let Some(client) = broker.admission.try_client(source) else {
         return (StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response();
     };
@@ -226,6 +228,7 @@ async fn smtp_listener(
                     }
                 };
                 if forwarding.refuses(address.ip()) {
+                    metrics::rule("smtp_routing_only", Some(address.ip()));
                     refuse(tcp, b"554 5.7.1 Delivery only through Email Routing\r\n");
                     continue;
                 }
@@ -252,6 +255,14 @@ async fn smtp_listener(
     .await;
 
     Ok(())
+}
+
+/// The public routes, served on the TLS listener and cloudflared's Unix socket.
+fn router(broker: Arc<Broker>) -> Router {
+    Router::new()
+        .route("/", get(upgrade))
+        .route("/healthz", get(|| async { Json(json!({"status": "ok"})) }))
+        .with_state(broker)
 }
 
 async fn stop_signal() -> Result<()> {
@@ -357,6 +368,12 @@ async fn run() -> Result<()> {
 
     let smtp_address = address(&setting("AHRARA_SMTP_BIND", ":2525"))?;
     let https_address = address(&setting("AHRARA_HTTPS_BIND", ":8443"))?;
+    // Off unless configured; keep it on a private network, never published.
+    let metrics_address = env::var("AHRARA_METRICS_BIND")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| address(&value))
+        .transpose()?;
     let tls = tls_config()?;
 
     let smtp_socket = TcpListener::bind(smtp_address).await?;
@@ -368,10 +385,7 @@ async fn run() -> Result<()> {
     let broker = Broker::encrypted_with_limits(*transport_key, limits);
     drop(transport_key);
     let sweep = tokio::spawn(broker.clone().sweep());
-    let router = Router::new()
-        .route("/", get(upgrade))
-        .route("/healthz", get(|| async { Json(json!({"status": "ok"})) }))
-        .with_state(broker.clone());
+    let router = router(broker.clone());
     #[cfg(unix)]
     let unix_listener = env::var("AHRARA_UNIX_SOCKET")
         .ok()
@@ -405,6 +419,17 @@ async fn run() -> Result<()> {
             .await
             .map_err(anyhow::Error::from)
     });
+    if let Some(metrics_address) = metrics_address {
+        let listener = TcpListener::bind(metrics_address).await?;
+        let router = metrics::router(broker.clone());
+        let stopped = broker.stopped.clone();
+        web.spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(stopped.cancelled_owned())
+                .await
+                .map_err(anyhow::Error::from)
+        });
+    }
     #[cfg(feature = "tunnel")]
     if let Some(configuration) = tunnel_configuration {
         web.spawn(tunnel::serve(configuration, broker.clone()));
@@ -428,7 +453,7 @@ async fn run() -> Result<()> {
     ));
     event(
         "server_started",
-        json!({"smtp": smtp_address, "https": https_address}),
+        json!({"smtp": smtp_address, "https": https_address, "metrics": metrics_address}),
     );
     let result = tokio::select! {result=web.join_next()=>result.context("web listener stopped")?.map_err(anyhow::Error::from)?,result=&mut mail=>result?,result=stop_signal()=>result};
     broker.stopped.cancel();
@@ -605,6 +630,50 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+
+    async fn status(address: SocketAddr, path: &str) -> String {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        greeting(&mut stream).await
+    }
+
+    #[tokio::test]
+    async fn metrics_are_served_only_by_their_own_listener() {
+        let broker = Broker::encrypted([1; 32]);
+        let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let private = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (public_address, private_address) =
+            (public.local_addr().unwrap(), private.local_addr().unwrap());
+        tokio::spawn(axum::serve(public, router(broker.clone())).into_future());
+        tokio::spawn(axum::serve(private, metrics::router(broker)).into_future());
+
+        assert!(
+            status(public_address, "/metrics")
+                .await
+                .starts_with("HTTP/1.1 404 ")
+        );
+        assert!(
+            status(public_address, "/healthz")
+                .await
+                .starts_with("HTTP/1.1 200 ")
+        );
+        assert!(
+            status(private_address, "/metrics")
+                .await
+                .starts_with("HTTP/1.1 200 ")
+        );
+        assert!(
+            status(private_address, "/healthz")
+                .await
+                .starts_with("HTTP/1.1 404 ")
+        );
     }
 
     #[tokio::test]

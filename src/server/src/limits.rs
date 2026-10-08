@@ -201,18 +201,28 @@ impl Admission {
     }
 
     /// Admits a client connection, refusing its source or the relay at their limits.
-    pub fn try_client(self: &Arc<Self>, source: Option<IpAddr>) -> Option<ClientPermit> {
+    pub fn try_client(self: &Arc<Self>, ip: Option<IpAddr>) -> Option<ClientPermit> {
+        let refusal = match self.admit_client(ip) {
+            Ok(permit) => return Some(permit),
+            Err(rule) => rule,
+        };
+        // Never log while holding the lock every connection needs.
+        crate::metrics::rule(refusal, ip);
+        None
+    }
+
+    fn admit_client(self: &Arc<Self>, ip: Option<IpAddr>) -> Result<ClientPermit, &'static str> {
         let mut clients = self.clients.lock().unwrap();
         if clients.active >= self.settings.clients {
-            return None;
+            return Err("clients_limit");
         }
-        let Some(source) = source.map(source_key) else {
+        let Some(source) = ip.map(source_key) else {
             // Only a Cloudflare rule removing cf-connecting-ip hides the source. One
             // shared quota would then refuse almost every client, so do not limit.
             static UNKNOWN: Once = Once::new();
             UNKNOWN.call_once(|| crate::event("client_source_unknown", serde_json::json!({})));
             clients.active += 1;
-            return Some(ClientPermit {
+            return Ok(ClientPermit {
                 admission: self.clone(),
                 source: None,
                 work: 0,
@@ -221,17 +231,25 @@ impl Admission {
         let limit = self.settings.clients_per_source;
         let active = clients.counts.entry(source).or_default();
         if *active >= limit {
-            return None;
+            return Err("clients_per_source_limit");
         }
 
         let work = work_bits(*active, limit);
         *active += 1;
         clients.active += 1;
-        Some(ClientPermit {
+        Ok(ClientPermit {
             admission: self.clone(),
             source: Some(source),
             work,
         })
+    }
+
+    pub fn client_connections(&self) -> usize {
+        self.clients.lock().unwrap().active
+    }
+
+    pub fn smtp_sessions(&self) -> usize {
+        self.sources.lock().unwrap().active
     }
 
     pub fn settings(&self) -> &RuntimeLimits {
@@ -239,22 +257,35 @@ impl Admission {
     }
 
     pub fn try_source(self: &Arc<Self>, ip: IpAddr, trusted: bool) -> Option<SourcePermit> {
+        let refusal = match self.admit_source(ip, trusted) {
+            Ok(permit) => return Some(permit),
+            Err(rule) => rule,
+        };
+        crate::metrics::rule(refusal, Some(ip));
+        None
+    }
+
+    fn admit_source(
+        self: &Arc<Self>,
+        ip: IpAddr,
+        trusted: bool,
+    ) -> Result<SourcePermit, &'static str> {
         let mut sources = self.sources.lock().unwrap();
         if sources.active >= self.settings.smtp_sessions {
-            return None;
+            return Err("smtp_sessions_limit");
         }
 
         let source = (!trusted).then(|| source_key(ip));
         if let Some(source) = source {
             if sources.counts.get(&source).copied().unwrap_or(0) >= self.settings.smtp_per_source {
-                return None;
+                return Err("smtp_sessions_per_source_limit");
             }
 
             *sources.counts.entry(source).or_default() += 1;
         }
 
         sources.active += 1;
-        Some(SourcePermit {
+        Ok(SourcePermit {
             admission: self.clone(),
             source,
         })
@@ -329,6 +360,13 @@ pub struct ClientPermit {
     source: Option<IpAddr>,
     /// Leading zero bits this connection must prove before authenticating.
     pub work: u8,
+}
+
+impl ClientPermit {
+    /// The source this slot counts against: an IPv4 address or an IPv6 /64.
+    pub fn source(&self) -> Option<IpAddr> {
+        self.source
+    }
 }
 
 impl Drop for ClientPermit {
@@ -471,8 +509,14 @@ mod tests {
         ];
 
         assert!(held.iter().all(Option::is_some));
+        let refused = crate::metrics::labelled("ahrara_rule_hits_total", "clients_limit");
+
         assert!(admission.try_client(Some(ip("198.51.100.1"))).is_none());
         assert!(admission.try_client(None).is_none());
+        assert!(
+            crate::metrics::labelled("ahrara_rule_hits_total", "clients_limit") >= refused + 2,
+            "each refusal counts its rule"
+        );
         drop(held);
 
         assert!(admission.try_client(None).is_some());

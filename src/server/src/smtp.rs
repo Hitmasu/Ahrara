@@ -1,6 +1,7 @@
 use crate::{
-    broker::{Broker, Peer},
+    broker::{Broker, Peer, ReplyTimeout},
     data::Decoder,
+    metrics,
     protocol::{self as p, Route},
     routing,
 };
@@ -13,6 +14,7 @@ use sha2::{Digest, Sha256};
 use smtp_proto::{MAIL_BODY_7BIT, MAIL_BODY_8BITMIME, Request};
 use std::{
     collections::{HashMap, HashSet},
+    net::IpAddr,
     sync::Arc,
     time::Duration,
 };
@@ -89,10 +91,29 @@ struct Transfer {
     recipients: HashSet<String>,
     offered: HashSet<String>,
     envelopes: HashSet<String>,
+    /// The sending server, for protection rules applied to this transaction.
+    client: Option<IpAddr>,
+}
+
+/// Counts a refused recipient and returns its SMTP reply.
+fn refused(reason: &'static str, reply: &'static str) -> &'static str {
+    metrics::recipient_refused(reason);
+    reply
+}
+
+/// Counts a message's failed outcome and returns its SMTP reply.
+fn failed(result: &'static str, reply: &'static str) -> &'static str {
+    metrics::email(result);
+    reply
 }
 
 impl Transfer {
-    fn new(sender: String, size: usize, transaction_timeout: Duration) -> Self {
+    fn new(
+        sender: String,
+        size: usize,
+        transaction_timeout: Duration,
+        client: Option<IpAddr>,
+    ) -> Self {
         let mut bytes = [0; 16];
         OsRng.fill_bytes(&mut bytes);
         Self {
@@ -105,6 +126,7 @@ impl Transfer {
             recipients: HashSet::new(),
             offered: HashSet::new(),
             envelopes: HashSet::new(),
+            client,
         }
     }
 
@@ -113,34 +135,47 @@ impl Transfer {
         broker: &Broker,
         address: &str,
     ) -> std::result::Result<(), &'static str> {
-        let (route, alias, recipient) =
-            p::decode_address(address).map_err(|_| "550 5.1.1 Mailbox unavailable")?;
+        let (route, alias, recipient) = p::decode_address(address)
+            .map_err(|_| refused("invalid_address", "550 5.1.1 Mailbox unavailable"))?;
         if self.recipients.contains(&recipient) {
             return Ok(());
         }
         if self.offered.contains(&recipient) {
-            return Err("451 4.4.2 Start a new transaction to retry this recipient");
+            return Err(refused(
+                "retried",
+                "451 4.4.2 Start a new transaction to retry this recipient",
+            ));
         }
         if self.offered.len() >= 100 {
-            return Err("452 4.5.3 Too many distinct recipients");
+            return Err(refused(
+                "too_many",
+                "452 4.5.3 Too many distinct recipients",
+            ));
         }
         if !broker.admission.allows_route(&route) {
-            return Err("450 4.2.1 Delivery confirmation cooldown, retry later");
+            metrics::rule("delivery_cooldown", self.client);
+            return Err(refused(
+                "cooldown",
+                "450 4.2.1 Delivery confirmation cooldown, retry later",
+            ));
         }
 
         let peer = broker
             .lookup(&route)
-            .ok_or("550 5.1.1 Mailbox unavailable")?;
+            .ok_or_else(|| refused("offline", "550 5.1.1 Mailbox unavailable"))?;
         // A reconnect replaced the connection holding this transaction; never reserve the new one.
         if self
             .peers
             .get(&route)
             .is_some_and(|(current, _)| !Arc::ptr_eq(current, &peer))
         {
-            return Err("451 4.4.2 Identity reconnected, start a new transaction");
+            return Err(refused(
+                "reconnected",
+                "451 4.4.2 Identity reconnected, start a new transaction",
+            ));
         }
         if !peer.reserve(&self.id) {
-            return Err("450 4.2.1 Identity busy");
+            return Err(refused("busy", "450 4.2.1 Identity busy"));
         }
 
         self.offered.insert(recipient.clone());
@@ -186,9 +221,9 @@ impl Transfer {
         }
 
         Err(if reply.is_err() {
-            "451 4.4.2 Delivery offer unavailable"
+            refused("offer_unavailable", "451 4.4.2 Delivery offer unavailable")
         } else {
-            "550 5.1.1 Mailbox unavailable"
+            refused("rejected", "550 5.1.1 Mailbox unavailable")
         })
     }
 
@@ -205,12 +240,14 @@ impl Transfer {
         let mut prefix = Zeroizing::new(Vec::new());
         if trusted {
             loop {
-                let count = decoder
-                    .read(io, buffer.payload())
-                    .await
-                    .map_err(|_| "554 5.6.0 Invalid forwarding headers")?;
+                let count = decoder.read(io, buffer.payload()).await.map_err(|_| {
+                    failed("forwarding_invalid", "554 5.6.0 Invalid forwarding headers")
+                })?;
                 if count == 0 {
-                    return Err("554 5.6.0 Invalid forwarding headers");
+                    return Err(failed(
+                        "forwarding_invalid",
+                        "554 5.6.0 Invalid forwarding headers",
+                    ));
                 }
 
                 prefix.extend_from_slice(&buffer.as_ref()[26..26 + count]);
@@ -220,15 +257,23 @@ impl Transfer {
                     .map(|p| p + 4)
                     .or_else(|| prefix.windows(2).position(|s| s == b"\n\n").map(|p| p + 2));
                 if let Some(end) = end {
-                    let recipient = forwarding
-                        .recipient(&prefix[..end])
-                        .map_err(|_| "554 5.6.0 Invalid forwarding recipient")?;
-                    self.offer(broker, &recipient).await?;
+                    let recipient = forwarding.recipient(&prefix[..end]).map_err(|_| {
+                        failed(
+                            "forwarding_invalid",
+                            "554 5.6.0 Invalid forwarding recipient",
+                        )
+                    })?;
+                    self.offer(broker, &recipient)
+                        .await
+                        .map_err(|reply| failed("recipient_refused", reply))?;
                     break;
                 }
 
                 if prefix.len() >= routing::MAX_HEADERS {
-                    return Err("554 5.6.0 Invalid forwarding headers");
+                    return Err(failed(
+                        "forwarding_invalid",
+                        "554 5.6.0 Invalid forwarding headers",
+                    ));
                 }
             }
         }
@@ -244,7 +289,7 @@ impl Transfer {
                 }),
             )
             .await
-            .map_err(|_| failure)?;
+            .map_err(|_| failed("client_disconnected", failure))?;
         }
 
         let mut digest = Sha256::new();
@@ -255,24 +300,28 @@ impl Transfer {
             buffer.payload()[..chunk.len()].copy_from_slice(chunk);
             self.chunk(buffer, chunk.len(), &mut digest, &mut total, &mut sequence)
                 .await
-                .map_err(|_| failure)?;
+                .map_err(|_| failed("client_disconnected", failure))?;
         }
 
         loop {
             let count = decoder
                 .read(io, buffer.payload())
                 .await
-                .map_err(|_| failure)?;
+                .map_err(|_| failed("sender_error", failure))?;
             if count == 0 {
                 break;
             }
             if total + count > p::MAX_EMAIL {
-                return Err("552 5.3.4 Maximum message size exceeded");
+                metrics::rule("smtp_too_large", self.client);
+                return Err(failed(
+                    "too_large",
+                    "552 5.3.4 Maximum message size exceeded",
+                ));
             }
 
             self.chunk(buffer, count, &mut digest, &mut total, &mut sequence)
                 .await
-                .map_err(|_| failure)?;
+                .map_err(|_| failed("client_disconnected", failure))?;
         }
 
         let end = json!({
@@ -293,31 +342,25 @@ impl Transfer {
                 .await;
             match &reply {
                 Ok(reply) if reply.kind == p::ACK => broker.admission.note_success(route),
-                Err(error) if error.is::<crate::broker::ReplyTimeout>() => {
-                    broker.admission.note_timeout(*route)
-                }
+                Err(error) if error.is::<ReplyTimeout>() => broker.admission.note_timeout(*route),
                 _ => {}
             }
 
             reply
         }))
         .await;
-        if replies
-            .into_iter()
-            .any(|reply| !matches!(reply,Ok(reply) if reply.kind==p::ACK))
-        {
-            return Err(failure);
+        // One unconfirmed recipient fails the message; count the first reason.
+        let unconfirmed = replies.iter().find_map(|reply| match reply {
+            Ok(reply) if reply.kind == p::ACK => None,
+            Ok(_) => Some("nack"),
+            Err(error) if error.is::<ReplyTimeout>() => Some("ack_timeout"),
+            Err(_) => Some("client_disconnected"),
+        });
+        if let Some(result) = unconfirmed {
+            return Err(failed(result, failure));
         }
 
-        crate::event(
-            "delivery_committed",
-            json!({
-                "bytes": total,
-                "recipients": self.recipients.len(),
-                "connections": self.peers.len()
-            }),
-        );
-
+        metrics::email("delivered");
         Ok(())
     }
 
@@ -330,6 +373,7 @@ impl Transfer {
         sequence: &mut u32,
     ) -> Result<()> {
         *total += count;
+        metrics::add(&metrics::EMAIL_BYTES, count);
         digest.update(&buffer.as_ref()[26..26 + count]);
         let frame = buffer.frame(self.bytes, *sequence, count);
 
@@ -386,14 +430,13 @@ pub async fn serve(
     tls: TlsAcceptor,
     forwarding: Arc<routing::Config>,
 ) {
-    let trusted = tcp
-        .peer_addr()
-        .is_ok_and(|addr| forwarding.trusted(addr.ip()));
+    let client = tcp.peer_addr().ok().map(|address| address.ip());
+    let trusted = client.is_some_and(|ip| forwarding.trusted(ip));
     let mut transfer = None;
     // A session budget cannot be renewed by commands or STARTTLS.
     let result = tokio::select! {
         _ = broker.stopped.cancelled() => Ok(()),
-        result = timeout(Duration::from_secs(1800),session(tcp,&broker,tls,trusted,&forwarding,&mut transfer)) => result.map(|_|()),
+        result = timeout(Duration::from_secs(1800),session(tcp,&broker,tls,trusted,client,&forwarding,&mut transfer)) => result.map(|_|()),
     };
     let _ = result;
     reset(&mut transfer, true).await;
@@ -404,6 +447,7 @@ async fn session(
     broker: &Broker,
     tls: TlsAcceptor,
     trusted: bool,
+    client: Option<IpAddr>,
     forwarding: &routing::Config,
     transfer: &mut Option<Transfer>,
 ) -> Result<()> {
@@ -436,6 +480,7 @@ async fn session(
             bail!("SMTP line too long");
         }
         if Instant::now() >= progress {
+            metrics::rule("smtp_no_progress", client);
             response(
                 &mut io,
                 "421 4.4.2 No mail committed in time, closing connection",
@@ -450,6 +495,7 @@ async fn session(
                 response(&mut io, "501 5.5.2 Invalid command syntax").await?;
                 errors += 1;
                 if errors >= 3 {
+                    metrics::rule("smtp_syntax_errors", client);
                     return Ok(());
                 }
 
@@ -500,8 +546,10 @@ async fn session(
                 } else if unsupported {
                     Some("504 5.5.4 Unsupported MAIL parameter")
                 } else if from.size > p::MAX_EMAIL {
+                    metrics::rule("smtp_too_large", client);
                     Some("552 5.3.4 Maximum message size exceeded")
                 } else if !encrypted {
+                    metrics::rule("smtp_starttls_required", client);
                     Some("530 5.7.0 Must issue STARTTLS first")
                 } else {
                     None
@@ -516,6 +564,7 @@ async fn session(
                     from.address,
                     from.size,
                     broker.admission.settings().transaction_timeout,
+                    client,
                 ));
 
                 response(&mut io, "250 2.0.0 Sender accepted").await?;
@@ -532,11 +581,14 @@ async fn session(
 
                 let result = if trusted {
                     match forwarding.envelope(&to.address) {
-                        Err(_) => Err("550 5.1.1 Mailbox unavailable"),
+                        Err(_) => Err(refused("invalid_address", "550 5.1.1 Mailbox unavailable")),
                         Ok(recipient)
                             if !tx.envelopes.contains(&recipient) && tx.envelopes.len() >= 100 =>
                         {
-                            Err("452 4.5.3 Too many distinct recipients")
+                            Err(refused(
+                                "too_many",
+                                "452 4.5.3 Too many distinct recipients",
+                            ))
                         }
                         Ok(recipient) => {
                             tx.envelopes.insert(recipient);
@@ -572,7 +624,7 @@ async fn session(
                 buffer.clear();
                 let reply = match result {
                     Ok(result) => result,
-                    Err(_) => Err("451 4.4.2 Transaction expired"),
+                    Err(_) => Err(failed("expired", "451 4.4.2 Transaction expired")),
                 };
                 let failed = reply.is_err();
                 reset(transfer, failed).await;
@@ -706,7 +758,12 @@ mod tests {
             )
         };
         let old = broker.attach(route);
-        let mut transfer = Transfer::new("sender@example.test".into(), 0, Duration::from_secs(5));
+        let mut transfer = Transfer::new(
+            "sender@example.test".into(),
+            0,
+            Duration::from_secs(5),
+            None,
+        );
 
         // The original connection accepted the first recipient, then the Identity reconnected.
         assert!(old.reserve(&transfer.id));
@@ -717,8 +774,15 @@ mod tests {
         transfer.recipients.insert(address(1));
         old.closed.cancel();
         let new = broker.attach(route);
+        let refused = |reason| metrics::labelled("ahrara_recipients_refused_total", reason);
+        let (reconnected, offline) = (refused("reconnected"), refused("offline"));
 
         assert!(transfer.offer(&broker, &address(2)).await.is_err());
+        assert!(refused("reconnected") > reconnected);
+        let elsewhere = format!("{}@ahrara.dev", URL_SAFE_NO_PAD.encode([9; 24]));
+
+        assert!(transfer.offer(&broker, &elsewhere).await.is_err());
+        assert!(refused("offline") > offline, "no connected Identity");
         transfer.release(true).await;
 
         assert!(new.reserve("next"), "the reconnected Identity stayed busy");
@@ -754,6 +818,8 @@ mod tests {
         let mut client = BufReader::new(client);
         let mut reply = String::new();
         client.read_line(&mut reply).await.unwrap();
+        let rule = || metrics::labelled("ahrara_rule_hits_total", "smtp_no_progress");
+        let before = rule();
 
         assert!(reply.starts_with("220 "));
         // Every command arrives well within the command timeout.
@@ -775,6 +841,8 @@ mod tests {
         .await
         .expect("commands without committed mail kept the session open");
         reply.clear();
+
+        assert!(rule() > before, "the closing rule is counted");
 
         assert_eq!(client.read_line(&mut reply).await.unwrap(), 0);
         timeout(Duration::from_secs(1), session)
