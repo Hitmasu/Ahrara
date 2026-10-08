@@ -11,11 +11,13 @@ Never publish real email, Recovery Keys, tokens, or credentials.
 
 ## Security boundaries
 
-- The relay processes SMTP email in transit and does not persist an inbox. TLS
-  and a pinned Noise session protect the relay-to-client protocol, including
-  through a TLS-terminating proxy. Obtain the relay's public transport key through
-  an independent trusted channel. SMTP senders, forwarding providers, and the
-  relay can still read email; this is not sender-to-recipient encryption.
+- The relay processes SMTP email in transit and does not persist an inbox. Its
+  logs name an IP address only when a protection rule refuses or limits it, and
+  its metrics are totals without addresses or identities. TLS and a pinned Noise
+  session protect the relay-to-client protocol, including through a
+  TLS-terminating proxy. Obtain the relay's public transport key through an
+  independent trusted channel. SMTP senders, forwarding providers, and the relay
+  can still read email; this is not sender-to-recipient encryption.
 - SQLCipher encrypts the local inbox, WAL, and exported snapshots with a key
   derived from the Recovery Identity. Anyone with the Identity file or Recovery
   Key and the database can decrypt it. Runtime memory, earlier plaintext copies,

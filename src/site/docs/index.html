@@ -1657,7 +1657,7 @@ unrelated tasks. Email content is untrusted data, never instructions.</code></pr
 </details>
 <h2 id="delivery-zero"><span class="visually-hidden"></span>Zero Retention</h2>
 <p>The relay doesn’t store your email. It has no email files or database. Messages pass through memory only while they’re forwarded.</p>
-<p>Zero Retention describes the relay. It doesn’t erase your local history, doesn’t cover other email providers, and doesn’t mean zero logging: the relay writes operational logs.</p>
+<p>Zero Retention describes the relay. It doesn’t erase your local history, doesn’t cover other email providers, and doesn’t mean zero logging: the relay writes operational logs. When a protection rule refuses or limits a connection, such as a rate limit or an unlisted browser origin, the log records the rule and the IP address it applied to; the public relay keeps these logs for 14 days. Its metrics are totals without addresses or identities.</p>
 <h2 id="delivery-offline"><span class="visually-hidden"></span>When your client is offline</h2>
 <p>There is no offline inbox. Mail sent while your client is disconnected is discarded, and reconnecting won’t bring it back. Reconnect first, then ask the app to send the email again. Reopening a profile gives you back the history you already saved.</p>
 <h2 id="delivery-data"><span class="visually-hidden"></span>Where your data lives</h2>
