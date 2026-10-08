@@ -102,6 +102,7 @@ Run the checks relevant to your change before submitting a pull request:
 | MCP, API, Web, or forwarding | `make mcp-e2e`, `make api-e2e`, `make web-e2e`, or `make forwarding-e2e` |
 | Web pages or the browser app | `make web-app-e2e` (Chromium and Firefox in Docker against an isolated relay) |
 | Updater or release tooling | `make update-test` |
+| Install scripts or release workflow | `make client-lint client-test` (ShellCheck, actionlint and `tests/test_install.py`) |
 | Agent plugin | `make test` (includes native stdio, launcher, and installer checks) |
 | Any contribution | Review the diff and scan for secrets with Gitleaks |
 
@@ -167,7 +168,7 @@ packages, binaries, profiles, and logs belong in ignored directories.
 | `scripts/` | Release tooling |
 | `src/plugin/`, `skills/` | Shared agent launcher and installation skill |
 | `tests/` | Release, plugin and site tests, and the protocol vectors shared by the relay and client |
-| `src/site/` | Static landing page and documentation; no frontend build required |
+| `src/site/` | Static landing page, documentation and CLI installers; no frontend build required |
 | `Formula/` | Homebrew formula |
 
 Keep implementation in `src/`, with each component's manifests, assets and tests
@@ -181,7 +182,9 @@ operations together. Expand long macros and attributes without changing string
 contents or introducing helpers solely to wrap lines.
 
 Preview the site with `python3 -m http.server 8080 --bind 127.0.0.1 --directory src/site`.
-Static hosting publishes the contents of `src/site/`.
+Static hosting publishes the contents of `src/site/`, including the CLI installers
+`install.sh` and `install.ps1`. The host must apply `src/site/_headers`, which serves
+them as plain text and keeps `releases/stable.json` cacheable for at most five minutes.
 
 The landing page and the documentation each exist in English, Brazilian Portuguese
 and Spanish. The pages of each part share one stylesheet and one script, and both
