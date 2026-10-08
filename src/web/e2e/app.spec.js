@@ -71,6 +71,11 @@ test('receives and reads mail like the CLI page', async ({ page }) => {
   const seen = errors(page);
   page.on('dialog', dialog => dialog.accept());
   expect(await onboard(page)).toMatch(/^ahrara_sk_v1_/);
+  // Once saved, the key is shown again only from Settings, after a confirmation.
+  await page.goto('/backup');
+  await expect(page).not.toHaveURL(/\/backup$/);
+  await expect(ui(page).getByText(/^ahrara_sk_v1_/)).toHaveCount(0);
+  await page.goto('/addresses');
   const address = await createAddress(page);
   await expect(ui(page).locator('[data-connection]')).toHaveText('Connected', { timeout: 60_000 });
 

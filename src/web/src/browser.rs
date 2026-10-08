@@ -682,6 +682,8 @@ async fn answer(
 
     match (post, path.as_str()) {
         (_, "/welcome") => Ok(redirect("/")),
+        // After the first backup, Settings shows the key behind a confirmation.
+        (false, "/backup") if browser.backed_up => Ok(redirect("/settings")),
         (false, "/backup") => page(
             Backup {
                 csrf: csrf.clone(),
