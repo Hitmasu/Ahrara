@@ -13,7 +13,7 @@ use axum::{
     body::Bytes,
     http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use h2::{
     RecvStream,
     server::{Connection, SendResponse},
@@ -459,7 +459,8 @@ fn reply(mut respond: SendResponse<Bytes>, status: StatusCode, json: Option<&'st
 
 /// cloudflared's response encoding: user headers travel base64-serialized in
 /// one header (present even when empty), `content-length` also as itself,
-/// and HTTP/2's missing 101 becomes 200.
+/// and HTTP/2's missing 101 becomes 200. The base64 is unpadded, like Go's
+/// RawStdEncoding; the edge answers 502 to padded values.
 fn head(status: StatusCode, headers: &[(&str, &str)]) -> Response<()> {
     let mut response = Response::new(());
     *response.status_mut() = if status == StatusCode::SWITCHING_PROTOCOLS {
@@ -469,7 +470,13 @@ fn head(status: StatusCode, headers: &[(&str, &str)]) -> Response<()> {
     };
     let serialized = headers
         .iter()
-        .map(|(name, value)| format!("{}:{}", STANDARD.encode(name), STANDARD.encode(value)))
+        .map(|(name, value)| {
+            format!(
+                "{}:{}",
+                STANDARD_NO_PAD.encode(name),
+                STANDARD_NO_PAD.encode(value)
+            )
+        })
         .collect::<Vec<_>>()
         .join(";");
     let map = response.headers_mut();
@@ -513,7 +520,8 @@ mod tests {
             .filter(|pair| !pair.is_empty())
             .map(|pair| {
                 let (name, value) = pair.split_once(':').unwrap();
-                let decode = |part| String::from_utf8(STANDARD.decode(part).unwrap()).unwrap();
+                let decode =
+                    |part| String::from_utf8(STANDARD_NO_PAD.decode(part).unwrap()).unwrap();
                 (decode(name), decode(value))
             })
             .collect()
@@ -753,7 +761,7 @@ mod tests {
         assert_eq!(upgrade.headers()["content-length"], "0");
         assert_eq!(
             upgrade.headers()["cf-cloudflared-response-headers"],
-            "dXBncmFkZQ==:d2Vic29ja2V0;Y29udGVudC1sZW5ndGg=:MA=="
+            "dXBncmFkZQ:d2Vic29ja2V0;Y29udGVudC1sZW5ndGg:MA"
         );
     }
 
