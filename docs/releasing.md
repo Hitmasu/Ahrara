@@ -6,7 +6,7 @@ deployed separately.
 
 | Job | What it does |
 |---|---|
-| `build` | Builds the CLI (`make release`) and the SDKs' native core (`make sdk-native-release`) for Linux, macOS and Windows on x64 and ARM64. The Linux x64 leg also runs `make client-lint client-test`, writes the third-party licenses (`make licenses`) and builds the browser app (`make web`). |
+| `build` | Builds the CLI (`make release`) and the SDKs' native core (`make sdk-native-release`) for Linux, macOS and Windows on x64 and ARM64. The Linux x64 leg also runs `make client-lint client-test` and writes the third-party licenses (`make licenses`). |
 | `sdk-packages` | Builds the npm package, one Python wheel per platform and the NuGet package, each with its native libraries (`make sdk-packages`). |
 | `smoke` | On a runner of each platform, runs the CLI and loads the native core from its Python wheel. Nothing is published unless all six pass. |
 | `publish` | Creates the GitHub Release with the CLI binaries, the native libraries, the third-party licenses, the signed `stable.json` and the Homebrew formula. |
@@ -60,11 +60,10 @@ deployed separately.
 - Run the relevant [checks](../CONTRIBUTING.md#checks), including `make update-test`
   and `make sdk-test`.
 
-The browser app is built by the same workflow as artifact `ahrara-web-app`, with
-the relay key from `AHRARA_SERVER_PUBLIC_KEY`. The relay must list
-`https://app.ahrara.dev` in `AHRARA_WEB_ORIGINS`. Publish the artifact's contents at
-the root of `https://app.ahrara.dev` on a host that applies its `_headers` file and
-serves `index.html` for paths without a file.
+The [Browser app workflow](../.github/workflows/web-app.yml) builds the browser app
+with the relay key from `AHRARA_SERVER_PUBLIC_KEY` and deploys it to Cloudflare Pages
+on every version tag, or when run by hand to publish `main`. The relay must list
+`https://app.ahrara.dev` in `AHRARA_WEB_ORIGINS`.
 
 Only the public key is embedded in binaries. Builds without it cannot check or
 apply updates. The updater, the plugin and the installers read the `stable.json`

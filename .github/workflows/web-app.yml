@@ -1,0 +1,39 @@
+name: Browser app
+on:
+  # Each version tag publishes the app with that release; run it by hand to publish main.
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: web-app
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Holds the Cloudflare token, which can only edit Pages projects.
+    environment: release
+    env:
+      AHRARA_SERVER_PUBLIC_KEY: ${{ vars.AHRARA_SERVER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Build the browser app for the production relay
+        run: |
+          [[ $AHRARA_SERVER_PUBLIC_KEY =~ ^ahrara_server_v1_[A-Za-z0-9_-]{43}$ ]] || { echo 'Configure the verified relay public key first' >&2; exit 1; }
+          make web
+      # Pages applies _headers and, without a 404.html, answers unknown paths with
+      # index.html, whose Service Worker renders every page. The custom domain is
+      # set in the dashboard.
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler='npx --yes wrangler@4.149.0'
+          $wrangler pages project list --json | grep -q '"ahrara-app"' ||
+            $wrangler pages project create ahrara-app --production-branch main
+          $wrangler pages deploy dist/web --project-name ahrara-app --branch main --commit-dirty=true
