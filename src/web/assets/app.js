@@ -45,6 +45,8 @@ async function refresh() {
     const page = new DOMParser().parseFromString(await response.text(), 'text/html');
     const address = page.querySelector('.current-address');
     if (address) document.querySelector('.current-address')?.replaceWith(address);
+    const connection = page.querySelector('[data-connection]');
+    if (connection) document.querySelectorAll('[data-connection]').forEach(el => { el.textContent = connection.textContent; el.className = connection.className; });
     const updated = page.querySelector('#live-content');
     if (updated) {
       // DOMParser exposes noscript form controls; they must stay out of JS updates.
@@ -62,6 +64,8 @@ function subscribe() {
   const target = new EventTarget();
   channel.addEventListener('message', ({ data }) => target.dispatchEvent(new MessageEvent(data.kind, { data: JSON.stringify(data.data) })));
   target.close = () => channel.close();
+  // Like EventSource's open: catch up on what changed between rendering and subscribing.
+  setTimeout(() => target.dispatchEvent(new Event('open')));
   return target;
 }
 const events = subscribe();

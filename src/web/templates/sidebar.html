@@ -1,5 +1,5 @@
 <aside class="sidebar">
-<a class="brand" href="/" aria-label="{{ t.home }}"><img src="/assets/logo.png" width="44" height="44" alt=""><span>Ahrara<small>{{ t.tagline }}</small></span></a>
+<a class="brand" href="/" aria-label="{{ t.home }}"><img src="/assets/logo.png" width="44" height="44" alt=""><span>Ahrara</span></a>
 <nav aria-label="{{ t.navigation }}">
 <a href="/" {% if section == "inbox" || section == "email" %}aria-current="page"{% endif %}><svg><use href="#inbox"/></svg>{{ t.inbox }} <span class="count" data-count>{{ total }}</span></a>
 <a href="/addresses" {% if section == "addresses" %}aria-current="page"{% endif %}><svg><use href="#addresses"/></svg>{{ t.addresses }}</a>

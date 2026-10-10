@@ -10,7 +10,7 @@ const mailer = nodemailer.createTransport({
   tls: { ca: readFileSync(new URL('../../../.dev/certs/ca.pem', import.meta.url)) },
 });
 const notes = Buffer.from('attachment bytes \u0000ÿ');
-const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ2kAAAAASUVORK5CYII=', 'base64');
+const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGP4/x8AAwAB//wl3FEAAAAASUVORK5CYII=', 'base64');
 
 // The relay refuses mail until the browser holding the address is connected.
 async function send(to, subject, { retry = true } = {}) {
@@ -61,7 +61,7 @@ async function onboard(page) {
 
 async function createAddress(page) {
   await ui(page).getByRole('button', { name: 'Create address' }).click();
-  const address = ui(page).locator('.addresses-table .address-text').first();
+  const address = ui(page).locator('.addresses-table .address-text').last();
   await expect(address).toHaveText(/@ahrara\.dev$/);
   return (await address.textContent()).trim();
 }
@@ -92,7 +92,11 @@ test('receives and reads mail like the CLI page', async ({ page }) => {
   await ui(page).getByRole('link', { name: 'Browser app check' }).click();
   await expect(page).toHaveURL(/\/emails\/\d+$/);
   await expect(ui(page).locator('.plain-text')).toHaveText('Your code is 123456.');
-  await expect(ui(page).locator('iframe[name="ahrara-email-html"]')).toHaveAttribute('sandbox', '');
+  // The HTML part renders isolated: the frame is sandboxed, so the page cannot reach into it.
+  await ui(page).getByText('HTML version').click();
+  const html = ui(page).locator('iframe[name="ahrara-email-html"]');
+  await expect(ui(page).frameLocator('iframe[name="ahrara-email-html"]').locator('p')).toHaveText('Your code is 123456.');
+  expect(await html.evaluate(frame => frame.contentDocument)).toBeNull();
   await expect(ui(page).getByRole('button', { name: 'Load images' })).toBeVisible();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
@@ -121,6 +125,20 @@ test('receives and reads mail like the CLI page', async ({ page }) => {
   await ui(page).getByTitle(`Disable ${address}`).click();
   await expect(ui(page).getByTitle(`Enable ${address}`)).toHaveText('Disabled');
   await expect(send(address, 'Refused', { retry: false })).rejects.toMatchObject({ responseCode: 550 });
+  expect(seen).toEqual([]);
+});
+
+test('opens with an address ready on the first visit', async ({ page }) => {
+  const seen = errors(page);
+  await page.goto('/');
+  await expect(ui(page).locator('.current-address .address-copy')).toHaveText(/@ahrara\.dev$/);
+  await expect(ui(page).locator('.brand')).toHaveText('Ahrara');
+  // The page and the connection worker both open the new Identity; only one address is created.
+  await ui(page).getByRole('link', { name: 'Addresses' }).click();
+  await expect(ui(page).locator('.addresses-table tbody tr')).toHaveCount(1);
+  await expect(ui(page).locator('.addresses-table tbody tr')).toContainText('Unlabeled');
+  await page.reload();
+  await expect(ui(page).locator('.addresses-table tbody tr')).toHaveCount(1);
   expect(seen).toEqual([]);
 });
 
@@ -198,7 +216,6 @@ test('follows the browser language', async ({ browserName, playwright }) => {
   const page = await browser.newPage({ baseURL: app });
   await page.goto('/');
   await expect(ui(page).getByRole('link', { name: 'Configurações' })).toBeVisible();
-  await expect(ui(page).locator('.brand small')).toHaveText('Retenção zero. Simples. Gratuito. Código aberto.');
   await browser.close();
 });
 

@@ -149,6 +149,23 @@ impl Browser {
         Self::load().await?.context("cannot store the Identity")
     }
 
+    /// Gives an Identity without addresses its first one, so the app opens with an
+    /// address ready. The page does it before rendering; the marker, cleared with
+    /// the Identity, keeps it to once even when that address is deleted later.
+    async fn first_address(&self) -> Result<()> {
+        if !kv("first_address").await?.is_undefined() {
+            return Ok(());
+        }
+        if idb::add("kv", &true.into(), &"first_address".into())
+            .await
+            .is_ok()
+            && self.all_addresses().await?.is_empty()
+        {
+            self.create_address(None).await?;
+        }
+        Ok(())
+    }
+
     fn cipher(&self) -> ChaCha20Poly1305 {
         ChaCha20Poly1305::new(Key::from_slice(&*self.key))
     }
@@ -613,6 +630,7 @@ async fn answer(
 
     let mut browser = Browser::load_or_create().await?;
     browser.csrf = csrf.clone();
+    browser.first_address().await?;
     // The localized site links here with its language, kept until Settings chooses one.
     if let Some(code) = request
         .uri()
@@ -657,6 +675,8 @@ async fn answer(
             // Addresses and email belong to the replaced Identity and are sealed with its key.
             idb::erase().await.map_err(js)?;
             set_kv("identity", &identity.export().as_str().into()).await?;
+            // Its addresses are added back from the other browser, so it gets no new one.
+            set_kv("first_address", &true.into()).await?;
             browser.set_language(language).await?;
             idb::emit("identity_changed", "{}");
             Ok(redirect("/addresses"))

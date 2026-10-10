@@ -13,7 +13,6 @@ pub struct Strings {
     // Layout
     pub skip: &'static str,
     pub noscript: &'static str,
-    pub tagline: &'static str,
     pub home: &'static str,
     pub navigation: &'static str,
     pub inbox: &'static str,
@@ -222,7 +221,6 @@ pub static EN: Strings = Strings {
 
     skip: "Skip to content",
     noscript: "Live updates and copying require JavaScript. Forms and reading still work.",
-    tagline: "Zero Retention. Simple. Free. Open Source.",
     home: "Ahrara inbox",
     navigation: "Main navigation",
     inbox: "Inbox",
@@ -423,7 +421,6 @@ pub static PT_BR: Strings = Strings {
 
     skip: "Ir para o conteúdo",
     noscript: "Atualizações ao vivo e cópia exigem JavaScript. Formulários e leitura continuam funcionando.",
-    tagline: "Retenção zero. Simples. Gratuito. Código aberto.",
     home: "Caixa de entrada do Ahrara",
     navigation: "Navegação principal",
     inbox: "Caixa de entrada",
@@ -624,7 +621,6 @@ pub static ES: Strings = Strings {
 
     skip: "Ir al contenido",
     noscript: "Las actualizaciones en vivo y la copia requieren JavaScript. Los formularios y la lectura siguen funcionando.",
-    tagline: "Zero Retention. Simple. Gratis. Código abierto.",
     home: "Bandeja de Ahrara",
     navigation: "Navegación principal",
     inbox: "Bandeja de entrada",
