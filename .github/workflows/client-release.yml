@@ -12,9 +12,6 @@ on:
         description: First publication only (there is no previous signed manifest)
         type: boolean
         default: false
-      available:
-        description: Already published channel=platform pairs, separated by spaces
-        default: ''
 permissions:
   contents: read
 concurrency:
@@ -29,6 +26,7 @@ jobs:
         arch: [x86_64, aarch64]
     runs-on: ubuntu-latest
     env:
+      # A dedicated Ed25519 release key, never a user Identity; src/plugin/release-key.json holds the same key.
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
       AHRARA_SERVER_PUBLIC_KEY: ${{ vars.AHRARA_SERVER_PUBLIC_KEY }}
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
@@ -99,6 +97,13 @@ jobs:
           name: sdk-nuget
           path: dist/packages/nuget/*.nupkg
           if-no-files-found: error
+      - name: Package the CLI for npm
+        run: make npm-cli
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-npm
+          path: dist/packages/npm-cli/*.tgz
+          if-no-files-found: error
   # Runs each binary and loads each native library on its own platform before anything is published.
   smoke:
     needs: [build, sdk-packages]
@@ -127,16 +132,33 @@ jobs:
         with:
           name: sdk-python
           path: wheels
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-npm
+          path: npm
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.13'
           architecture: ${{ matrix.python }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
       - name: Run the CLI
         run: |
           binary=dist/ahrara-${{ matrix.platform }}-${{ matrix.arch }}
           [ -f "$binary" ] || binary=$binary.exe
           chmod +x "$binary"
           test "$("$binary" --version)" = "ahrara ${RELEASE_REF#v}"
+      # Laid out as npm installs it: the launcher and this platform's package.
+      - name: Run the CLI through its npm launcher
+        run: |
+          os=${{ matrix.platform }}; os=${os/windows/win32}
+          cpu=${{ matrix.arch }}; cpu=${cpu/x86_64/x64}; cpu=${cpu/aarch64/arm64}
+          version=${RELEASE_REF#v}
+          mkdir -p node_modules/ahrara "node_modules/@ahrara/cli-$os-$cpu"
+          tar -xzf "npm/ahrara-$version.tgz" -C node_modules/ahrara --strip-components=1
+          tar -xzf "npm/ahrara-cli-$os-$cpu-$version.tgz" -C "node_modules/@ahrara/cli-$os-$cpu" --strip-components=1
+          test "$(node node_modules/ahrara/bin/ahrara.js --version)" = "ahrara $version"
       # pip picks the wheel by platform tag; the core's own argument check proves the library loads with ABI 1.
       - name: Load the native core from its wheel
         run: |
@@ -150,8 +172,42 @@ jobs:
           else:
               raise AssertionError("the native core accepted an empty request")
           PY
+  # The manifest announces npm releases, so the packages are published before it is signed.
+  npm-cli:
+    needs: smoke
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-npm
+          path: npm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing first, NPM_TOKEN only for a package's first version.
+      # Platform packages go first, so the launcher never points at missing ones.
+      - name: Publish the CLI to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version=${RELEASE_REF#v}
+          for tarball in npm/ahrara-cli-*-"$version".tgz "npm/ahrara-$version.tgz"; do
+            name=$(tar -xzOf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0)).name')
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name $version is already published"
+            else
+              npm publish "$tarball" --access public --provenance
+            fi
+          done
   publish:
-    needs: [build, smoke]
+    needs: [build, smoke, npm-cli]
     runs-on: ubuntu-latest
     # The signing key is a secret of this protected environment, never of the repository.
     environment: release
@@ -160,7 +216,6 @@ jobs:
     env:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
-      AVAILABLE: ${{ inputs.available }}
       INITIAL_RELEASE: ${{ inputs.initial_release }}
     steps:
       - name: Resolve release version
@@ -194,19 +249,19 @@ jobs:
             gh release download --pattern stable.json --output previous.json
             args+=(--previous previous.json)
           fi
-          read -r -a availability <<< "$AVAILABLE"
-          for entry in "${availability[@]}"; do args+=(--available "$entry"); done
+          # npm is published and the homebrew job commits the formula, so both channels announce it.
+          for target in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64; do
+            args+=(--available "brew=$target" --available "npm=$target")
+          done
+          args+=(--available npm=windows-x86_64 --available npm=windows-aarch64)
           python3 scripts/release-manifest.py --version "$RELEASE_VERSION" --assets dist \
             --key "$key_file" --public-key "$AHRARA_UPDATE_PUBLIC_KEY" \
             --output dist/stable.json --homebrew-output Formula/ahrara.rb \
             --plugin-key-output src/plugin/release-key.json "${args[@]}"
-      - name: Prepare plugin verification key for review and commit
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ahrara-plugin-key
-          path: src/plugin/release-key.json
-          if-no-files-found: error
-      - name: Prepare formula for review and commit to this repository
+      # Plugins install from the default branch, which must already trust this key.
+      - name: Check the plugin trusts the release key
+        run: git diff --exit-code -- src/plugin/release-key.json
+      - name: Keep the formula for the homebrew job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ahrara-homebrew-formula
@@ -225,12 +280,32 @@ jobs:
           gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" \
             --title "Ahrara $RELEASE_VERSION" --generate-notes \
             dist/ahrara-* dist/stable.json Formula/ahrara.rb
-      - name: Prepare static site for its existing hosting pipeline
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+  # The tap is this repository, so Homebrew sees the release once the formula is on main.
+  homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          name: ahrara-static-site
-          path: src/site/
-          if-no-files-found: error
+          ref: main
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ahrara-homebrew-formula
+          path: Formula
+      - name: Commit the formula to main
+        env:
+          RELEASE_REF: ${{ inputs.version || github.ref_name }}
+        run: |
+          if git diff --quiet -- Formula/ahrara.rb; then
+            echo 'Formula/ahrara.rb is already up to date'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --quiet -m "Homebrew formula for Ahrara ${RELEASE_REF#v}" Formula/ahrara.rb
+          git push origin HEAD:main
   # The scripts read the manifest of the latest release, which is now this one.
   installers:
     needs: publish
@@ -289,6 +364,7 @@ jobs:
         id: nuget
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
+          # The nuget.org profile name that owns Ahrara, not its email.
           user: ${{ secrets.NUGET_USER }}
       - name: Publish to NuGet
         env:
@@ -315,6 +391,7 @@ jobs:
   maven:
     needs: smoke
     runs-on: ubuntu-latest
+    # Central Portal user token for dev.ahrara, and a GPG key whose public key is on a keyserver.
     environment: release
     env:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
