@@ -124,6 +124,7 @@ test('SDK packages are released with the CLI version', async () => {
   const versions = {
     'src/native/Cargo.toml': (await read('src/native/Cargo.toml')).match(/^version = "([^"]+)"/m)[1],
     'src/sdks/javascript/package.json': JSON.parse(await read('src/sdks/javascript/package.json')).version,
+    'src/cli/npm/package.json': JSON.parse(await read('src/cli/npm/package.json')).version,
     'src/sdks/python/pyproject.toml': (await read('src/sdks/python/pyproject.toml')).match(/^version = "([^"]+)"/m)[1],
     'src/sdks/dotnet/src/Ahrara/Ahrara.csproj': (await read('src/sdks/dotnet/src/Ahrara/Ahrara.csproj')).match(/<Version>([^<]+)</)[1],
     'src/sdks/java/pom.xml': (await read('src/sdks/java/pom.xml')).match(/<artifactId>ahrara<\/artifactId>\s*<version>([^<]+)</)[1],

@@ -1,0 +1,34 @@
+{
+  "name": "ahrara",
+  "version": "0.1.0",
+  "description": "Disposable email for AI agents, QA and automation: the Ahrara CLI",
+  "license": "MIT",
+  "homepage": "https://ahrara.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hitmasu/Ahrara.git",
+    "directory": "src/cli/npm"
+  },
+  "bugs": "https://github.com/Hitmasu/Ahrara/issues",
+  "keywords": [
+    "email",
+    "disposable-email",
+    "mcp",
+    "ai-agents",
+    "testing",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "ahrara": "bin/ahrara.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

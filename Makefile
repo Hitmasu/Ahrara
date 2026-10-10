@@ -160,7 +160,7 @@ client-test: toolchain
 	$(CARGO) test --locked --manifest-path /work/src/web/Cargo.toml
 	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara python:3.13-slim \
 		python3 -B -m unittest discover -s tests -p 'test_*.py'
-	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs
+	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs tests/npm-cli.test.mjs
 
 .PHONY: update-test
 update-test: toolchain
@@ -441,6 +441,14 @@ sdk-stage:
 	for sdk in javascript python dotnet java; do
 		cp dist/ahrara-third-party-licenses.md "src/sdks/$$sdk/LICENSE-THIRD-PARTY.md"
 	done
+
+# The CLI's npm packages: the ahrara launcher and one @ahrara/cli-* package per platform.
+.PHONY: npm-cli
+npm-cli:
+	test -f dist/ahrara-third-party-licenses.md || { echo 'Run make licenses first' >&2; exit 1; }
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp -v "$$PWD:/repo" -w /repo \
+		node:24-bookworm@sha256:3d27e5c11e5786e309ec3e03f93ae536eb36e6e5eb3714d5eb3300a36157add0 \
+		node scripts/npm-cli.mjs dist dist/packages/npm-cli
 
 # Release packages go to dist/packages, apart from the ones the sdk-*-test targets build.
 # Their images are pinned by digest, and setuptools by version in pyproject.toml.
