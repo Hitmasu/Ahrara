@@ -13,8 +13,8 @@ navigator.locks.request('ahrara-connection', async () => {
   for (let delay = 1000; ;) {
     let result;
     try {
+      // The worker and the first page may both create the Identity; the first stored wins.
       const engine = await wasm_bindgen.Engine.open();
-      if (!engine) { await changed(); continue; }
       result = await connect(engine);
       engine.free();
     } catch (error) {

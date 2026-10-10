@@ -49,14 +49,13 @@ function errors(page) {
 // Every page lives in the shell's frame.
 const ui = page => page.frameLocator('iframe');
 
+// The first visit creates an Identity without asking; Settings exports its key.
 async function onboard(page) {
-  await page.goto('/');
-  await ui(page).getByRole('button', { name: 'Create a new identity' }).click();
-  await expect(page).toHaveURL(/\/backup$/);
-  const key = (await ui(page).locator('code').textContent()).trim();
-  await ui(page).getByLabel('I saved my Recovery Key somewhere safe').check();
-  await ui(page).getByRole('button', { name: 'Continue' }).click();
-  await expect(page).toHaveURL(/\/addresses#create-address$/);
+  await page.goto('/settings');
+  await ui(page).getByLabel('Show it on this screen').check();
+  await ui(page).getByRole('button', { name: 'Show Recovery Key' }).click();
+  const key = (await ui(page).locator('p.fingerprint code').textContent()).trim();
+  await page.goto('/addresses');
   return key;
 }
 
@@ -71,10 +70,12 @@ test('receives and reads mail like the CLI page', async ({ page }) => {
   const seen = errors(page);
   page.on('dialog', dialog => dialog.accept());
   expect(await onboard(page)).toMatch(/^ahrara_sk_v1_/);
-  // Once saved, the key is shown again only from Settings, after a confirmation.
-  await page.goto('/backup');
-  await expect(page).not.toHaveURL(/\/backup$/);
-  await expect(ui(page).getByText(/^ahrara_sk_v1_/)).toHaveCount(0);
+  // Old onboarding links never show the key; only Settings does, after a confirmation.
+  for (const path of ['/backup', '/welcome']) {
+    await page.goto(path);
+    await expect(page).not.toHaveURL(new RegExp(`${path}$`));
+    await expect(ui(page).getByText(/^ahrara_sk_v1_/)).toHaveCount(0);
+  }
   await page.goto('/addresses');
   const address = await createAddress(page);
   await expect(ui(page).locator('[data-connection]')).toHaveText('Connected', { timeout: 60_000 });
@@ -131,17 +132,26 @@ test('moves an Identity to another browser and hands the connection between tabs
   await ui(page).getByRole('link', { name: 'Settings' }).click();
   await ui(page).getByLabel('Show it on this screen').check();
   await ui(page).getByRole('button', { name: 'Show Recovery Key' }).click();
-  await expect(ui(page).locator('section', { hasText: 'Recovery Key' }).locator('code')).toHaveText(key);
+  await expect(ui(page).locator('p.fingerprint code')).toHaveText(key);
   const fingerprint = await ui(page).locator('dd.fingerprint').first().textContent();
   await first.close();
 
   const second = await browser.newContext();
   const tab = await second.newPage();
   const seen = errors(tab);
-  await tab.goto('/');
+  tab.on('dialog', dialog => dialog.accept());
+  // This browser starts with its own Identity; importing replaces it and its addresses.
+  await tab.goto('/addresses');
+  await createAddress(tab);
+  await tab.goto('/settings');
+  await ui(tab).getByLabel('Recovery Key').fill('ahrara_sk_v1_invalid');
+  await ui(tab).getByRole('button', { name: 'Import Recovery Key' }).click();
+  await expect(ui(tab).getByRole('alert')).toHaveText('This Recovery Key is not valid. Check it and try again.');
+  seen.length = 0; // The invalid key's 400 response is expected.
   await ui(tab).getByLabel('Recovery Key').fill(key);
   await ui(tab).getByRole('button', { name: 'Import Recovery Key' }).click();
   await expect(tab).toHaveURL(/\/addresses$/);
+  await expect(ui(tab).locator('.addresses-table .address-text')).toHaveCount(0);
   await ui(tab).getByText('Add an existing address').click();
   await ui(tab).getByLabel('Address', { exact: true }).fill(address);
   await ui(tab).getByRole('button', { name: 'Add address' }).click();
@@ -169,13 +179,26 @@ test('Settings chooses the language', async ({ page }) => {
   await expect(page).toHaveTitle('Configuración · Ahrara');
 });
 
+test('takes the language of the site that linked to it, unless Settings chose one', async ({ page }) => {
+  await page.goto('/?lang=pt-BR');
+  await expect(ui(page).getByRole('link', { name: 'Configurações' })).toBeVisible();
+  await expect(page).toHaveURL(/:28080\/$/);
+  await ui(page).getByRole('link', { name: 'Configurações' }).click();
+  await ui(page).getByLabel('Idioma').selectOption('es');
+  await ui(page).getByRole('button', { name: 'Salvar', exact: true }).click();
+  await expect(ui(page).getByRole('heading', { name: 'Configuración', level: 1 })).toBeVisible();
+  await page.goto('/?lang=pt-BR');
+  await expect(ui(page).getByRole('link', { name: 'Configuración' })).toBeVisible();
+});
+
 test('follows the browser language', async ({ browserName, playwright }) => {
   // Playwright's locale emulation does not reach Service Workers; Firefox's own preference does.
   test.skip(browserName !== 'firefox', 'headless Chromium cannot change the Service Worker language');
   const browser = await playwright.firefox.launch({ firefoxUserPrefs: { 'intl.accept_languages': 'pt-BR, pt' } });
   const page = await browser.newPage({ baseURL: app });
   await page.goto('/');
-  await expect(ui(page).getByRole('heading', { name: 'Sua caixa de entrada, neste navegador.' })).toBeVisible();
+  await expect(ui(page).getByRole('link', { name: 'Configurações' })).toBeVisible();
+  await expect(ui(page).locator('.brand small')).toHaveText('Retenção zero. Simples. Gratuito. Código aberto.');
   await browser.close();
 });
 

@@ -109,8 +109,9 @@ and the loopback URL.
 installing the CLI. The browser connects to the relay itself and keeps the
 Identity, addresses and emails in its own storage.
 
-On the first visit, create an Identity and save the Recovery Key it shows, or
-import an existing key. Keep a tab open to receive email: the relay does not
+The first visit creates an Identity. **Settings** shows its Recovery Key and
+imports another key, which replaces the browser's Identity, addresses and emails.
+Keep a tab open to receive email: the relay does not
 queue mail. Tabs share one connection, and another tab takes over when the one
 holding it closes.
 
@@ -126,8 +127,8 @@ receive with the same key simultaneously. To move between them:
 
 Received emails stay where they arrived, and the browser app cannot back them
 up. Browsers may clear site data when storage runs low; the app requests
-persistent storage when you confirm you saved the Recovery Key, and **Settings**
-shows whether it was granted. **Settings → Delete local
+persistent storage when you create or add an address or show or import the key,
+and **Settings** shows whether it was granted. **Settings → Delete local
 data** removes everything from the browser. The app needs Service Workers, which
 some private windows disable.
 

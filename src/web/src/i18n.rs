@@ -186,17 +186,11 @@ pub struct Strings {
     pub mcp_unavailable: &'static str,
 
     // First use in the browser
-    pub welcome: &'static str,
-    pub welcome_heading: &'static str,
-    pub welcome_detail: &'static str,
     pub invalid_recovery_key: &'static str,
-    pub create_identity: &'static str,
     pub import_recovery_key: &'static str,
-    pub welcome_cli: &'static str,
-    pub welcome_cli_after: &'static str,
-    pub backup_title: &'static str,
-    pub backup_detail: &'static str,
-    pub backup_confirm: &'static str,
+    pub import_cli: &'static str,
+    pub import_cli_after: &'static str,
+    pub confirm_import: &'static str,
     pub proceed: &'static str,
 
     // The CLI's sign-in page
@@ -228,7 +222,7 @@ pub static EN: Strings = Strings {
 
     skip: "Skip to content",
     noscript: "Live updates and copying require JavaScript. Forms and reading still work.",
-    tagline: "Simple. Private. Yours.",
+    tagline: "Zero Retention. Simple. Free. Open Source.",
     home: "Ahrara inbox",
     navigation: "Main navigation",
     inbox: "Inbox",
@@ -395,17 +389,11 @@ pub static EN: Strings = Strings {
     server_unavailable: "Not available in the browser version: browsers don't let a web page run the local server behind these settings.",
     mcp_unavailable: "Not available in the browser version: AI agents can't connect to a browser tab.",
 
-    welcome: "Welcome",
-    welcome_heading: "Your inbox, in this browser.",
-    welcome_detail: "Ahrara keeps your key and your emails in this browser only. Keep a tab open to receive email.",
     invalid_recovery_key: "This Recovery Key is not valid. Check it and try again.",
-    create_identity: "Create a new identity",
     import_recovery_key: "Import Recovery Key",
-    welcome_cli: "Already use the Ahrara CLI? Run",
-    welcome_cli_after: "and import its key here, then add its addresses.",
-    backup_title: "Save your Recovery Key",
-    backup_detail: "It is the only way to open these addresses in another browser or in the Ahrara CLI. Anyone with it can receive your email, so keep it private.",
-    backup_confirm: "I saved my Recovery Key somewhere safe",
+    import_cli: "Already use the Ahrara CLI? Run",
+    import_cli_after: "and import its key here, then add its addresses.",
+    confirm_import: "Replace this browser's identity with this key? Its addresses and emails are deleted from this browser, so save the current Recovery Key first.",
     proceed: "Continue",
 
     sign_in: "Sign in",
@@ -435,7 +423,7 @@ pub static PT_BR: Strings = Strings {
 
     skip: "Ir para o conteúdo",
     noscript: "Atualizações ao vivo e cópia exigem JavaScript. Formulários e leitura continuam funcionando.",
-    tagline: "Simples. Privado. Seu.",
+    tagline: "Retenção zero. Simples. Gratuito. Código aberto.",
     home: "Caixa de entrada do Ahrara",
     navigation: "Navegação principal",
     inbox: "Caixa de entrada",
@@ -602,17 +590,11 @@ pub static PT_BR: Strings = Strings {
     server_unavailable: "Indisponível na versão do navegador: o navegador não permite que uma página rode o servidor local por trás destas configurações.",
     mcp_unavailable: "Indisponível na versão do navegador: agentes de IA não conseguem se conectar a uma aba do navegador.",
 
-    welcome: "Boas-vindas",
-    welcome_heading: "Sua caixa de entrada, neste navegador.",
-    welcome_detail: "O Ahrara guarda sua chave e seus e-mails só neste navegador. Mantenha uma aba aberta para receber e-mails.",
     invalid_recovery_key: "Esta Recovery Key não é válida. Confira e tente de novo.",
-    create_identity: "Criar uma nova identidade",
     import_recovery_key: "Importar Recovery Key",
-    welcome_cli: "Já usa a CLI do Ahrara? Rode",
-    welcome_cli_after: "e importe a chave aqui. Depois, adicione os endereços dela.",
-    backup_title: "Guarde sua Recovery Key",
-    backup_detail: "É a única forma de abrir estes endereços em outro navegador ou na CLI do Ahrara. Quem tiver a chave pode receber seus e-mails, então mantenha-a em sigilo.",
-    backup_confirm: "Guardei minha Recovery Key em um lugar seguro",
+    import_cli: "Já usa a CLI do Ahrara? Rode",
+    import_cli_after: "e importe a chave aqui. Depois, adicione os endereços dela.",
+    confirm_import: "Substituir a identidade deste navegador por esta chave? Os endereços e e-mails dela serão apagados deste navegador; salve antes a Recovery Key atual.",
     proceed: "Continuar",
 
     sign_in: "Entrar",
@@ -642,7 +624,7 @@ pub static ES: Strings = Strings {
 
     skip: "Ir al contenido",
     noscript: "Las actualizaciones en vivo y la copia requieren JavaScript. Los formularios y la lectura siguen funcionando.",
-    tagline: "Simple. Privado. Tuyo.",
+    tagline: "Zero Retention. Simple. Gratis. Código abierto.",
     home: "Bandeja de Ahrara",
     navigation: "Navegación principal",
     inbox: "Bandeja de entrada",
@@ -809,17 +791,11 @@ pub static ES: Strings = Strings {
     server_unavailable: "No disponible en la versión del navegador: el navegador no permite que una página ejecute el servidor local detrás de estos ajustes.",
     mcp_unavailable: "No disponible en la versión del navegador: los agentes de IA no pueden conectarse a una pestaña del navegador.",
 
-    welcome: "Te damos la bienvenida",
-    welcome_heading: "Tu bandeja de entrada, en este navegador.",
-    welcome_detail: "Ahrara guarda tu clave y tus correos solo en este navegador. Mantén una pestaña abierta para recibir correo.",
     invalid_recovery_key: "Esta Recovery Key no es válida. Revísala y vuelve a intentarlo.",
-    create_identity: "Crear una identidad nueva",
     import_recovery_key: "Importar Recovery Key",
-    welcome_cli: "¿Ya usas la CLI de Ahrara? Ejecuta",
-    welcome_cli_after: "e importa aquí su clave. Luego, añade sus direcciones.",
-    backup_title: "Guarda tu Recovery Key",
-    backup_detail: "Es la única forma de abrir estas direcciones en otro navegador o en la CLI de Ahrara. Quien la tenga puede recibir tus correos, así que mantenla en privado.",
-    backup_confirm: "Guardé mi Recovery Key en un lugar seguro",
+    import_cli: "¿Ya usas la CLI de Ahrara? Ejecuta",
+    import_cli_after: "e importa aquí su clave. Luego, añade sus direcciones.",
+    confirm_import: "¿Reemplazar la identidad de este navegador por esta clave? Sus direcciones y correos se borrarán de este navegador; guarda antes la Recovery Key actual.",
     proceed: "Continuar",
 
     sign_in: "Iniciar sesión",
@@ -869,7 +845,7 @@ pub fn negotiate(preference: Option<&str>, accept_language: Option<&str>) -> &'s
 }
 
 // Any regional variant selects the language: pt-PT reads the Brazilian text.
-fn find(tag: &str) -> Option<&'static Strings> {
+pub(crate) fn find(tag: &str) -> Option<&'static Strings> {
     let primary = tag.split(['-', '_']).next()?;
     LANGUAGES.into_iter().find(|strings| {
         strings

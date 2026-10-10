@@ -455,6 +455,7 @@ struct Page {
     custom_domain: Option<CustomDomain>,
     /// The browser's Recovery Key, shown on request only.
     recovery: Option<Zeroizing<String>>,
+    import_error: bool,
 }
 
 impl Page {
@@ -513,6 +514,7 @@ impl Page {
             remote_resources: 0,
             custom_domain: None,
             recovery: None,
+            import_error: false,
         })
     }
 

@@ -95,7 +95,8 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-keep-blocked]')) document.querySelector('[data-remote-notice]').hidden = true;
 });
 
-// The browser app's data survives storage pressure only when persisted.
+// The browser app's data survives storage pressure only when persisted; ask when the
+// user commits to it, by creating or adding an address or keeping its key.
 document.addEventListener('submit', event => { if (event.target.matches('[data-persist]')) navigator.storage?.persist?.(); });
 const storage = document.querySelector('[data-storage]');
 if (storage) navigator.storage?.persisted?.().then(persisted => {

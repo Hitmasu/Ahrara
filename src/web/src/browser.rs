@@ -3,8 +3,7 @@
 //! JavaScript only moves bytes: records are sealed here with a key derived from
 //! the Identity, as the CLI encrypts its database.
 use crate::{
-    Backend, Mode, Page, Status, Ui, failure, harden, html, i18n::Strings, missing, redirect,
-    verify,
+    Backend, Mode, Page, Status, Ui, failure, harden, i18n::Strings, missing, redirect, verify,
 };
 use ahrara_core::{
     auth::{self, Identity},
@@ -14,7 +13,6 @@ use ahrara_core::{
     session::{Session, Step},
 };
 use anyhow::{Context, Result, anyhow, bail};
-use askama::Template;
 use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce, aead::Aead};
 use chrono::Utc;
 use http::{Method, Request, Response, StatusCode};
@@ -122,7 +120,6 @@ struct Browser {
     identity: Identity,
     key: Zeroizing<[u8; 32]>,
     csrf: String,
-    backed_up: bool,
 }
 
 impl Browser {
@@ -135,8 +132,21 @@ impl Browser {
             key: identity.browser_store_key(),
             identity,
             csrf: String::new(),
-            backed_up: kv("backup").await?.is_truthy(),
         }))
+    }
+
+    /// Opens the stored Identity, creating one on the first visit. The page and the
+    /// connection worker may both try; the first one stored wins. Creation needs no
+    /// identity_changed: no connection exists yet, and announcing one would make the
+    /// worker drop the connection it just opened with this same Identity.
+    async fn load_or_create() -> Result<Self> {
+        if let Some(browser) = Self::load().await? {
+            return Ok(browser);
+        }
+        let key = Identity::generate().export();
+        let _ = idb::add("kv", &key.as_str().into(), &"identity".into()).await;
+
+        Self::load().await?.context("cannot store the Identity")
     }
 
     fn cipher(&self) -> ChaCha20Poly1305 {
@@ -533,37 +543,13 @@ impl Backend for Browser {
     }
 }
 
-#[derive(Template)]
-#[template(path = "welcome.html")]
-struct Welcome {
-    csrf: String,
-    error: bool,
-    t: &'static Strings,
-}
-
-#[derive(Template)]
-#[template(path = "backup.html")]
-struct Backup {
-    csrf: String,
-    recovery: Zeroizing<String>,
-    t: &'static Strings,
-}
-
 #[derive(Deserialize)]
 struct Form {
     csrf: String,
-    #[serde(default)]
-    action: String,
     recovery_key: Option<String>,
     address: Option<String>,
     #[serde(default)]
     confirm: bool,
-}
-
-fn page(template: impl Template, status: StatusCode) -> Result<Response<Vec<u8>>> {
-    let mut response = html(template.render()?);
-    *response.status_mut() = status;
-    Ok(response)
 }
 
 /// Answers one request from the UI frame, as the CLI's local server would.
@@ -625,82 +611,23 @@ async fn answer(
         Ok(form)
     };
 
-    let Some(mut browser) = Browser::load().await? else {
-        return match (post, path.as_str()) {
-            (false, "/welcome") => page(
-                Welcome {
-                    csrf,
-                    error: false,
-                    t,
-                },
-                StatusCode::OK,
-            ),
-            (true, "/welcome") => {
-                let form = form()?;
-                let identity = match form.action.as_str() {
-                    "create" => Identity::generate(),
-                    "import" => {
-                        let recovery = Zeroizing::new(form.recovery_key.unwrap_or_default());
-                        let Ok(identity) = Identity::from_recovery(&recovery) else {
-                            return page(
-                                Welcome {
-                                    csrf,
-                                    error: true,
-                                    t,
-                                },
-                                StatusCode::BAD_REQUEST,
-                            );
-                        };
-                        identity
-                    }
-                    _ => bail!("invalid action"),
-                };
-                // Another tab may have stored an Identity meanwhile; never replace it.
-                let key = identity.export();
-                if idb::add("kv", &key.as_str().into(), &"identity".into())
-                    .await
-                    .is_err()
-                {
-                    return Ok(redirect("/"));
-                }
-                if form.action == "import" {
-                    // An imported key is already saved elsewhere.
-                    set_kv("backup", &true.into()).await?;
-                }
-
-                idb::emit("identity_changed", "{}");
-                Ok(redirect(if form.action == "import" {
-                    "/addresses"
-                } else {
-                    "/backup"
-                }))
-            }
-            _ => Ok(redirect("/welcome")),
-        };
-    };
+    let mut browser = Browser::load_or_create().await?;
     browser.csrf = csrf.clone();
+    // The localized site links here with its language, kept until Settings chooses one.
+    if let Some(code) = request
+        .uri()
+        .query()
+        .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("lang=")))
+    {
+        if let (None, Some(strings)) = (&language, crate::i18n::find(code)) {
+            browser.set_language(Some(strings.code.into())).await?;
+        }
+        return Ok(redirect("/"));
+    }
 
     match (post, path.as_str()) {
-        (_, "/welcome") => Ok(redirect("/")),
-        // After the first backup, Settings shows the key behind a confirmation.
-        (false, "/backup") if browser.backed_up => Ok(redirect("/settings")),
-        (false, "/backup") => page(
-            Backup {
-                csrf: csrf.clone(),
-                recovery: browser.identity.export(),
-                t,
-            },
-            StatusCode::OK,
-        ),
-        (true, "/backup") => {
-            if !form()?.confirm {
-                bail!("confirmation required")
-            }
-
-            set_kv("backup", &true.into()).await?;
-            Ok(redirect("/addresses#create-address"))
-        }
-        _ if !browser.backed_up => Ok(redirect("/backup")),
+        // Links from before identities were created on the first visit.
+        (false, "/welcome" | "/backup") => Ok(redirect("/")),
         (true, "/addresses/existing") => {
             browser
                 .restore_address(&form()?.address.unwrap_or_default())
@@ -712,14 +639,27 @@ async fn answer(
                 bail!("confirmation required")
             }
 
-            let ui = Ui {
-                mode: Mode::Browser,
-                t,
-                language,
+            let recovery = Some(browser.identity.export());
+            settings(&browser, t, language, recovery, false).await
+        }
+        (true, "/settings/recovery-key/import") => {
+            let form = form()?;
+            if !form.confirm {
+                bail!("confirmation required")
+            }
+            let recovery = Zeroizing::new(form.recovery_key.unwrap_or_default());
+            let Ok(identity) = Identity::from_recovery(&recovery) else {
+                let mut response = settings(&browser, t, language, None, true).await?;
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(response);
             };
-            let mut page = Page::new(&browser, ui, "settings", t.settings).await?;
-            page.recovery = Some(browser.identity.export());
-            page.response()
+
+            // Addresses and email belong to the replaced Identity and are sealed with its key.
+            idb::erase().await.map_err(js)?;
+            set_kv("identity", &identity.export().as_str().into()).await?;
+            browser.set_language(language).await?;
+            idb::emit("identity_changed", "{}");
+            Ok(redirect("/addresses"))
         }
         (true, "/settings/erase") => {
             if !form()?.confirm {
@@ -728,10 +668,29 @@ async fn answer(
 
             idb::erase().await.map_err(js)?;
             idb::emit("identity_changed", "{}");
-            Ok(redirect("/welcome"))
+            Ok(redirect("/"))
         }
         _ => Ok(crate::respond(&browser, request).await),
     }
+}
+
+/// The Settings page, with the Recovery Key shown or an import error.
+async fn settings(
+    browser: &Browser,
+    t: &'static Strings,
+    language: Option<String>,
+    recovery: Option<Zeroizing<String>>,
+    import_error: bool,
+) -> Result<Response<Vec<u8>>> {
+    let ui = Ui {
+        mode: Mode::Browser,
+        t,
+        language,
+    };
+    let mut page = Page::new(browser, ui, "settings", t.settings).await?;
+    page.recovery = recovery;
+    page.import_error = import_error;
+    page.response()
 }
 
 #[wasm_bindgen]
@@ -760,22 +719,20 @@ pub struct Engine {
 
 #[wasm_bindgen]
 impl Engine {
-    /// Resolves to undefined until this browser has an Identity.
-    pub async fn open() -> Result<Option<Engine>, JsError> {
-        let Some(browser) = Browser::load().await.map_err(fail)? else {
-            return Ok(None);
-        };
+    /// Opens a session for this browser's Identity, creating one on the first visit.
+    pub async fn open() -> Result<Engine, JsError> {
+        let browser = Browser::load_or_create().await.map_err(fail)?;
         let key = option_env!("AHRARA_SERVER_PUBLIC_KEY")
             .context("this build has no relay key")
             .and_then(ahrara_core::secure::parse_public_key)
             .map_err(fail)?;
         let (session, hello) = Session::open(browser.identity.clone(), &key).map_err(fail)?;
-        Ok(Some(Engine {
+        Ok(Engine {
             browser: Rc::new(browser),
             session: Rc::new(RefCell::new(session)),
             ready: Rc::default(),
             hello,
-        }))
+        })
     }
 
     /// The handshake's first message.
