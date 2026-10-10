@@ -14,6 +14,7 @@
   --link: #0a64d6;
   --focus: #0a64d6;
   --red: #b5141a;
+  --green: #1a7f37;
   --red-mark: #e11a1c;
   --yellow: #7f5500;
   --yellow-mark: #f9b812;
@@ -50,6 +51,7 @@
     --link: #36acff;
     --focus: #36acff;
     --red: #ff7d73;
+    --green: #4ac26b;
     --red-mark: #e8302f;
     --yellow: #f9b812;
     --yellow-mark: #f9b812;
@@ -78,6 +80,7 @@
   --link: #36acff;
   --focus: #36acff;
   --red: #ff7d73;
+  --green: #4ac26b;
   --red-mark: #e8302f;
   --yellow: #f9b812;
   --yellow-mark: #f9b812;
@@ -247,6 +250,10 @@ pre code { padding: 0; background: none; font: inherit; }
 .copy { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-width: 34px; height: 34px; margin-left: auto; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--code-dim); font: 650 12.5px/1 var(--sans); cursor: pointer; }
 .copy:hover { border-color: var(--code-rule); color: #fff; }
 .copy svg { width: 16px; height: 16px; }
+.support { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.support svg { width: 16px; height: 16px; stroke-width: 2.4; }
+.support.yes svg { color: var(--green); }
+.support.no svg { color: var(--red); }
 .copy span { display: none; }
 .copy[data-copied] { color: #8fe07a; }
 .copy[data-copied] span { display: inline; }
