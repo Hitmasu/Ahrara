@@ -51,7 +51,7 @@ class InstallShTest(unittest.TestCase):
         channels = {
             "brew": {"artifacts": {TARGET: artifact("0" * 64, 1, "brew-binary")}, "version": "9.9.9"},
             "direct": {"artifacts": {TARGET: artifact(sha256 or hashlib.sha256(data).hexdigest(), len(data), name)}, "version": "0.1.0"},
-            "pip": {"artifacts": {TARGET: artifact("1" * 64, 2, "pip-binary")}, "version": "9.9.9"},
+            "npm": {"artifacts": {TARGET: artifact("1" * 64, 2, "npm-binary")}, "version": "9.9.9"},
         }
         payload = json.dumps({"channels": channels, "schema_version": 1},
                              separators=(",", ":"), sort_keys=True).encode()

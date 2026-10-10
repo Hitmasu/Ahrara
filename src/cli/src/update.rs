@@ -30,7 +30,6 @@ pub enum InstallMethod {
     Manual,
     Brew,
     Npm,
-    Pip,
     Plugin,
     #[value(skip)]
     Unknown,
@@ -45,7 +44,6 @@ impl InstallMethod {
         match self {
             Self::Brew => "brew",
             Self::Npm => "npm",
-            Self::Pip => "pip",
             _ => "direct",
         }
     }
@@ -54,9 +52,6 @@ impl InstallMethod {
         match self {
             Self::Brew => "brew upgrade ahrara",
             Self::Npm => "npm install -g ahrara@latest",
-            Self::Pip => {
-                "python -m pip install --upgrade ahrara (in the installation's Python environment)"
-            }
             Self::Plugin => "Update through the Ahrara plugin: node src/plugin/ahrara.mjs --update",
             Self::Unknown => {
                 "Download a binary from https://github.com/Hitmasu/Ahrara/releases, or opt in with: ahrara update --register manual"
@@ -216,7 +211,7 @@ fn verify_manifest(bytes: &[u8], key: &VerifyingKey) -> Result<Manifest> {
 
     for (channel, release) in &manifest.channels {
         ensure!(
-            ["direct", "brew", "npm", "pip"].contains(&channel.as_str()),
+            ["direct", "brew", "npm"].contains(&channel.as_str()),
             "unknown release channel"
         );
         ensure!(
@@ -730,7 +725,6 @@ mod tests {
         for method in [
             InstallMethod::Brew,
             InstallMethod::Npm,
-            InstallMethod::Pip,
             InstallMethod::Plugin,
         ] {
             assert!(!method.direct());

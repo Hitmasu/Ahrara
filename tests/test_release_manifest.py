@@ -57,7 +57,7 @@ class ReleaseManifestTest(unittest.TestCase):
             self.assertEqual(args.homebrew_output.read_text(), formula)
             manifest = json.loads(base64.b64decode(json.loads(args.output.read_text())["payload"]))
             self.assertEqual(list(manifest["channels"]["brew"]["artifacts"]), ["darwin-aarch64"])
-            args.available = ["pip=invalid-platform"]
+            args.available = ["npm=invalid-platform"]
             with self.assertRaises(ValueError):
                 release.generate(args)
             args.available = []

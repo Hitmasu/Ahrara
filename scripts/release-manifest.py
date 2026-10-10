@@ -18,7 +18,7 @@ import tomllib
 CONTEXT = b"ahrara-release-v1\0"
 TARGETS = [f"{system}-{arch}" for system in ("linux", "darwin", "windows")
            for arch in ("x86_64", "aarch64")]
-CHANNELS = ("brew", "npm", "pip")
+CHANNELS = ("brew", "npm")
 
 
 def homebrew_formula(version, artifacts):
