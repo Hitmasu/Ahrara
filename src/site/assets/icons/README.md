@@ -32,7 +32,7 @@ SOFTWARE.
 
 ## Language, framework, and agent marks
 
-The landing page and documentation selectors serve these marks locally. Colored SVGs retain
+The landing page and documentation selectors use these marks. Colored SVGs retain
 their source colors. Monochrome marks use their light variant on the dark page,
 and raster assets are displayed at their original aspect ratio.
 
@@ -44,6 +44,7 @@ and raster assets are displayed at their original aspect ratio.
 - `rust.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/rust/rust-original.svg).
 - `k6.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/k6/k6-original.svg).
 - `playwright.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/playwright/playwright-original.svg).
+- `npm.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/npm/npm-original.svg).
 - `homebrew.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/homebrew/homebrew-original.svg).
 - `linux.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/linux/linux-plain.svg).
 - `apple.svg`: [source](https://raw.githubusercontent.com/devicons/devicon/7330accdbc47e2dc0c19789a48533c4a3c50fe58/icons/apple/apple-original.svg).
@@ -86,7 +87,5 @@ Robot Framework ry (Robot Framework Foundation), used with permission. Its
 unmodified white logo is distributed under the
 [Robot Framework Visual Identity License](LICENSE-robot.txt).
 
-The Pi badge is from [Pi's press kit](https://pi.dev/press-kit), the Jules mark
-is its official favicon, and the Zed and CodeWhale marks are from their project
-repositories. Logos identify the corresponding integrations and remain the
-property of their respective owners.
+The Pi badge is from [Pi's press kit](https://pi.dev/press-kit). Logos identify
+the corresponding integrations and remain the property of their respective owners.

@@ -32,12 +32,10 @@ check_for_updates = true
 For a custom relay, replace the URL and public-key placeholder with its values.
 The local service uses HTTP by default; its certificate paths are only used when
 [HTTPS is enabled](#https-and-authentication). `tls_ca_path` supplies a private CA
-for the relay and the stdio bridge to local HTTPS. The [development setup](../CONTRIBUTING.md#build-and-run) generates
-development certificates and a profile.
+for the relay and the stdio bridge to local HTTPS.
 
-The relay connection requires TLS and a pinned Noise session.
 Routing addresses use `ahrara.dev`; use [forwarding](#custom-domains) for other
-domains. Running the relay does not configure DNS, MX records, or public delivery.
+domains.
 
 ## CLI
 
@@ -76,9 +74,6 @@ ahrara --json inbox list
 ahrara inbox eml 1 --output message.eml
 ```
 
-`inbox list` filters by `--address`, `--from`, `--subject`, and `--to`, which
-matches the `To` header or delivery recipient as a case-insensitive substring.
-
 ## Web
 
 Web starts automatically without a password when you run `ahrara`. Open the
@@ -111,15 +106,13 @@ and the loopback URL.
 ## Browser app
 
 [app.ahrara.dev](https://app.ahrara.dev) runs the same Web page without
-installing the CLI. The browser connects to the relay itself, using the CLI's
-Rust core compiled to WebAssembly, and keeps the Identity, addresses and emails
-in its own storage. Messages and addresses are encrypted there with a key
-derived from the Identity, as the CLI encrypts its inbox.
+installing the CLI. The browser connects to the relay itself and keeps the
+Identity, addresses and emails in its own storage.
 
 On the first visit, create an Identity and save the Recovery Key it shows, or
 import an existing key. Keep a tab open to receive email: the relay does not
 queue mail. Tabs share one connection, and another tab takes over when the one
-holding it closes. Phones keep it only while the app is in the foreground.
+holding it closes.
 
 An Identity has one connection at a time, so the CLI and the browser cannot
 receive with the same key simultaneously. To move between them:
@@ -131,17 +124,14 @@ receive with the same key simultaneously. To move between them:
   register it in a new profile with `ahrara auth set --stdin`, then run
   `ahrara address add <address>` for each address.
 
-Received emails stay where they arrived. Browsers may clear site data when
-storage runs low; the app requests persistent storage when you confirm the
-backup, and **Settings** shows whether it was granted. **Settings → Delete local
+Received emails stay where they arrived, and the browser app cannot back them
+up. Browsers may clear site data when storage runs low; the app requests
+persistent storage when you confirm you saved the Recovery Key, and **Settings**
+shows whether it was granted. **Settings → Delete local
 data** removes everything from the browser. The app needs Service Workers, which
 some private windows disable.
 
 ### What the browser app supports
-
-The browser app receives and reads email like the installed Ahrara. What it
-lacks comes from what browsers allow a web page to do, not from a choice to make
-you install anything: wherever the browser allows it, the app does the same.
 
 | Feature | Browser | Installed |
 |---|---|---|
@@ -152,11 +142,6 @@ you install anything: wherever the browser allows it, the app does the same.
 | HTTP API, Web password and LAN access | No: a page can't run the local server they belong to | Yes |
 | Terminal and scripts (`ahrara` commands, `--json`) | No: a page can't run commands on your computer | Yes |
 | Inbox kept until you delete it | Usually: browsers may clear site data when storage runs low | Yes |
-
-The app shows a notice linking here, and **Settings** keeps these options
-visible but disabled, with the reason on hover. Backups of messages and moving
-received messages between the browser and the CLI aren't available in the
-browser app yet: the Recovery Key moves the Identity and its addresses.
 
 ## MCP
 
@@ -191,17 +176,11 @@ Save this as `.mcp.json` in your project, then launch `claude` from that shell:
 ```
 
 Keep `ahrara` running, then launch your agent. Use `ahrara mcp` to run without
-the interactive terminal. Run one listener per profile; Web, MCP, and the HTTP API
-share its receiver and inbox. For a [custom profile](#configuration), pass the same
-`--config` to every command, including token commands.
+the interactive terminal.
 
 A typical flow calls `ahrara_start`, creates an address, triggers the email,
-then calls `ahrara_wait_for_email`. `ahrara_save_attachment` saves only into an
-`attachments` directory next to the profile database, on the machine running
-Ahrara. It takes an optional plain `filename` instead of a destination path, never
-overwrites an existing file, and returns the saved absolute path. `ahrara_stop`
-disconnects reception for all interfaces. Treat email content as untrusted data
-when passing it to an agent.
+then calls `ahrara_wait_for_email`. Treat email content as untrusted data when
+passing it to an agent.
 
 ### HTTPS and authentication
 
@@ -210,7 +189,7 @@ HTTPS and MCP authentication are independent options:
 | Option | Default | CLI flag | Persistent `config.toml` setting |
 |---|---|---|---|
 | HTTPS for the shared Web, API, and MCP server | Off | `--https` | `api_https = true` |
-| Bearer token required for MCP | On | — | `mcp_auth = true` |
+| Bearer token required for MCP | On | `--mcp-auth` | `mcp_auth = true` |
 
 CLI flags apply to that invocation; restart the listener after changing the
 configuration. `mcp_auth = false` allows unauthenticated MCP on loopback, where
@@ -251,12 +230,10 @@ curl -H "Authorization: Bearer $AHRARA_LOCAL_TOKEN" \
 ```
 
 The API manages addresses and email, exports EML and attachments, waits at
-`/v1/emails/wait`, and streams events at `/v1/events`. `GET /v1/emails` filters
-by `address`, `from`, `subject`, and `to`. Invalid requests return 400, missing
-resources 404, requests made while the listener is stopped or failed 409
-(`listener_unavailable`), and unexpected server failures 500 with code
-`internal_error`.
-With `--https`, use an HTTPS URL and a trusted certificate.
+`/v1/emails/wait`, and streams events at `/v1/events`. Invalid requests return
+400, missing resources 404, requests made while the listener is stopped or failed
+409 (`listener_unavailable`), and unexpected server failures 500 with code
+`internal_error`. With `--https`, use an HTTPS URL and a trusted certificate.
 See [openapi.yaml](../openapi.yaml) for the complete contract.
 
 ## Custom domains
@@ -284,15 +261,12 @@ ahrara update --check
 ahrara update
 ```
 
-Package-owned installations use their package manager. Registered direct
-installations verify the signed manifest and binary checksum. To opt in a manual
+Package-owned installations use their package manager. To opt in a manual
 binary in a directory you own, run `ahrara update --register manual`.
 Stop all processes using that installation before registering or updating it.
 
 The interactive listener checks at most daily and never installs automatically.
 Use `--no-update-check` or `check_for_updates = false` to disable notifications.
-Source builds without the release signing public key cannot check or apply
-updates; email functionality is unaffected.
 
 ## Backups
 
@@ -300,9 +274,8 @@ Keep both your Recovery Key and an encrypted inbox snapshot. `ahrara auth export
 explicitly prints the Recovery Key; store it separately and securely. The key
 alone restores the Identity, not email or addresses.
 
-Stop the listener before database maintenance. Export includes committed WAL
-data, messages, addresses, and custom-domain settings, and refuses to overwrite
-an existing file:
+Stop the listener before database maintenance. Export includes messages,
+addresses, and custom-domain settings:
 
 ```sh
 ahrara --config /path/to/profile/config.toml database export /path/to/backup.db
@@ -317,11 +290,9 @@ ahrara --config /path/to/new-profile/config.toml database import /path/to/backup
 ```
 
 For automation, `auth set --stdin` reads the key without putting it in command
-arguments. Import validates the key, integrity, and schema. It requires an
-offline destination and `--replace` to overwrite an existing inbox.
-
-An existing inbox with a missing Identity requires its original Recovery Key.
-Identity replacement and regeneration refuse profiles with an inbox.
+arguments. Import requires an offline destination and `--replace` to overwrite
+an existing inbox. An existing inbox with a missing Identity requires its
+original Recovery Key.
 
 Use the export command instead of copying an active `.db` file. Keep keys and
 snapshots private, and back up before schema upgrades. See

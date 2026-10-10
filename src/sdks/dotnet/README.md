@@ -1,9 +1,10 @@
 # Ahrara for .NET
 
 Create an email address from a .NET application or test, wait for messages, and
-extract verification codes or links. Requires .NET 8+. Received emails are
-standard `System.Net.Mail.MailMessage` objects, with bodies and attachments.
-The SDK connects directly to the relay; you do not need to run the Ahrara CLI.
+extract verification codes or links. Requires .NET 8+; install with
+`dotnet add package Ahrara`. Received emails are standard
+`System.Net.Mail.MailMessage` objects, with bodies and attachments. The SDK
+connects directly to the relay; you do not need to run the Ahrara CLI.
 
 ## Receive one email
 
@@ -41,10 +42,9 @@ alternate views. Dispose each message after use. Its content is held in managed
 memory and remains usable after closing the inbox.
 
 For a private relay, pass `InboxOptions` with `ServerUrl`, `ServerPublicKey`, and
-optional `TlsCaPath`. The public key must be independently verified. A native
-build without an embedded public relay pin also needs `ServerPublicKey` supplied
-explicitly. `ConnectTimeoutMilliseconds` bounds connection setup; creation
-cancellation waits for that bounded attempt to finish and then cleans it up.
+optional `TlsCaPath`. The public key must be independently verified.
+`ConnectTimeoutMilliseconds` bounds connection setup; creation cancellation waits
+for that bounded attempt to finish and then cleans it up.
 
 ## Receive a stream or use a callback
 
@@ -65,10 +65,10 @@ await inbox.ReceiveEmailsAsync(
     cancellationToken: cancellationToken);
 ```
 
-These APIs are lazy and process one email at a time. There is no background
-prefetch queue. A duration is a **total receiving duration**, measured from first
-enumeration and including consumer or callback processing time. Omitting it
-receives indefinitely. Duration expiry ends normally; cancellation throws
+These APIs are lazy and process one email at a time, without prefetching. A
+duration is a **total receiving duration**, measured from first enumeration and
+including consumer or callback processing time. Omitting it receives
+indefinitely. Duration expiry ends normally; cancellation throws
 `OperationCanceledException`. Callbacks are awaited sequentially and their errors
 propagate. An in-progress callback is awaited before the receiver returns.
 
@@ -110,38 +110,31 @@ await foreach (var value in inbox.WaitForXPathValuesAsync(
 
 Single extraction consumes one matching email and returns the first result.
 Plural extraction continues across **all emails during the total duration**,
-yielding every occurrence in each email. It is lazy and holds only the native
-result batch for the current email. Consumer processing counts toward the total
-duration. No match leaves an email available for another filter or query. A match
-consumes the email once; early termination does not replay remaining occurrences
-from that email. Finite single waits throw `TimeoutException`; plural duration
+yielding every occurrence in each email. No match leaves an email available for
+another filter or query. A match consumes the email once; early termination does
+not replay remaining occurrences from that email. Finite single waits throw `TimeoutException`; plural duration
 expiry ends normally. Cancellation leaves the inbox usable.
 
 `RegexQuery` selects `text` (default), `html`, `subject`, or `raw` and configures
 case, multiline anchors, and dot/newline behavior. `RegexMatch` includes `EmailId`,
 the matching `Value`, and indexed/named groups. Group zero is the entire match;
 unmatched optional groups have a null value. Queries use the shared Rust regex
-syntax; look-around and backreferences are not supported. XPath uses the common
-HTML parsing and XPath engine, so it also accepts ordinary, imperfect HTML.
+syntax; look-around and backreferences are not supported.
 
 All `EmailFilter` conditions combine with AND. Sender, subject, To/Cc, text, and
 header values use case-insensitive substrings. Recipient, envelope sender, and
 Message-ID match the whole value, ignoring case. `Headers` keys match header
 names case-insensitively; any repeated value may satisfy a condition.
 Set `new EmailFilter { Regex = true, Subject = @"^(Verification|Confirm email)$" }`
-to interpret all string conditions as case-insensitive Rust regex patterns,
-including header values. Recipient, envelope sender, and Message-ID patterns must
-match the whole value; other patterns match anywhere, so use `^` / `$` for a full
-match. Use `(?-i)` for case sensitivity; `RegexQuery` is case-sensitive unless
-`IgnoreCase` is set. Header names stay literal. Patterns use the shared Rust
-engine, not `System.Text.RegularExpressions.Regex`. Omitting `Regex` preserves
-literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+to interpret all string conditions as case-insensitive patterns for the shared Rust
+engine, not `System.Text.RegularExpressions.Regex`. `RegexQuery` is case-sensitive
+unless `IgnoreCase` is set. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 An operation filter retains nonmatching stored mail. Set `InboxOptions.Filter`
 to discard nonmatching incoming mail **before local storage**; this global filter
 also combines with each operation filter. Invalid expressions and filter values
-raise `AhraraException` without consuming messages. Searches share the inbox's
-receiver gate with ordinary email waits.
+raise `AhraraException` without consuming messages.
 
 ## Reopen an identity and preserve history
 
@@ -203,9 +196,9 @@ by default. `GetEmailId` recovers the storage identifier from an original messag
 returned by this inbox, without adding headers to the message.
 Objects created by the caller or returned by another inbox are rejected.
 Attachments expose their bytes through the standard `ContentStream`; application
-code controls saving and naming. Missing messages are reported by native error
-codes. Deletion and clearing
-affect only this inbox's local storage.
+code controls saving and naming. Missing messages raise `AhraraException` with
+code `email_not_found`. Deletion and clearing affect only this inbox's local
+storage.
 
 `Body` contains the complete decoded plain text when present, otherwise HTML with
 `IsBodyHtml` set. Available text and HTML bodies are also exposed as
@@ -221,10 +214,3 @@ The standard object's HTML is the original content; use `GetHtmlAsync` when
 sanitized HTML is needed. The SDK does not render HTML.
 
 The API follows [.NET MailMessage ownership and attachment conventions](https://learn.microsoft.com/en-us/dotnet/api/system.net.mail.mailmessage?view=net-10.0).
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-dotnet-test` against a development relay, or `make sdk-test` for the
-complete matrix with an isolated relay. All builds and tests run in Docker.

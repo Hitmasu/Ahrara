@@ -1,9 +1,9 @@
 # Ahrara for Go
 
 Create an email address from a Go application or test, receive messages, and
-extract verification codes or links. Import
-`github.com/Hitmasu/Ahrara/src/sdks/go`; Go 1.23+ and cgo are required.
-The SDK connects directly to the relay without a running Ahrara CLI.
+extract verification codes or links. Go 1.23+ and cgo are required; install with
+`go get github.com/Hitmasu/Ahrara/src/sdks/go@latest` and import the package as
+`ahrara`. The SDK connects directly to the relay without a running Ahrara CLI.
 
 ```go
 inbox, err := ahrara.CreateInbox(ctx, ahrara.Options{})
@@ -33,12 +33,11 @@ conditions match substrings; envelope fields and Message-ID match the complete
 value. Matching ignores case. `Text` searches the full decoded body.
 
 Set `ahrara.Filter{Regex: true, Subject: "^(Verification|Confirm email)$"}` to
-interpret all string conditions as case-insensitive Rust regex patterns.
-`Recipient`, `EnvelopeSender`, and `MessageID` patterns must match the whole
-value; other patterns match anywhere, so use `^` / `$` for a full match. Use
-`(?-i)` for case sensitivity; `RegexOptions` queries are case-sensitive unless
-`IgnoreCase` is set. Header names stay literal. Invalid patterns fail before
-consuming mail; omitting `Regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+interpret all string conditions as case-insensitive Rust regex patterns;
+`RegexOptions` queries are case-sensitive unless `IgnoreCase` is set. Invalid
+patterns fail before consuming mail. See the
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 ```go
 match, err := inbox.WaitForRegexMatch(ctx,
@@ -63,10 +62,8 @@ use complete decoded content and exclude attachment bodies. Raw matching replace
 invalid UTF-8 with U+FFFD; `RawEmail` preserves the exact original bytes.
 
 `WaitForXPath(ctx, "//a/@href", filter)` returns the first value from HTML.
-The core repairs ordinary HTML before evaluating XPath 1.0. `//a` needs no
-namespace; SVG/MathML/XLink use `svg`, `math` and `xlink`. Node values are returned
-in document order; strings/numbers/true use XPath string conversion. Empty
-strings, empty node sets and false leave the message available.
+Node values are returned in document order; strings/numbers/true use XPath string
+conversion. Empty strings, empty node sets and false leave the message available.
 
 Plural methods are lazy iterators across **all matching emails** during one
 context deadline, including time spent in the consumer:
@@ -83,12 +80,7 @@ for match, err := range inbox.WaitForRegexMatches(period, `[0-9]{6}`, ahrara.Reg
 
 Each selected email is consumed once; breaking iteration discards any remaining
 results from that email and leaves subsequent emails available. Queries never
-start background work or prefetch another email. Expressions must contain
-1..4096 UTF-8 bytes. Per-email output is limited to 10,000 results and 16 MiB
-(including capture storage); XPath HTML is limited to 100,000 nodes and 256
-levels. Exceeding a limit returns an error and leaves that email unconsumed.
-XPath expressions additionally allow at most 32 nested groups and 256 syntax
-tokens; quoted literal contents do not count toward those complexity limits.
+start background work or prefetch another email.
 
 ## Sequential message processing
 
@@ -130,10 +122,6 @@ it, the core owns an encrypted temporary profile and removes it after close.
 exclusive. Credentials restore the identity/address, with fresh local history;
 they do not copy an existing profile or create an offline queue at the relay.
 
-WSS close waits up to five seconds for the relay to disconnect, then drops the
-socket. Immediate identity reuse is verified with a healthy relay; after a
-network failure, the identity can remain occupied until the relay cleans up.
-
 Recovery keys are secrets. `fmt` string and Go-syntax formatting of `Credentials`
 and `Options` are redacted. Explicit JSON serialization includes the key for
 backup/import and must be stored securely, never logged or committed.
@@ -173,19 +161,13 @@ against the SHA-256 pinned in the module version and keeps it in the user cache
 directory. Each later run checks the cached copy again before loading it. Linux,
 macOS and Windows on x64 and ARM64 are supported, and Linux needs glibc 2.17 or later.
 
-Where GitHub is unreachable, download `ahrara-native-<os>-<arch>` from that
-release yourself and set `AHRARA_NATIVE_LIBRARY` to its absolute path. Builds need
-cgo and a C compiler. On Windows, install a GCC such as MinGW-w64.
+Offline or air-gapped, download your platform's file from that release yourself,
+such as `ahrara-native-linux-x86_64.so`, and set `AHRARA_NATIVE_LIBRARY` to its
+absolute path. That library is loaded without a checksum check, so protect the
+variable as you would `LD_PRELOAD`. Builds need cgo and a C compiler. On Windows,
+install a GCC such as MinGW-w64.
 
 ## Connection settings
 
 For a private relay, use `ServerURL`, `ServerPublicKey`, `TLSCAPath`, and
-`ConnectTimeoutMS`. Source builds without an embedded relay key also require
-`ServerPublicKey`. See the [connection guide](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#connection-settings).
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-go-test` against a development relay, or `make sdk-test` for the
-complete matrix with an isolated relay. All builds and tests run in Docker.
+`ConnectTimeoutMS`. See the [connection guide](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#connection-settings).

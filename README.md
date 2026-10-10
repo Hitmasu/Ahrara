@@ -29,80 +29,35 @@ agent through MCP, or assert on it from your test suite.
 
 ## 📦 Install
 
-Install Ahrara on Linux, macOS, or Windows, on x64 or ARM64.
+macOS and Linux:
 
-<details>
-<summary>🍺 Homebrew — macOS and Linux</summary>
+```sh
+curl -fsSL https://ahrara.dev/install.sh | sh
+```
 
-With Homebrew installed:
+Windows (PowerShell):
+
+```powershell
+iwr https://ahrara.dev/install.ps1 -useb | iex
+```
+
+Or with npm, on any of them:
+
+```sh
+npm install -g ahrara
+```
+
+Or with Homebrew:
 
 ```sh
 brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git
 brew install hitmasu/ahrara/ahrara
 ```
 
-Run `ahrara --version` to confirm the installation.
-
-</details>
-
-<details>
-<summary><code>&gt;_</code> Shell — macOS and Linux</summary>
-
-Requires `curl` and a POSIX shell:
-
-```sh
-curl -fsSL https://ahrara.dev/install.sh | sh
-```
-
-Apply any PATH instructions printed by the installer, then open a new terminal
-and run `ahrara --version`.
-
-</details>
-
-<details>
-<summary>💻 PowerShell — Windows</summary>
-
-Run in PowerShell:
-
-```powershell
-iwr https://ahrara.dev/install.ps1 -useb | iex
-```
-
-Open a new PowerShell window and run `ahrara --version`.
-
-</details>
-
-<details>
-<summary>⬇️ Manual download — All platforms</summary>
-
-Choose the executable for your operating system and architecture:
-
-| Platform | x64 | ARM64 |
-| --- | --- | --- |
-| Linux | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-linux-x86_64) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-linux-aarch64) |
-| macOS | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-darwin-x86_64) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-darwin-aarch64) |
-| Windows | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-windows-x86_64.exe) | [Download](https://github.com/Hitmasu/Ahrara/releases/latest/download/ahrara-windows-aarch64.exe) |
-
-On **Linux or macOS**, rename the download to `ahrara` and run these commands
-from its directory:
-
-```sh
-chmod +x ahrara
-sudo mkdir -p /usr/local/bin
-sudo mv ahrara /usr/local/bin/ahrara
-```
-
-If `/usr/local/bin` is not on your `PATH`, add
-`export PATH="/usr/local/bin:$PATH"` to your shell's startup file and reopen
-the terminal.
-
-On **Windows**, rename the download to `ahrara.exe` and move it to a permanent
-folder, such as `C:\Ahrara`. Open **Edit environment variables for your account →
-Path → Edit → New**, add that folder, and reopen PowerShell.
-
-Run `ahrara --version` to confirm the installation.
-
-</details>
+Every method installs one executable for Linux, macOS or Windows on x64 or ARM64;
+they are also on [GitHub Releases](https://github.com/Hitmasu/Ahrara/releases/latest)
+([manual install](https://ahrara.dev/docs/#install-manual)). Run `ahrara --version`
+to confirm the installation.
 
 ## 🚀 Quick start
 
@@ -188,8 +143,8 @@ keeping an inbox between runs.
 
 The Web interface starts with `ahrara`. Open the URL in the terminal's **Web**
 row to search and read messages, view HTML, download EML and attachments, and
-manage addresses. It is only reachable from your own computer by default; see
-the [Web guide](docs/usage.md#web) for passwords and LAN access.
+manage addresses. See the [Web guide](docs/usage.md#web) for passwords and LAN
+access.
 
 To use it without installing anything, open [app.ahrara.dev](https://app.ahrara.dev):
 the same interface connects to the relay from your browser and keeps your inbox
@@ -238,21 +193,9 @@ keep it online and evolving.
 
 ## 🤝 Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md#build-and-run) for development requirements
-and build commands. Before submitting changes, run:
-
-```sh
-make check
-make test
-```
-
-Use the [checks guide](CONTRIBUTING.md#checks) for API and integration checks,
-and the [release guide](docs/releasing.md) when preparing a release.
-
-Report reproducible bugs through [issues](https://github.com/Hitmasu/Ahrara/issues)
-and propose focused changes through pull requests. Keep code and repository
-documentation in English; the website is also maintained in Portuguese and
-Spanish.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, checks and pull
+requests, and the [release guide](docs/releasing.md) for publishing a release.
+Report reproducible bugs through [issues](https://github.com/Hitmasu/Ahrara/issues).
 
 ## 🙏 Acknowledgments
 

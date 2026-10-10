@@ -40,14 +40,12 @@ gemini extensions install https://github.com/Hitmasu/Ahrara
 
 Ask the agent: “Create an Ahrara address and wait for my verification email.”
 Existing compatible installations are reused. Otherwise, the launcher downloads
-the platform's binary and verifies the signed release manifest and checksum.
-The first launch needs internet access. If the host's startup timeout is too
+the platform's binary, so the first launch needs internet access. If the host's startup timeout is too
 short, have the agent run `node <plugin-directory>/src/plugin/ahrara.mjs --install`
 and reconnect MCP.
 
 ## Other hosts
 
-Coverage follows [Ponytail's agent adapters](https://github.com/DietrichGebert/ponytail/blob/main/docs/agent-portability.md).
 Some hosts load a native plugin; others load the shared skill or project
 instructions. In the latter case, the agent registers MCP when supported or
 uses the same native CLI through its execution tools.
@@ -93,22 +91,15 @@ For a host with a generic stdio configuration, use:
 }
 ```
 
-Replace the absolute path with the installed checkout. For an already installed
-binary, use command `ahrara` and arguments `["mcp", "--transport", "stdio"]`.
-Add `--config` and an absolute configuration path for a separate profile.
+Replace the absolute path with the installed checkout. Add `--config` and an
+absolute configuration path for a separate profile. To run an installed binary
+directly or connect over local HTTP, see the [user guide](usage.md#mcp).
 
 Agents share one local receiver per profile, including its Web interface.
 Closing one agent keeps other sessions working. The last stdio session stops
 the server if agents started it; a manually started server stays running.
 Identity, addresses, and received mail persist. `ahrara_stop` explicitly stops
 shared reception for every interface, so it is not a session cleanup command.
-
-Local HTTP MCP remains available as described in the [user guide](usage.md#mcp);
-direct HTTP clients send the local API token, which is required by default.
-Stdio reuses the profile's HTTPS and authentication settings and sends that token
-automatically, so no token setup is needed for stdio.
-For local HTTPS with a private CA, include its certificate in `api_tls_cert_path`'s
-PEM bundle or configure `tls_ca_path`. Certificate and hostname checks remain enabled.
 
 ## Updates and removal
 
@@ -122,5 +113,4 @@ the plugin preserves the inbox and Identity. Stop its sessions before deleting
 the binary cache. See [backups](usage.md#backups) before removing profile data.
 
 For local development, `AHRARA_BINARY` can point to an absolute path to a native
-binary with stdio support. Publishing automatic installation requires the
-public keys and signed binaries described in the [release guide](releasing.md).
+binary with stdio support.

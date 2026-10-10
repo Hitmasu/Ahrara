@@ -1,9 +1,9 @@
 # Contributing to Ahrara
 
 Use English for code, comments, documentation, and user-facing messages, except
-for the localized site pages: the Brazilian Portuguese and Spanish documentation
-in `src/site/docs/` and landing pages in `src/site/`. Keep changes focused and
-follow the surrounding implementation.
+for translations: the Brazilian Portuguese and Spanish pages in `src/site/` and
+strings in `src/web/src/i18n.rs`. Keep changes focused and follow the surrounding
+implementation.
 
 Search [issues](https://github.com/Hitmasu/Ahrara/issues) and
 [pull requests](https://github.com/Hitmasu/Ahrara/pulls) before starting. Discuss
@@ -18,8 +18,7 @@ Fork and clone the repository, then [run it locally](#run-locally).
 Linux development requires Docker Engine with Compose and Make. Make runs the
 pinned Rust toolchain, certificate generation, and all tests in containers.
 The SDK matrix also downloads container images for each language and browser;
-no language SDK or browser installation on the host is needed. Run secret
-scanning with the Gitleaks container.
+no language SDK or browser installation on the host is needed.
 
 ### Run locally
 
@@ -44,10 +43,9 @@ Both directories are ignored by Git. The default development endpoints are:
 | Relay WebSocket | `wss://localhost:8443` |
 | Client HTTP service | `http://127.0.0.1:8787` |
 
-`make dev-certs` preserves existing certificates and profiles. New profiles include
-`server_public_key`; older local profiles need the public pin from
-`.dev/certs/transport-public.txt`. Trust the development CA in clients that connect
-to these HTTPS endpoints. Do not use development certificates for public services.
+`make dev-certs` preserves existing certificates and profiles. Trust the
+development CA in clients that connect to these HTTPS endpoints. Do not use
+development certificates for public services.
 
 If port 8443 is busy, use `make dev-certs AHRARA_WSS_PORT=18443` and
 `AHRARA_WSS_PORT=18443 AHRARA_MAX_CLIENTS=1000 docker compose up -d --build --wait server`. Update
@@ -66,8 +64,7 @@ Stop the client with Ctrl+C and the relay with `docker compose down`.
 
 ### Platform builds
 
-All six release binaries are cross-compiled in a Linux x64 Docker container.
-GitHub Actions uses `ubuntu-latest` for every build. Run:
+All six release binaries are cross-compiled in a Linux x64 Docker container:
 
 ```sh
 make release PLATFORM=linux ARCH=x86_64
@@ -77,8 +74,15 @@ Use `PLATFORM=linux`, `darwin`, or `windows` and `ARCH=x86_64` or `aarch64`.
 Artifacts are written to `dist/ahrara-<platform>-<arch>` (`.exe` for Windows).
 `make cli` builds the Linux development client. Rust is pinned in
 [rust-toolchain.toml](rust-toolchain.toml); the release compiler and SDK are pinned
-in [Dockerfile.builder](src/cli/Dockerfile.builder). Validate release binaries on their
-target OS before publishing.
+in [Dockerfile.builder](src/cli/Dockerfile.builder).
+
+Packages place an `ahrara.install.json` receipt (`ahrara.exe.install.json` on
+Windows) beside the real executable, such as `{"schema_version":1,"method":"brew"}`.
+The methods are `brew`, `npm`, `sh`, `powershell`, `manual` and `plugin`;
+`install.sh` and `install.ps1` register theirs with `ahrara update --register`. The
+updater never replaces package-owned or unregistered binaries. Rotating the release
+verification key requires a migration release signed by the current key; a
+compromised key requires an out-of-band reinstall.
 
 `make web` builds the browser app into `dist/web` for static hosting. It embeds
 the relay URL from `AHRARA_WEB_RELAY_URL` (default `wss://relay.ahrara.dev`) and requires
@@ -138,7 +142,7 @@ Rust uses `ahrara-core` directly. Other bindings call the versioned
 [C interface](src/native/include/ahrara.h). Native packages must match the OS,
 architecture, and C runtime. `AHRARA_NATIVE_LIBRARY` is an absolute-path
 override pointing to a compiled library, not a CLI executable, for development
-and offline Go builds. Every SDK honours it, so it is as trusted as `LD_PRELOAD`.
+and offline Go builds. Every SDK honors it, so it is as trusted as `LD_PRELOAD`.
 Release builds embed the verified relay public key using
 `AHRARA_SERVER_PUBLIC_KEY`.
 
@@ -155,13 +159,9 @@ library as `dist/ahrara-native-<platform>-<arch>.<so|dylib|dll>`. Linux builds
 target glibc 2.17. `make sdk-stage` copies all six into the layouts above, and
 `make sdk-packages` builds the npm package, one Python wheel per platform and the
 NuGet package in `dist/packages/`. Both need `make licenses`, whose third-party notices
-ship in every package. The Go SDK bundles nothing: the release workflow tags a
-commit pinning each library's SHA-256, and the SDK downloads and verifies its
-platform's library on first use. Its tests and source checkouts set
-`AHRARA_NATIVE_LIBRARY`. The Rust SDK is consumed as source. `make sdk-test` runs
-on Linux x64, and the release workflow loads every library on its own platform
-before publishing. Generated packages, binaries, profiles, and logs belong in ignored
-directories.
+ship in every package. The Go SDK's tests and source checkouts set
+`AHRARA_NATIVE_LIBRARY`. The Rust SDK is consumed as source. Generated packages,
+binaries, profiles, and logs belong in ignored directories.
 
 ## Project layout
 
@@ -192,9 +192,9 @@ operations together. Expand long macros and attributes without changing string
 contents or introducing helpers solely to wrap lines.
 
 Preview the site with `python3 -m http.server 8080 --bind 127.0.0.1 --directory src/site`.
-Static hosting publishes the contents of `src/site/`, including the CLI installers
-`install.sh` and `install.ps1`. The host must apply `src/site/_headers`, which serves
-them as plain text.
+Static hosting publishes the contents of `src/site/` from `main`, including the CLI
+installers `install.sh` and `install.ps1`. The host must apply `src/site/_headers`,
+which serves them as plain text.
 
 The landing page and the documentation each exist in English, Brazilian Portuguese
 and Spanish. The pages of each part share one stylesheet and one script, and both
@@ -225,8 +225,7 @@ No build, backend, or external asset service is required.
 Each documentation language has its own `architecture.mmd`, the editable Mermaid
 source for its checked-in `architecture.svg`. After changing a diagram, render it
 with Mermaid CLI 12.0.0 (`mmdc -i architecture.mmd -o architecture.svg -b transparent`)
-and preview the result. The site serves the SVG directly, including without JavaScript; Mermaid
-is only needed when editing the diagram, not for hosting or browsing the docs.
+and preview the result.
 
 For the documentation browser smoke check, open the local site with Playwright CLI
 and run the existing script from the repository root:
@@ -236,12 +235,8 @@ playwright-cli open http://127.0.0.1:8080/docs/
 playwright-cli run-code --filename=tests/site.smoke.js
 ```
 
-This checks the landing page's installers, language menu and links into the docs;
-every docs page, synchronized tabs, the agent picker, the clipboard, search, the theme toggle, mobile navigation and the language menu. For
-each language present, it compares element IDs and interface keys with English,
-checks the `lang` attribute and shared files, and reads the page without
-JavaScript. The server must serve `src/site/` at its root. Browser outputs belong
-in ignored development directories.
+The server must serve `src/site/` at its root. Browser outputs belong in ignored
+development directories.
 
 ## Pull requests
 

@@ -10,14 +10,11 @@ From the repository root:
 
 ```sh
 make dev-certs
-docker compose build server
-AHRARA_MAX_CLIENTS=1000 docker compose up -d --wait server
+AHRARA_MAX_CLIENTS=1000 docker compose up -d --build --wait server
 ```
 
 `make dev-certs` builds the static server locally. The Dockerfile only packages
-`dist/ahrara-server`; it does not compile source. For production, build and save
-the image locally, then transfer it to the VPS and load it with `docker load`.
-The VPS needs only the runtime image, Compose configuration, and mounted secrets.
+`dist/ahrara-server`; it does not compile source.
 
 This exposes SMTP on `127.0.0.1:2525` and WSS on `127.0.0.1:8443`. It is a local
 development setup; public delivery also requires DNS, MX records, SMTP ingress,
@@ -63,8 +60,8 @@ as UFW, so filter in the `DOCKER-USER` chain or the provider's firewall.
 
 ### Cloudflare Email Routing to a VPS
 
-Keep the MX records for `ahrara.dev` pointing to Cloudflare Email Routing.
-The forwarding destination uses a separate subdomain, for example:
+Point the domain's MX records to Cloudflare Email Routing. The forwarding
+destination uses a separate subdomain, for example for `ahrara.dev`:
 
 | Type | Name | Value | Options |
 |---|---|---|---|
@@ -91,9 +88,6 @@ The forwarding destination uses a separate subdomain, for example:
    the relay to enable delivery to individual Ahrara inboxes. Validate with a real
    forwarded message while its recipient's client is connected.
 
-Public SMTP reception and the client Tunnel are separate connections. No Worker
-is used, and the VPS needs neither application source nor a compiler.
-
 ### SMTP limits
 
 All values accept integers from 1 to 1024. The per-source cap cannot exceed the
@@ -115,8 +109,7 @@ connections of one source, counting unauthenticated ones; beyond it the relay
 answers HTTP 429. A source is an IPv4 address or an IPv6 /64: the TCP peer on the
 TLS listener, and Cloudflare's `cf-connecting-ip` on the integrated Tunnel and the
 Unix socket, which only cloudflared reaches. Keep that header: if a Cloudflare
-Transform Rule removes it, connections have no source and are not limited, and the
-relay logs `client_source_unknown` once.
+Transform Rule removes it, connections have no source and are not limited.
 
 `AHRARA_MAX_CLIENTS` (required, up to 10000000) caps the WebSocket connections of
 all sources together, including those without a source, so many sources cannot
@@ -124,20 +117,14 @@ exhaust the relay's memory. It has no default because it depends on the host's
 memory: an idle connection takes about 3 KB, and about 9 KB after delivering mail.
 
 The first quarter of a source's connections is free. Each further connection must
-prove work before authenticating: a SHA-256 hash over its login challenge with 12
-to 20 leading zero bits, about 4 thousand to 1 million attempts, rising toward the
-cap. Clients solve it automatically; it costs a legitimate user nothing until one
-address holds many connections. Clients without this support are disconnected
-without an error and reconnect later.
+solve a proof of work before authenticating, harder as the source nears its cap.
+Clients without this support are disconnected without an error and reconnect later.
 
 ### Browser clients
 
 Native clients send no `Origin` header. Browsers always do, so the relay accepts
 their WebSocket upgrades only from the exact origins in `AHRARA_WEB_ORIGINS`
 (comma-separated, no path or trailing slash) and answers 403 to any other site.
-Browsers cannot send WebSocket PINGs; the web client instead sends an empty
-`KEEPALIVE` frame, which the relay echoes and counts as liveness. Update the
-relay before publishing a web client that sends it.
 
 ## Cloudflare Tunnel with WSS and Unix
 
@@ -147,13 +134,13 @@ The optional Compose `tunnel` profile connects a named Tunnel to the relay:
 Client → WSS → Cloudflare → encrypted Tunnel → cloudflared → Unix socket → relay
 ```
 
-1. Configure `relay.ahrara.dev` as the Tunnel's public hostname with origin service
+1. Give the Tunnel a public hostname with origin service
    `unix:/run/ahrara/ahrara.sock`.
 2. Store the token in `.dev/cloudflared-token`, owned by the container's UID and
    readable only by that user (`chmod 600 .dev/cloudflared-token`).
 3. Run `docker compose --profile tunnel up -d` with `AHRARA_MAX_CLIENTS` set.
-4. Clients connect to `wss://relay.ahrara.dev`. Supply the verified
-   `server_public_key` when building release binaries or configuring a custom client.
+4. Configure clients with `server_url = "wss://<hostname>"` and the relay's
+   `server_public_key`.
 
 The relay serves WebSocket on the root path `/`, so the Tunnel needs no path rule.
 Both containers share `.dev/run` and run as `AHRARA_UID`/`AHRARA_GID` (default
@@ -162,9 +149,8 @@ Both containers share `.dev/run` and run as `AHRARA_UID`/`AHRARA_GID` (default
 ## Experimental integrated Tunnel
 
 The optional `tunnel` Cargo feature runs the named Tunnel inside the relay
-process, without a `cloudflared` sidecar. Its edge
-client is derived from [libcfd](https://github.com/apersomany/libcfd) by
-apersomany, whom we thank for the original connector; see [NOTICE](NOTICE).
+process, without a `cloudflared` sidecar. Its edge client is derived from
+[libcfd](https://github.com/apersomany/libcfd) by apersomany; see [NOTICE](NOTICE).
 
 ```sh
 make cargo ARGS='build --locked --release --features tunnel --target x86_64-unknown-linux-musl --manifest-path /work/src/server/Cargo.toml'
@@ -173,21 +159,15 @@ docker build --build-context ahrara-binary=./dist \
   -f src/server/Dockerfile -t ahrara-server:rust-tunnel .
 ```
 
-Use the target matching the VPS architecture; these commands target Linux x64.
+Use the target matching the host architecture; these commands target Linux x64.
 
 Mount a named-Tunnel token read-only and set `AHRARA_TUNNEL_TOKEN_FILE` to it.
 `AHRARA_TUNNEL_CONNECTIONS` accepts 1–4, defaulting to 4. Keep the TLS and SMTP
 configuration. The public hostname must already route to that Tunnel; do not
 start the separate `cloudflared` service for this deployment.
 
-The dashboard's origin service URL is ignored in this mode; clients still use
-`wss://relay.ahrara.dev`.
+The Tunnel's origin service URL is ignored in this mode; clients still use the
+public hostname.
 
 The connector speaks HTTP/2 to the edge and serves WebSocket upgrades on `/`
-and `GET /healthz`; other requests receive an error status. It is experimental;
-local tests do not establish public Tunnel capacity or failover behavior.
-
-## Validation
-
-Run `make check` and `make test` from the repository root. Delivery tests are
-listed in [Contributing](../../CONTRIBUTING.md#checks).
+and `GET /healthz`; other requests receive an error status.

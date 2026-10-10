@@ -10,8 +10,10 @@ cgo, which the extension needs:
 
 ```sh
 go install go.k6.io/xk6/cmd/xk6@latest
-CGO_ENABLED=1 xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@latest
+CGO_ENABLED=1 xk6 build --with github.com/Hitmasu/Ahrara/src/sdks/k6@vX.Y.Z
 ```
+
+Replace `vX.Y.Z` with an Ahrara release version.
 
 The extension uses the [Go SDK](https://github.com/Hitmasu/Ahrara/blob/main/src/sdks/go/README.md#native-library),
 which downloads Ahrara's native library on first use. The inbox connects directly
@@ -35,7 +37,6 @@ export default function () {
 Create inboxes during VU execution. A receive has no timeout unless you pass
 `durationMs`, for example `inbox.waitForEmail({ filter: { subject: 'Verify' }, durationMs: 30000 })`;
 expiry throws. Otherwise it waits for mail, VU cancellation, close, or an error.
-It blocks only the current virtual user.
 The receiver stores mail that arrives before a wait, and each matched message
 is returned once. Subject and sender filters match substrings. Always close in
 `finally`; VU cancellation also requests native cleanup.
@@ -73,12 +74,11 @@ ignoring case. `headers` maps a header name to a substring, including repeated
 headers.
 
 Use `filter: { regex: true, subject: '^(Verification|Confirm email)$' }` to
-interpret all string conditions as case-insensitive Rust regex patterns.
-`recipient`, `envelopeSender` and `messageId` patterns must match the whole value;
-other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
-case sensitivity; regex queries are case-sensitive unless `ignoreCase` is set.
-Header names stay literal. Invalid patterns fail before consuming mail; omitting
-`regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+interpret all string conditions as case-insensitive Rust regex patterns; regex
+queries are case-sensitive unless `ignoreCase` is set. Invalid patterns fail
+before consuming mail. See the
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 ```javascript
 const match = inbox.waitForRegexMatch(
@@ -95,9 +95,8 @@ named captures but no backreferences/look-around. Results contain `emailId`,
 `value` and `groups` (`index`, nullable `name` and nullable `value`); group zero is
 the entire match. Text/HTML are decoded in full and exclude attachments.
 
-XPath 1.0 evaluates repaired HTML, so `//a` needs no namespace. SVG, MathML and
-XLink use `svg`, `math` and `xlink` prefixes. Node values follow document order;
-scalar values use XPath string conversion. Empty values and false do not match.
+XPath node values follow document order; scalar values use XPath string
+conversion. Empty values and false do not match.
 
 The k6 equivalents of the other SDKs' plural iterators are sequential callbacks:
 
@@ -115,13 +114,7 @@ Single-result methods throw on expiration; callbacks finish normally with their
 invocation count. Without it, the VU context controls lifetime. Returning false
 stops immediately; throwing propagates. Selecting results consumes that email;
 early exit discards remaining results from it and leaves the next email available.
-No further email is prefetched and no unbounded result array is built.
-
-Expressions are limited to 1..4096 UTF-8 bytes; each email to 10,000 results and
-a 16 MiB result budget including captures. XPath HTML is limited to 100,000 nodes
-and 256 levels. Exceeding a limit fails explicitly without consuming the email.
-XPath expressions also allow at most 32 nested groups and 256 syntax tokens;
-quoted strings are counted as single tokens.
+No further email is prefetched.
 
 ## Persistence and recovery
 
@@ -134,17 +127,13 @@ Pass the value to `createInbox({ credentials })` to restore the same address wit
 fresh local history, or pass `{ recoveryKey, address }` directly. Do not combine
 the two import forms. No offline relay queue is created by restoring credentials.
 
-WSS close waits up to five seconds for the relay to disconnect, then drops the
-socket. Immediate identity reuse is verified with a healthy relay; after a
-network failure, the identity can remain occupied until the relay cleans up.
-
 `String(credentials)` and `JSON.stringify(credentials)` redact the key. Reading
 `credentials.recoveryKey` is an explicit secret export; store it securely and
 never log it.
 
 Private relay options are `serverUrl`, `serverPublicKey`, `tlsCaPath` and
-`connectTimeoutMs`. Production defaults require a release core compiled with the
-verified production relay pin.
+`connectTimeoutMs`. Omit them for the hosted relay, whose verified public key the
+release native library embeds.
 
 ## Mailbox operations
 
@@ -163,10 +152,3 @@ including `textBody`, `textBodyTruncated`, `htmlAvailable`, `receivedAt`,
 `messageId`, `sizeBytes` and `attachments`.
 Attachment fields are `id`, `filename`, `contentType`, `contentDisposition` and
 `size`. `textBodyTruncated` reports the core's 256 KiB plain-text decoding limit.
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-k6-test` against a development relay, or `make sdk-test` for the
-complete matrix with an isolated relay. All builds and tests run in Docker.

@@ -10,7 +10,7 @@ Web interface, or local API alongside your application.
 
 ## Choose your SDK
 
-Each guide contains examples and the options for that language.
+Each guide covers installation, examples, and the options for that language.
 
 | SDK | Requirements | Receiving messages |
 | --- | --- | --- |
@@ -26,10 +26,13 @@ Except for Rust, the SDKs run the shared core as a native library built for
 Linux, macOS and Windows on x64 and ARM64. On Linux it needs glibc 2.17 or later,
 so Alpine and other musl-based systems are not supported. The .NET, JavaScript,
 Python and Java packages include it. The Go SDK, and with it the k6 extension,
-downloads it from the GitHub Release on first use, as the
-[Go guide](../src/sdks/go/README.md#native-library) explains. The full test suite runs on
-Linux x64. The JavaScript SDK runs in Node.js, not browser code; stock k6 cannot
-load the Ahrara extension.
+downloads it from the GitHub Release on first use and checks it against the
+SHA-256 pinned in the module version, as the
+[Go guide](../src/sdks/go/README.md#native-library) explains. When
+`AHRARA_NATIVE_LIBRARY` is set to an absolute path, every SDK loads that library
+instead, without verifying it, so protect the variable as you would `LD_PRELOAD`.
+The JavaScript SDK runs in Node.js, not browser code; stock k6 cannot load the
+Ahrara extension.
 
 ## How an inbox works
 
@@ -47,27 +50,6 @@ load the Ahrara extension.
 Keep the inbox connected while expecting mail. The relay has no offline queue;
 reopening an address does not recover messages sent while it was disconnected.
 Use a separate inbox for each parallel test or k6 virtual user.
-
-## Receive your first email
-
-This Node.js example uses the JavaScript SDK. Submit the printed address through
-your application before the wait expires; other languages follow the same flow.
-
-```js
-import { Ahrara } from '@ahrara/sdk';
-
-const inbox = await Ahrara.createInbox();
-try {
-  console.log(inbox.address);
-  const email = await inbox.waitForEmail({
-    timeoutMs: 30_000,
-    filter: { subject: 'Verification' },
-  });
-  // Use email.subject, email.text_body, and email.attachments in your checks.
-} finally {
-  await inbox.close();
-}
-```
 
 **There is no receive timeout unless you set one.** Set a deadline in tests so a
 missing email does not leave the test waiting indefinitely. Connection setup has
@@ -96,6 +78,10 @@ Receive and extraction calls share handled-message state. A message selected by
 one call is not delivered again by another, even if a callback fails. Use message
 IDs and the stored history when you need to retry processing.
 
+Failures carry a stable code, such as `invalid_argument`, `connection_failed`,
+`inbox_closed`, `resource_limit`, or `email_not_found`. Each guide names the error
+type that exposes it.
+
 ## Filters and extraction
 
 Filter by sender, subject, To/Cc, body text, headers, SMTP envelope fields,
@@ -119,38 +105,20 @@ Header names are always literal and case-insensitive. The separate `subject` and
 `from` wait options, where an SDK offers them, remain literal substrings.
 
 Set `regex: true` on the filter to interpret every string condition, including
-header values, as a Rust regular expression. Patterns are strings rather than
-language-native regex objects. Header names remain literal and case-insensitive;
-the attachment flag remains boolean. All conditions still combine with AND.
-
-```js
-const email = await inbox.waitForEmail({
-  timeoutMs: 30_000,
-  filter: {
-    regex: true,
-    subject: '^(Verification|Confirm email)( [0-9]+)?$',
-    hasAttachments: false,
-  },
-});
-```
-
-Recipient, envelope sender, and Message-ID patterns are anchored to the whole
-value, so `sender@example` does not match `sender@example.test`. Other patterns
-search anywhere in the field; use `^` and `$` for a complete match. Filter
-matching ignores case by default; `(?-i)` overrides this for a pattern. Regex
-extraction queries are the opposite: case-sensitive unless their ignore-case
-option is set. Groups, alternation, character
-classes, repetition and inline flags such as `(?m)` and `(?s)` are supported;
-lookaround and backreferences are not. Escape metacharacters in literal values:
-`example\.com` matches a literal dot. This is regex syntax, not file globbing:
-`*` repeats the preceding expression; `.*` matches arbitrary text.
+header values, as a [Rust regular expression](https://docs.rs/regex/latest/regex/#syntax)
+given as a string. Recipient, envelope sender, and Message-ID patterns are anchored
+to the whole value, so `sender@example` does not match `sender@example.test`.
+Other patterns match anywhere; use `^` and `$` for a complete match. Filter
+patterns ignore case; `(?-i)` overrides this. Regex extraction queries are the
+opposite: case-sensitive unless their ignore-case option is set. Lookaround and
+backreferences are not supported. Escape metacharacters to match them literally,
+as in `example\.com`, and use `.*`, not `*`, for arbitrary text.
 
 Patterns are validated before opening a profile or starting a receive. Invalid
 or oversized expressions return `invalid_argument` without consuming mail.
 Filter values require 1–4096 UTF-8 bytes without NUL; at most 64 header conditions
 are allowed. Each SDK request, including all of its filter values, is limited to
-1 MiB of JSON. Omitting `regex` or setting it to `false` preserves literal
-matching.
+1 MiB of JSON.
 
 Where you apply a filter changes what happens to other mail:
 
@@ -160,35 +128,25 @@ Where you apply a filter changes what happens to other mail:
 | A wait or extraction call | Kept for another call with different criteria. |
 
 For verification codes, wait for a regex match instead of receiving the whole
-message first. This JavaScript example returns a six-digit code and reads the
-same email from history:
-
-```js
-const match = await inbox.waitForRegexMatch('[0-9]{6}', {
-  timeoutMs: 30_000,
-  filter: { subject: 'Verification' },
-});
-const code = match.value;
-const email = await inbox.getEmail(match.email_id);
-```
-
-For a confirmation link, use XPath instead:
-
-```js
-const link = await inbox.waitForXPath('//a[@id="verify"]/@href', {
-  timeoutMs: 30_000,
-});
-```
+message first; for a confirmation link, wait for an XPath value such as
+`//a[@id="verify"]/@href`. Each regex match carries its email ID, so you can read
+the same email from history.
 
 Regex can search full decoded text, HTML, subject, or raw email and return named
-and numbered capture groups. All SDKs use the same syntax; lookaround and
-backreferences are unsupported. XPath extracts strings from HTML without running
-scripts or loading external resources.
+and numbered capture groups; group zero is the whole match. XPath 1.0 runs on
+repaired HTML and returns strings, without running scripts or loading external
+resources. `//a` needs no namespace prefix; SVG, MathML, and XLink use `svg`,
+`math`, and `xlink`.
 
 Plural extraction methods return occurrences across matching emails; k6 uses
 callbacks for this. Stopping partway through an email's results does not replay
-its remaining occurrences, but the message stays readable. Invalid expressions
-and query-limit errors leave the message available.
+its remaining occurrences, but the message stays readable.
+
+Expressions take 1–4096 UTF-8 bytes, and XPath allows at most 32 nested groups
+and 256 syntax tokens. Each email yields at most 10,000 results and 16 MiB of
+output, captures included, and XPath reads at most 100,000 HTML nodes and 256
+levels; exceeding a limit returns `resource_limit`. Neither invalid expressions
+nor exceeded limits consume the message.
 
 ## Persistent profiles and identity reuse
 
@@ -201,8 +159,9 @@ and query-limit errors leave the message available.
 To keep history, set the profile path to an absolute directory and reuse that
 path next time. Close the previous inbox before reopening it. Keep profiles
 private and outside version control; one identity can have only one active
-receiver. On Linux and macOS, a reused profile directory must belong to you and
-must not be writable by other users.
+receiver. After a network failure, the relay can hold the identity until it
+cleans up the old connection. On Linux and macOS, a reused profile directory must
+belong to you and must not be writable by other users.
 
 Export credentials when you need to restore the address in another environment.
 They contain a secret Recovery Key: store them securely and never log them.
@@ -246,8 +205,8 @@ See the [language guides](#choose-your-sdk) for examples.
 
 ## Connection settings
 
-The default relay is `wss://relay.ahrara.dev`. Release builds include its verified
-public transport key. For a custom relay or a source build without that key,
+The default relay is `wss://relay.ahrara.dev`. Release packages embed its verified
+public key. For a custom relay or a source build without that key,
 provide the relay URL and verified public key in the SDK's creation options.
 A private certificate authority also requires its trusted CA file. The SDK does
 not read the CLI's configuration.

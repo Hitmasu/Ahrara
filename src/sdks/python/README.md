@@ -1,9 +1,10 @@
 # Ahrara for Python
 
 Create an email address from a Python application or test, wait for messages,
-and extract verification codes or links. Requires Python 3.11+ and provides
-synchronous and asynchronous APIs, plus a Robot Framework library. The SDK
-connects directly to the relay without a running Ahrara CLI.
+and extract verification codes or links. Requires Python 3.11+; install with
+`pip install ahrara`. It provides synchronous and asynchronous APIs, plus a Robot
+Framework library. The SDK connects directly to the relay without a running
+Ahrara CLI.
 
 ```python
 from ahrara import create_inbox
@@ -31,9 +32,10 @@ context manager.
 
 ## Waiting and continuous reception
 
-`wait_for_email(timeout=None, subject=None, from_address=None)` waits indefinitely
-by default. A positive finite timeout is in **seconds** and raises `TimeoutError`.
-Filters use the core's ASCII case-insensitive substring matching. Other native
+`wait_for_email(timeout=None, *, subject=None, from_address=None, filter=None,
+cancel=None)` waits indefinitely by default. A positive finite timeout is in
+**seconds** and raises `TimeoutError`. `subject` and `from_address` are ASCII
+case-insensitive substrings. Other native
 failures expose `AhraraError.code`. The sync API also accepts a `threading.Event`
 as `cancel`; cancellation raises `AhraraError` with code `cancelled`. Async task
 cancellation raises `asyncio.CancelledError`. Both preserve the inbox for reuse.
@@ -69,10 +71,9 @@ normal completion, and cancellation keep the inbox open. No messages are prefetc
 while the consumer handles the previous message. Cancel an active async `anext()`
 task before closing its generator; synchronous waits accept a cancellation event.
 
-Repeated cancellation cannot abandon native creation or cleanup. Cancelled
-creation waits for its bounded connection attempt, then closes any result.
-A concurrently committed result may be delivered once before a stream propagates
-cancellation; cancellation never starts another receive.
+Cancelled creation waits for its bounded connection attempt, then closes any
+result. A concurrently committed result may be delivered once before a stream
+propagates cancellation.
 
 ## Filters and extracted values
 
@@ -86,15 +87,13 @@ absence; header names ignore case. Per-wait criteria add to the global receipt
 filter.
 
 Use `filter={"regex": True, "subject": r"^(Verification|Confirm email)$"}`
-to interpret all string conditions as case-insensitive Rust regex patterns.
-`recipient`, `envelope_sender`, and `message_id` patterns must match the whole
-value; other patterns match anywhere, so use `^` / `$` for a full match. Use
-`(?-i)` for case sensitivity; regex queries below are case-sensitive unless
-`ignore_case=True`. Header names and the `subject`/`from_address` wait arguments
-stay literal. Invalid patterns fail before consuming mail; omitting `regex` keeps
-literal matching. Robot Framework accepts the same dictionary, for example
+to interpret all string conditions as case-insensitive Rust regex patterns; regex
+queries below are case-sensitive unless `ignore_case=True`. The
+`subject`/`from_address` wait arguments stay literal. Robot Framework accepts the
+same dictionary, for example
 `&{filter}=    Create Dictionary    regex=${TRUE}    subject=^Verify$`. See the
-[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 ```python
 match = inbox.wait_for_regex_match(
@@ -118,15 +117,13 @@ including named captures; lookaround/backreferences are unsupported. Options are
 `source="text"` (full decoded text), `"html"`, `"subject"`, or `"raw"`, plus
 `ignore_case`, `multi_line`, and `dot_matches_new_line`. Results contain
 `email_id`, `value`, and `groups`; group zero is the full match and optional
-unmatched groups contain `None`. XPath evaluates the original HTML through the
-shared core, including repaired HTML documents, and returns strings.
-XPath expressions are limited to 32 nested groups and 256 syntax tokens;
-quoted literals do not count their contents as syntax.
+unmatched groups contain `None`. XPath evaluates the original HTML and returns
+strings.
 
 Singular searches throw `TimeoutError` on finite expiry. Plural searches yield
 **all matches/values across multiple emails** and end normally at their total
 deadline, including consumer work. None/omitted timeout is indefinite. Invalid
-queries raise `AhraraError` before consuming messages. Sync cancellation uses
+queries or filters raise `AhraraError` before consuming messages. Sync cancellation uses
 `cancel=threading.Event()`; async cancellation uses the task. Closing a generator
 preserves the inbox. Each matched email is consumed once, so stopping midway
 through its results does not replay unused values; stored mail remains readable.
@@ -152,9 +149,9 @@ cannot be combined with `credentials`. An `address` alone needs an existing
 profile identity. Mismatched keys or unowned addresses fail.
 
 Connection options are `server_url`, `server_public_key`, `tls_ca_path`, and
-`connect_timeout_ms` (1..300000 ms, core default 20000). Production defaults require
-a core release embedding the independently verified production Noise pin. Custom
-CA files keep peer and hostname verification enabled.
+`connect_timeout_ms` (1..300000 ms, default 20000). Omit them for the hosted
+relay, whose verified public key the package embeds. Custom CA files keep peer and
+hostname verification enabled.
 
 ## Email CRUD and attachments
 
@@ -178,8 +175,8 @@ Email fields follow the native schema, including `from`, `to`, `subject`,
 ## pytest and Robot Framework
 
 pytest can use the context manager in a yield fixture. Robot imports
-`ahrara.robot.AhraraLibrary`; constructor arguments are `server_url`,
-`server_public_key`, `tls_ca_path`, and optional `profile_path`.
+`ahrara.robot.AhraraLibrary`; its optional constructor arguments are
+`server_url`, `server_public_key`, `tls_ca_path`, and `profile_path`.
 
 ```robotframework
 *** Settings ***
@@ -198,10 +195,3 @@ Verify Signup
 Robot's wait has no implicit timeout. The library also provides credentials,
 CRUD, attachment, raw-email, HTML, `Wait For Regex Match/Matches`, and
 `Wait For XPath/Values` keywords; always use Close Inbox as teardown.
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-python-test` against a development relay, or `make sdk-test` for the
-complete matrix with an isolated relay. All builds and tests run in Docker.

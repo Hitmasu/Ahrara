@@ -24,9 +24,10 @@ Never publish real email, Recovery Keys, tokens, or credentials.
   exported EML, and attachments are outside this protection. On Linux and macOS,
   an Identity file readable by other users is refused until its permissions are
   fixed.
-- Database import validates integrity before replacing data. It requires the matching Recovery Key, an offline destination, and explicit
-  `--replace` to overwrite an existing inbox. Identity replacement is refused
-  while an inbox exists.
+- Database import validates integrity before replacing data. It requires the
+  matching Recovery Key, an offline destination, and explicit `--replace` to
+  overwrite an existing inbox. Identity replacement is refused while an inbox
+  exists.
 - Local MCP uses HTTP and requires the local API bearer token by default, even on
   loopback; the stdio bridge reads the token from the profile. Setting
   `mcp_auth = false` lets any local process use the inbox through MCP. Host and

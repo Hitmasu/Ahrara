@@ -1,9 +1,10 @@
 # Ahrara for JavaScript and TypeScript
 
 Create an email address from Node.js, wait for messages, and extract verification
-codes or links in JavaScript or TypeScript. Requires Node.js 20+; TypeScript
-declarations are included. The SDK connects directly to the relay and runs in
-the application or test runner, not in the browser.
+codes or links in JavaScript or TypeScript. Requires Node.js 20+; install with
+`npm install @ahrara/sdk`. TypeScript declarations are included. The SDK connects
+directly to the relay and runs in the application or test runner, not in the
+browser.
 
 ```js
 import { Ahrara } from '@ahrara/sdk';
@@ -27,8 +28,8 @@ waits on one inbox are queued and run one at a time, in call order.
 
 `waitForEmail({ timeoutMs, subject, from, signal })` waits indefinitely when
 `timeoutMs` is omitted. An explicit positive integer deadline is in milliseconds
-and throws `AhraraError` with code `timeout`. Filters follow the core's ASCII
-case-insensitive substring rules. AbortSignal cancellation and `close()` interrupt
+and throws `AhraraError` with code `timeout`. `subject` and `from` are ASCII
+case-insensitive substrings. AbortSignal cancellation and `close()` interrupt
 waits; cancelling a wait preserves the inbox. A simultaneously matched email may
 win the cancellation race. Native work runs off the Node event loop.
 
@@ -62,13 +63,11 @@ and `headers: { name: value }` use case-insensitive substring matching.
 case. A per-wait filter adds to the inbox's receipt filter.
 
 Set `filter: { regex: true, subject: '^(Verification|Confirm email)$' }` to
-interpret all string conditions as case-insensitive Rust regex patterns.
-`recipient`, `envelopeSender`, and `messageId` patterns must match the whole
-value; other patterns match anywhere, so use `^` / `$` for a full match. Use
-`(?-i)` for case sensitivity; regex queries below are case-sensitive unless
-`ignoreCase` is set. Header names and the top-level `subject`/`from` wait
-options stay literal. Invalid patterns fail before consuming mail; omitting
-`regex` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+interpret all string conditions as case-insensitive Rust regex patterns; regex
+queries below are case-sensitive unless `ignoreCase` is set. The top-level
+`subject`/`from` wait options stay literal. See the
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 ```js
 const match = await inbox.waitForRegexMatch('code=(?<code>[0-9]+)', {
@@ -94,15 +93,13 @@ are `source: 'text' | 'html' | 'subject' | 'raw'` (default full decoded text),
 `value`, and indexed `groups`; group zero is the whole match and unmatched optional
 groups have a null value. HTML searches use original decoded HTML.
 
-XPath runs in the shared core against HTML, including repaired HTML documents.
-Expressions are limited to 32 nested groups and 256 syntax tokens; quoted literal
-contents do not count as syntax.
 Singular calls return the first value/match and throw on timeout. Plural methods
 yield **every match/value across multiple emails**, with one total timeout that
 includes consumer work. Finite expiry ends normally; omitted timeout is indefinite.
-`signal` cancels either form. Invalid expressions throw before consuming email.
-Each matched email is consumed once: stopping partway through its results does
-not replay the remaining values, but its stored message remains readable.
+`signal` cancels either form. Invalid expressions and filters throw before
+consuming email. Each matched email is consumed once: stopping partway through
+its results does not replay the remaining values, but its stored message remains
+readable.
 
 ## Persistence and identity
 
@@ -125,9 +122,9 @@ these cannot be combined with `credentials`. An `address` alone requires an
 existing profile identity. Unowned addresses and mismatched profile keys fail.
 
 Connection options are `serverUrl`, `serverPublicKey`, `tlsCaPath`, and
-`connectTimeoutMs` (1..300000 ms, core default 20000). The public Noise pin must be
-independently verified. Production defaults require a core release embedding its
-production pin. Custom development CAs keep TLS verification enabled.
+`connectTimeoutMs` (1..300000 ms, default 20000). Omit them for the hosted relay,
+whose verified public key the package embeds; a private relay's public key must be
+independently verified. Custom CAs keep TLS verification enabled.
 
 ## Stored email and attachments
 
@@ -145,19 +142,15 @@ consume receive state. Native errors retain their code in `AhraraError.code`.
 | `getHtml(id, { allowRemote: false })` | Sanitized `{ html, remote_resources }`; remote resources blocked by default |
 
 Email fields use the native snake_case schema, including `from`, `to`, `subject`,
-`text_body`, `attachments`, and `parse_error`; the k6 extension uses camelCase. Extracted text is capped at
-256 KiB and reports `text_body_truncated`. HTML and attachments are fetched
-explicitly. Treat message content as untrusted data.
+`text_body`, `attachments`, and `parse_error`. Extracted text is capped at 256 KiB
+and reports `text_body_truncated`. HTML and attachments are fetched explicitly.
+Treat message content as untrusted data.
 
 ## Test frameworks
 
-Playwright uses a test fixture owning an inbox; see `test/signup.spec.js`.
+Playwright uses a test fixture owning an inbox; see
+[`signup.spec.js`](https://github.com/Hitmasu/Ahrara/blob/main/src/sdks/javascript/test/signup.spec.js).
 Cypress uses Node `setupNodeEvents` and `cy.task`, since browser code cannot load
-the native library; see `cypress.config.js`. Node/Jest/Vitest use the same API.
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-javascript-test` against a development relay, or `make sdk-test` for
-the complete matrix with an isolated relay. All builds and tests run in Docker.
+the native library; see
+[`cypress.config.js`](https://github.com/Hitmasu/Ahrara/blob/main/src/sdks/javascript/cypress.config.js).
+Node/Jest/Vitest use the same API.

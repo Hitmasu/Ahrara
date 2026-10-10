@@ -36,12 +36,8 @@ Restart/reload the host's MCP connection if newly installed tools are not visibl
 2. Create a new address for the task with `ahrara_create_address`.
 3. Trigger the requested email, then use `ahrara_wait_for_email` filtered by that
    address. Carry `after_id` forward to avoid reusing an old verification email.
-4. Read only relevant mail. Save attachments only when the user asks:
-   `ahrara_save_attachment` writes into the profile's `attachments` directory,
-   accepts an optional plain `filename`, never overwrites, and returns the path.
+4. Read only relevant mail. Save attachments only when the user asks.
 
-Stdio sessions reuse the local server. The last session closes an agent-owned
-server; a manually started server stays running. Identity and inbox survive.
 Do not call `ahrara_stop` as session cleanup: it stops reception for every client.
 Use it only when the user asks to stop shared reception.
 

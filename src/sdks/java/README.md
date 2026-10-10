@@ -1,9 +1,10 @@
 # Ahrara for Java
 
 Create an email address from a Java application or test, wait for messages, and
-extract verification codes or links. Requires Java 17+. Use a single blocking
-call, a stream, or a callback to receive mail. The SDK connects directly to the
-relay without a running Ahrara CLI.
+extract verification codes or links. Requires Java 17+; add the Maven dependency
+`dev.ahrara:ahrara` and import `dev.ahrara.*`. Use a single blocking call, a
+stream, or a callback to receive mail. The SDK connects directly to the relay
+without a running Ahrara CLI.
 
 ## Receive one email
 
@@ -28,9 +29,8 @@ A finite wait throws `TimeoutException` on expiry. Thread interruption throws
 reception; closing is idempotent and interrupts active waits.
 
 For a private relay, use `new InboxOptions(serverUrl, verifiedPublicKey, caPath,
-Duration.ofSeconds(10))`. A native build without an embedded public relay pin also
-requires a supplied public key. The CA path is optional when the relay uses a
-publicly trusted certificate.
+Duration.ofSeconds(10))`. The CA path is optional when the relay uses a publicly
+trusted certificate.
 
 ## Lazy streams and callbacks
 
@@ -92,8 +92,7 @@ multiLine, dotMatchesNewLine)`. Sources are `text` (default), `html`, `subject`,
 `raw`. Results expose the local `emailId()`, complete `value()`, and numbered or
 named `groups()`. Group zero contains the whole match; unmatched optional groups
 have null values. The shared Rust regex syntax excludes look-around and
-backreferences. XPath uses the same HTML parser and query engine as other SDKs,
-including recovery of ordinary malformed HTML.
+backreferences.
 
 Filter conditions combine with AND. Sender, subject, To/Cc, text, and header
 values are case-insensitive substrings. Recipient, envelope sender, and Message-ID
@@ -101,17 +100,14 @@ match the whole value, ignoring case. Header names are case-insensitive and any
 repeated value can match. Operation filters retain nonmatching mail; use
 `options.withFilter(filter)` to discard rejected incoming messages **before local
 storage**. Global and operation conditions combine. Invalid queries or filters
-raise `AhraraException` without consuming messages. Queries and ordinary email
-waits share the same receiver lock, so concurrent waits are queued and run one at
-a time.
+raise `AhraraException` without consuming messages. Concurrent queries and email
+waits on one inbox are queued and run one at a time.
 
 Use `EmailFilter.builder().regex(true).subject("^(Verification|Confirm email)$").build()`
-to interpret all string conditions as case-insensitive Rust regex patterns.
-Recipient, envelope sender, and Message-ID patterns must match the whole value;
-other patterns match anywhere, so use `^` / `$` for a full match. Use `(?-i)` for
-case sensitivity; `RegexQuery` is case-sensitive unless `ignoreCase` is true.
-Header names stay literal. Invalid patterns fail before consuming mail; omitting
-`.regex(true)` keeps literal matching. See the [shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction).
+to interpret all string conditions as case-insensitive Rust regex patterns;
+`RegexQuery` is case-sensitive unless `ignoreCase` is true. See the
+[shared filter rules](https://github.com/Hitmasu/Ahrara/blob/main/docs/sdks.md#filters-and-extraction)
+for anchoring and limits.
 
 ## Persistent profiles and identity import
 
@@ -163,10 +159,3 @@ bytes. `getHtml(id, false)` returns sanitized HTML blocking remote resources.
 filename rules and refuses overwrites. Deletion is scoped to this inbox's local
 storage; missing resources and other native errors propagate through
 `AhraraException`.
-
-## Development
-
-For source builds and native package preparation, see
-[SDK development](https://github.com/Hitmasu/Ahrara/blob/main/CONTRIBUTING.md#sdk-development). Run
-`make sdk-java-test` against a development relay, or `make sdk-test` for the
-complete matrix with an isolated relay. All builds and tests run in Docker.

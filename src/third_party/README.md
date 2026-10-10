@@ -1,7 +1,7 @@
 # Shared dependencies
 
-The core, native bridge, CLI, and server use this repository-level override.
-Its location keeps the shared crate independent of the CLI directory.
+The core, native bridge, CLI, server, and browser app use this repository-level
+override.
 
 ## mailparse 0.16.1
 
@@ -17,6 +17,3 @@ Run the upstream and local regressions with `make test` or:
 ```sh
 make cargo ARGS='test --locked --manifest-path /work/src/third_party/mailparse/Cargo.toml'
 ```
-
-SQLCipher is provided by the published `libsqlite3-sys` crate through `rusqlite`,
-with versions pinned in each consumer's `Cargo.lock`.
