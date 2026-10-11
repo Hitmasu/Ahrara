@@ -1,0 +1,36 @@
+name: Builder images
+# Release builds share one copy of the builder images, cached by
+# Dockerfile.builder's content. A tag can only restore main's caches, which
+# expire after 7 days unused, so main refreshes it weekly and when it changes.
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+  push:
+    branches: [main]
+    paths: [src/cli/Dockerfile.builder]
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Only the weekly run downloads a hit, which keeps the cache from expiring.
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: builder.tar.zst
+          key: ahrara-builder-${{ hashFiles('src/cli/Dockerfile.builder') }}
+          lookup-only: ${{ github.event_name != 'schedule' }}
+      - name: Build the builder images
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          make cross-toolchain toolchain
+          docker images --format '{{.Repository}}:{{.Tag}}' ahrara-builder | xargs docker save | zstd -T0 -o builder.tar.zst
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: builder.tar.zst
+          key: ahrara-builder-${{ hashFiles('src/cli/Dockerfile.builder') }}

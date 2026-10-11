@@ -14,10 +14,13 @@ CARGO = $(DOCKER) --platform linux/$(DOCKER_ARCH) -w /work/src/cli \
 	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY -e AHRARA_WEB_RELAY_URL \
 	ahrara-builder:$(DOCKER_ARCH) cargo
 WEB_OUT ?= dist/web
+# Named after Dockerfile.builder's content: editing it builds a new image, and
+# CI loads a cached one instead of building it again.
+CROSS_IMAGE := ahrara-builder:cross-$(shell sha256sum src/cli/Dockerfile.builder | cut -c1-12)
 ZIGBUILD = $(DOCKER) --platform linux/amd64 \
 	-e CARGO_HOME=/work/.dev/cargo -e CARGO_TARGET_DIR=/work/.dev/cross-target \
 	-e CARGO_ZIGBUILD_CACHE_DIR=/work/.dev/zigbuild -e ZIG_GLOBAL_CACHE_DIR=/work/.dev/zig \
-	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY ahrara-builder:cross cargo zigbuild --locked --release
+	-e AHRARA_UPDATE_PUBLIC_KEY -e AHRARA_SERVER_PUBLIC_KEY $(CROSS_IMAGE) cargo zigbuild --locked --release
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' src/cli/Cargo.toml | head -n 1)
 
 .PHONY: dev-certs server cli check test client-lint client-test openapi openapi-check e2e mcp-e2e api-e2e web-e2e toolchain cargo
@@ -91,7 +94,9 @@ release: cross-toolchain
 
 cross-toolchain:
 	@mkdir -p .dev/cargo .dev/cross-target .dev/zigbuild .dev/zig
-	docker build --platform linux/amd64 --target cross -f src/cli/Dockerfile.builder -t ahrara-builder:cross .
+	if ! docker image inspect $(CROSS_IMAGE) >/dev/null 2>&1; then
+		docker build --platform linux/amd64 --target cross -f src/cli/Dockerfile.builder -t $(CROSS_IMAGE) .
+	fi
 
 # The SDKs' native core for one release platform, built like `release` with the
 # production relay key. Linux libraries target glibc 2.17 (manylinux2014).
@@ -112,7 +117,7 @@ sdk-native-release: cross-toolchain
 	mkdir -p dist
 	output="dist/ahrara-native-$(PLATFORM)-$(ARCH).$${file##*.}"
 	cp ".dev/cross-target/$$target/release/$$file" "$$output"
-	if [[ -n $$glibc ]] && $(DOCKER) -w /work ahrara-builder:cross readelf -W --dyn-syms "$$output" | grep -E 'GLIBC_2\.(1[89]|[2-9][0-9])' >&2; then
+	if [[ -n $$glibc ]] && $(DOCKER) -w /work $(CROSS_IMAGE) readelf -W --dyn-syms "$$output" | grep -E 'GLIBC_2\.(1[89]|[2-9][0-9])' >&2; then
 		echo "$$output needs a glibc newer than 2.17" >&2; exit 1
 	fi
 
