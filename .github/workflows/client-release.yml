@@ -422,6 +422,14 @@ jobs:
           merge-multiple: true
       - name: Stage the six native libraries
         run: make sdk-stage
+      # The runner's Maven 3.10 adds maven-metadata-local.xml to the bundle, which
+      # Central rejects ("content that does NOT have a .pom file"). Match sdk-java-test.
+      - name: Use Maven 3.9.11
+        run: |
+          curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.11/binaries/apache-maven-3.9.11-bin.tar.gz -o "$RUNNER_TEMP/maven.tgz"
+          echo "bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978  $RUNNER_TEMP/maven.tgz" | sha512sum -c
+          tar -xzf "$RUNNER_TEMP/maven.tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-3.9.11/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
