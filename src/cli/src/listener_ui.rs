@@ -1102,7 +1102,7 @@ mod tests {
             let frame = render(&state, None, &mut browser, &stats, 0, size, false);
             if size == (12, 32) {
                 assert!(frame.contains("✉ Email"));
-                assert!(frame.contains("v0.1.0"));
+                assert!(frame.contains(concat!("v", env!("CARGO_PKG_VERSION"))));
             }
 
             assert!(frame.lines().count() <= usize::from(size.0.saturating_sub(1)));

@@ -34,18 +34,18 @@ test('npm packages install one executable per platform with an npm receipt', { s
     const output = path.join(directory, 'packages');
     execFileSync(process.execPath, [path.join(root, 'scripts/npm-cli.mjs'), dist, output]);
 
+    const { version } = JSON.parse(await fs.readFile(path.join(root, 'src/cli/npm/package.json')));
     const tarballs = (await fs.readdir(output)).sort();
     assert.equal(tarballs.length, 7);
     const manifest = (tarball) => JSON.parse(execFileSync('tar', ['-xzOf', path.join(output, tarball), 'package/package.json']));
-    const launcher = manifest('ahrara-0.1.0.tgz');
-    const { version } = JSON.parse(await fs.readFile(path.join(root, 'src/cli/npm/package.json')));
+    const launcher = manifest(`ahrara-${version}.tgz`);
     assert.equal(launcher.version, version);
     assert.deepEqual(Object.values(launcher.optionalDependencies), Array(6).fill(version));
-    const linux = manifest('ahrara-cli-linux-x64-0.1.0.tgz');
+    const linux = manifest(`ahrara-cli-linux-x64-${version}.tgz`);
     assert.deepEqual([linux.os, linux.cpu], [['linux'], ['x64']]);
-    assert.ok(manifest('ahrara-cli-win32-arm64-0.1.0.tgz').files.includes('ahrara.exe.install.json'));
+    assert.ok(manifest(`ahrara-cli-win32-arm64-${version}.tgz`).files.includes('ahrara.exe.install.json'));
 
-    const bin = await install([path.join(output, 'ahrara-0.1.0.tgz'), path.join(output, 'ahrara-cli-linux-x64-0.1.0.tgz')], directory);
+    const bin = await install([path.join(output, `ahrara-${version}.tgz`), path.join(output, `ahrara-cli-linux-x64-${version}.tgz`)], directory);
     assert.equal(execFileSync(process.execPath, [bin, '--version']).toString().trim(), `ahrara ${version}`);
     const receipt = path.join(directory, 'node_modules/@ahrara/cli-linux-x64/ahrara.install.json');
     assert.deepEqual(JSON.parse(await fs.readFile(receipt)), { schema_version: 1, method: 'npm' });

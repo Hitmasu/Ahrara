@@ -1,6 +1,6 @@
 [package]
 name = "ahrara"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.90"
 description = "Disposable email with a local inbox for developers and AI agents"
@@ -9,8 +9,8 @@ repository = "https://github.com/Hitmasu/Ahrara"
 homepage = "https://ahrara.dev"
 
 [dependencies]
-ahrara-core = { path = "../core", version = "0.1.0" }
-ahrara-web = { path = "../web", version = "0.1.0" }
+ahrara-core = { path = "../core", version = "0.0.1" }
+ahrara-web = { path = "../web", version = "0.0.1" }
 anyhow = "1.0"
 argon2 = "=0.5.3"
 askama = "=0.14.0"

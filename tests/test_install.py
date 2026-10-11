@@ -6,11 +6,13 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = os.environ.get("AHRARA_TEST_BINARY")
+VERSION = tomllib.loads((ROOT / "src/cli/Cargo.toml").read_text())["package"]["version"]
 ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine().lower())
 TARGET = f"linux-{ARCH}"
 
@@ -79,7 +81,7 @@ class InstallShTest(unittest.TestCase):
         self.assertEqual(self.requests(), ["https://example.test/stable.json", f"https://example.test/v0.1.0/ahrara-{TARGET}"])
         self.assertTrue(os.access(self.dest / "ahrara", os.X_OK))
         self.assertEqual(json.loads((self.dest / "ahrara.install.json").read_text()), {"schema_version": 1, "method": "sh"})
-        self.assertIn("ahrara 0.1.0", result.stdout)
+        self.assertIn(f"ahrara {VERSION}", result.stdout)
         self.assertIn(f'export PATH="{self.dest}:$PATH"', result.stdout)
 
     def test_rejects_a_checksum_mismatch_without_installing(self):

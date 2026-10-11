@@ -1,6 +1,6 @@
 [package]
 name = "ahrara-core"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.90"
 description = "Embeddable Ahrara receiver shared by the CLI and language SDKs"

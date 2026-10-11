@@ -1,6 +1,6 @@
 {
   "name": "ahrara",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Disposable email for AI agents, QA and automation: the Ahrara CLI",
   "license": "MIT",
   "homepage": "https://ahrara.dev",

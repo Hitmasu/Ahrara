@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>dev.ahrara</groupId>
   <artifactId>ahrara</artifactId>
-  <version>0.1.0</version>
+  <version>0.0.1</version>
   <name>Ahrara</name>
   <description>Disposable inboxes backed by the embedded Ahrara Rust core</description>
   <url>https://github.com/Hitmasu/Ahrara</url>
