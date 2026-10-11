@@ -2,7 +2,7 @@
 
 Create an email address from a Java application or test, wait for messages, and
 extract verification codes or links. Requires Java 17+; add the Maven dependency
-`dev.ahrara:ahrara` and import `dev.ahrara.*`. Use a single blocking call, a
+`io.github.hitmasu:ahrara` and import `dev.ahrara.*`. Use a single blocking call, a
 stream, or a callback to receive mail. The SDK connects directly to the relay
 without a running Ahrara CLI.
 

@@ -442,7 +442,7 @@ jobs:
   maven:
     needs: smoke
     runs-on: ubuntu-latest
-    # Central Portal user token for dev.ahrara, and a GPG key whose public key is on a keyserver.
+    # Central Portal user token for io.github.hitmasu, and a GPG key whose public key is on a keyserver.
     environment: release
     env:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
@@ -479,8 +479,8 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: |
           version=${RELEASE_REF#v}
-          if curl --fail --silent --head "https://repo1.maven.org/maven2/dev/ahrara/ahrara/$version/ahrara-$version.pom" >/dev/null; then
-            echo "dev.ahrara:ahrara $version is already published"
+          if curl --fail --silent --head "https://repo1.maven.org/maven2/io/github/hitmasu/ahrara/$version/ahrara-$version.pom" >/dev/null; then
+            echo "io.github.hitmasu:ahrara $version is already published"
             exit 0
           fi
           mvn -B -P release -DskipTests -f src/sdks/java/pom.xml deploy

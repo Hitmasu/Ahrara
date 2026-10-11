@@ -114,7 +114,7 @@ to run alongside your tests.
 | TypeScript / JavaScript | `npm install @ahrara/sdk` |
 | Python | `pip install ahrara` |
 | .NET | `dotnet add package Ahrara` |
-| Java | Maven dependency `dev.ahrara:ahrara` |
+| Java | Maven dependency `io.github.hitmasu:ahrara` |
 | Go | `go get github.com/Hitmasu/Ahrara/src/sdks/go@latest` |
 | Rust | From source, see the [Rust guide](src/core/README.md) |
 | k6 | Custom k6 build, see the [k6 guide](src/sdks/k6/README.md) |
