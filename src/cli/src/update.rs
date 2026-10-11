@@ -31,6 +31,8 @@ pub enum InstallMethod {
     Brew,
     Npm,
     Plugin,
+    /// The image ships the direct binary, so it reads the direct channel.
+    Docker,
     #[value(skip)]
     Unknown,
 }
@@ -52,6 +54,7 @@ impl InstallMethod {
         match self {
             Self::Brew => "brew upgrade ahrara",
             Self::Npm => "npm install -g ahrara@latest",
+            Self::Docker => "docker pull ghcr.io/hitmasu/ahrara:latest",
             Self::Plugin => "Update through the Ahrara plugin: node src/plugin/ahrara.mjs --update",
             Self::Unknown => {
                 "Download a binary from https://github.com/Hitmasu/Ahrara/releases, or opt in with: ahrara update --register manual"
@@ -726,10 +729,23 @@ mod tests {
             InstallMethod::Brew,
             InstallMethod::Npm,
             InstallMethod::Plugin,
+            InstallMethod::Docker,
         ] {
             assert!(!method.direct());
             assert!(!method.instruction().starts_with("ahrara update"));
         }
+
+        // The image carries the direct binary, so it follows that channel and points at docker pull.
+        let docker = status(&m, InstallMethod::Docker, &installed, &platform().unwrap());
+        assert!(docker.update_available);
+        assert!(
+            docker
+                .message
+                .ends_with("docker pull ghcr.io/hitmasu/ahrara:latest")
+        );
+        let receipt: Receipt =
+            serde_json::from_str(r#"{"schema_version":1,"method":"docker"}"#).unwrap();
+        assert_eq!(receipt.method, InstallMethod::Docker);
     }
 
     #[test]

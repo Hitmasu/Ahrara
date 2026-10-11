@@ -54,6 +54,13 @@ brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git
 brew install hitmasu/ahrara/ahrara
 ```
 
+Or with Docker, on Linux x64 and ARM64. Add any command after the image name; the
+`ahrara` volume keeps your identity and inbox between runs:
+
+```sh
+docker run --rm -it -v ahrara:/home/nonroot ghcr.io/hitmasu/ahrara
+```
+
 Every method installs one executable for Linux, macOS or Windows on x64 or ARM64;
 they are also on [GitHub Releases](https://github.com/Hitmasu/Ahrara/releases/latest)
 ([manual install](https://ahrara.dev/docs/#install-manual)). Run `ahrara --version`

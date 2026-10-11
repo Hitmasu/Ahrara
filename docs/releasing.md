@@ -11,7 +11,8 @@ deployed separately. The variables, secrets and environments each
 2. Push the tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) and approve the
    `release` environment. The
    [Client release workflow](../.github/workflows/client-release.yml) publishes the
-   CLI to npm and, with its signed `stable.json`, to the GitHub Release; commits the
+   CLI to npm, as the `ghcr.io/hitmasu/ahrara` image and, with its signed
+   `stable.json`, to the GitHub Release; commits the
    Homebrew formula to `main`; publishes the SDKs to npm, PyPI, NuGet and Maven
    Central; and tags the Go SDK and k6 extension modules. The
    [Browser app workflow](../.github/workflows/web-app.yml) deploys the browser app

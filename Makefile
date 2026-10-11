@@ -447,6 +447,18 @@ sdk-stage:
 		cp dist/ahrara-third-party-licenses.md "src/sdks/$$sdk/LICENSE-THIRD-PARTY.md"
 	done
 
+# The CLI image from the Linux release binaries in dist. Builds the host's
+# architecture into the local image store unless DOCKER_CLI_ARGS says otherwise;
+# the release workflow passes both platforms, its tags and --push.
+DOCKER_CLI_ARGS ?= --load -t ahrara:local
+.PHONY: docker-cli
+docker-cli:
+	rm -rf .dev/docker-cli && mkdir -p .dev/docker-cli
+	for arch in amd64:x86_64 arm64:aarch64; do
+		if [[ -f dist/ahrara-linux-$${arch#*:} ]]; then cp "dist/ahrara-linux-$${arch#*:}" ".dev/docker-cli/ahrara-$${arch%:*}"; fi
+	done
+	docker buildx build -f src/cli/Dockerfile $(DOCKER_CLI_ARGS) .dev/docker-cli
+
 # The CLI's npm packages: the ahrara launcher and one @ahrara/cli-* package per platform.
 .PHONY: npm-cli
 npm-cli:

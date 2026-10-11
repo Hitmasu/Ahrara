@@ -146,6 +146,7 @@
                   <option value="shell" data-icon="shell.svg" data-command="curl -fsSL https://ahrara.dev/install.sh | sh" data-hint="macOS y Linux. Requiere curl y una shell POSIX.">Shell</option>
                   <option value="powershell" data-icon="powershell.svg" data-command="iwr https://ahrara.dev/install.ps1 -useb | iex" data-prompt="&gt;" data-hint="Windows. Después, abre una nueva ventana de PowerShell.">PowerShell</option>
                   <option value="npm" data-icon="npm.svg" data-command="npm install -g ahrara" data-hint="Linux, macOS y Windows. Requiere Node.js 18 o posterior.">npm</option>
+                  <option value="docker" data-icon="docker.svg" data-command="docker run --rm -it -v ahrara:/home/nonroot ghcr.io/hitmasu/ahrara" data-hint="Contenedores Linux en x64 y ARM64. El volumen ahrara conserva tu identidad y tu bandeja.">Docker</option>
                   <option value="binaries" data-icon="package.svg" data-hint="Elige el ejecutable para tu sistema operativo y arquitectura.">Binarios</option>
                 </select>
               </div>

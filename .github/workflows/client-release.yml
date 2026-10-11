@@ -246,8 +246,37 @@ jobs:
               npm publish "$tarball" --access public --provenance
             fi
           done
+  # The image ships the direct binary and follows that channel, so it is pushed before the manifest is signed.
+  docker:
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: client-linux-*-cli
+          path: dist
+          merge-multiple: true
+      - name: Publish the CLI image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${RELEASE_REF#v}
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ahrara
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker buildx imagetools inspect "$image:$version" >/dev/null 2>&1; then
+            echo "$image:$version is already published"
+            exit 0
+          fi
+          docker buildx create --use
+          make docker-cli DOCKER_CLI_ARGS="--platform linux/amd64,linux/arm64 --push -t $image:$version -t $image:latest"
   publish:
-    needs: [build, smoke, npm-cli]
+    needs: [build, smoke, npm-cli, docker]
     # Runs when npm-cli is skipped, not when it fails.
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
@@ -387,6 +416,9 @@ jobs:
           $version = & $exe --version
           if ($version -ne "ahrara $env:RELEASE_VERSION") { throw "Unexpected version: $version" }
           if ((Get-Content -Raw "$exe.install.json") -notmatch '"method":\s*"powershell"') { throw 'Missing powershell receipt' }
+      - name: Run the Docker image
+        if: runner.os == 'Linux'
+        run: test "$(docker run --rm "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ahrara:$RELEASE_VERSION" --version)" = "ahrara $RELEASE_VERSION"
   sdk-publish:
     needs: smoke
     runs-on: ubuntu-latest
