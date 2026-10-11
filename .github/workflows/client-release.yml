@@ -173,8 +173,10 @@ jobs:
               raise AssertionError("the native core accepted an empty request")
           PY
   # The manifest announces npm releases, so the packages are published before it is signed.
+  # npm provenance needs a public repository; until then releases skip npm.
   npm-cli:
     needs: smoke
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -208,6 +210,8 @@ jobs:
           done
   publish:
     needs: [build, smoke, npm-cli]
+    # Runs when npm-cli is skipped, not when it fails.
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     # The signing key is a secret of this protected environment, never of the repository.
     environment: release
@@ -217,6 +221,7 @@ jobs:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
       INITIAL_RELEASE: ${{ inputs.initial_release }}
+      NPM_PUBLISHED: ${{ needs.npm-cli.result == 'success' }}
     steps:
       - name: Resolve release version
         shell: bash
@@ -249,11 +254,15 @@ jobs:
             gh release download --pattern stable.json --output previous.json
             args+=(--previous previous.json)
           fi
-          # npm is published and the homebrew job commits the formula, so both channels announce it.
+          # The homebrew job commits the formula, and npm-cli published npm unless it was skipped.
           for target in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64; do
-            args+=(--available "brew=$target" --available "npm=$target")
+            args+=(--available "brew=$target")
           done
-          args+=(--available npm=windows-x86_64 --available npm=windows-aarch64)
+          if [ "$NPM_PUBLISHED" = true ]; then
+            for target in linux-x86_64 linux-aarch64 darwin-x86_64 darwin-aarch64 windows-x86_64 windows-aarch64; do
+              args+=(--available "npm=$target")
+            done
+          fi
           python3 scripts/release-manifest.py --version "$RELEASE_VERSION" --assets dist \
             --key "$key_file" --public-key "$AHRARA_UPDATE_PUBLIC_KEY" \
             --output dist/stable.json --homebrew-output Formula/ahrara.rb \
@@ -283,6 +292,8 @@ jobs:
   # The tap is this repository, so Homebrew sees the release once the formula is on main.
   homebrew:
     needs: publish
+    # A skipped npm-cli upstream would skip the jobs after publish without this.
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -309,6 +320,7 @@ jobs:
   # The scripts read the manifest of the latest release, which is now this one.
   installers:
     needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -379,6 +391,7 @@ jobs:
       # npm tries trusted publishing first and falls back to NPM_TOKEN, which only the
       # first version needs: npm configures trusted publishers on existing packages.
       - name: Publish to npm
+        if: ${{ !github.event.repository.private }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -429,6 +442,7 @@ jobs:
   # must carry that release's checksums. They live in a commit outside main.
   go:
     needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     # Module tags are permanent in the Go proxy, so they need the same approval as the release.
     environment: release
