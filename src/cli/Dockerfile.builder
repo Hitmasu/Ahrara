@@ -37,3 +37,8 @@ ENV AARCH64_PC_WINDOWS_GNULLVM_OPENSSL_NO_VENDOR=1 \
 RUN cargo install --locked --git https://github.com/rust-cross/cargo-zigbuild \
         --rev 110abf59ba07cb84ed71b31c8cd81eefdc37bcec cargo-zigbuild && \
     rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+# Rust's windows-gnu std links synchronization. cargo-zigbuild adds this alias at
+# build time but ignores the failure when the build user cannot write Zig's lib
+# directory, which only UID 1000 owns (CI runs as 1001).
+RUN cp /opt/zig/lib/libc/mingw/lib-common/api-ms-win-core-synch-l1-2-0.def \
+        /opt/zig/lib/libc/mingw/lib-common/synchronization.def
