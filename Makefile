@@ -160,7 +160,7 @@ client-test: toolchain
 	$(CARGO) test --locked --manifest-path /work/src/web/Cargo.toml
 	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara python:3.13-slim \
 		python3 -B -m unittest discover -s tests -p 'test_*.py'
-	$(DOCKER) -w /work -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs tests/npm-cli.test.mjs
+	$(DOCKER) -w /work -e HOME=/tmp -e AHRARA_TEST_BINARY=/work/.dev/target/debug/ahrara node:24-bookworm node --test tests/plugin.test.mjs tests/npm-cli.test.mjs
 
 .PHONY: update-test
 update-test: toolchain
