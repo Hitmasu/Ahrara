@@ -10,7 +10,7 @@ From the repository root:
 
 ```sh
 make dev-certs
-AHRARA_MAX_CLIENTS=1000 docker compose up -d --build --wait server
+docker compose up -d --build --wait server
 ```
 
 `make dev-certs` builds the static server locally. The Dockerfile only packages
@@ -111,10 +111,11 @@ TLS listener, and Cloudflare's `cf-connecting-ip` on the integrated Tunnel and t
 Unix socket, which only cloudflared reaches. Keep that header: if a Cloudflare
 Transform Rule removes it, connections have no source and are not limited.
 
-`AHRARA_MAX_CLIENTS` (required, up to 10000000) caps the WebSocket connections of
+`AHRARA_MAX_CLIENTS` (optional, up to 10000000) caps the WebSocket connections of
 all sources together, including those without a source, so many sources cannot
-exhaust the relay's memory. It has no default because it depends on the host's
-memory: an idle connection takes about 3 KB, and about 9 KB after delivering mail.
+exhaust the relay's memory. Without it there is no global cap. Size it to the
+host's memory: an idle connection takes about 3 KB, and about 9 KB after
+delivering mail.
 
 The first quarter of a source's connections is free. Each further connection must
 solve a proof of work before authenticating, harder as the source nears its cap.
@@ -138,7 +139,7 @@ Client → WSS → Cloudflare → encrypted Tunnel → cloudflared → Unix sock
    `unix:/run/ahrara/ahrara.sock`.
 2. Store the token in `.dev/cloudflared-token`, owned by the container's UID and
    readable only by that user (`chmod 600 .dev/cloudflared-token`).
-3. Run `docker compose --profile tunnel up -d` with `AHRARA_MAX_CLIENTS` set.
+3. Run `docker compose --profile tunnel up -d`.
 4. Configure clients with `server_url = "wss://<hostname>"` and the relay's
    `server_public_key`.
 

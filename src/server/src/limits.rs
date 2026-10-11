@@ -17,7 +17,8 @@ const COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeLimits {
-    pub clients: usize,
+    /// None leaves the relay without a global cap: its size depends on the host's memory.
+    pub clients: Option<usize>,
     pub clients_per_source: usize,
     pub smtp_sessions: usize,
     pub smtp_per_source: usize,
@@ -27,19 +28,10 @@ pub struct RuntimeLimits {
     pub command_timeout: Duration,
 }
 
-/// Tests run without a global cap; the relay itself never has a default one.
-#[cfg(test)]
 impl Default for RuntimeLimits {
     fn default() -> Self {
-        Self::with_clients(MAX_CLIENTS)
-    }
-}
-
-impl RuntimeLimits {
-    /// The global client cap depends on the host's memory, so it has no default.
-    fn with_clients(clients: usize) -> Self {
         Self {
-            clients,
+            clients: None,
             clients_per_source: 100,
             smtp_sessions: 256,
             smtp_per_source: 16,
@@ -49,7 +41,9 @@ impl RuntimeLimits {
             command_timeout: Duration::from_secs(120),
         }
     }
+}
 
+impl RuntimeLimits {
     pub fn from_env() -> Result<Self> {
         Self::from_lookup(|key| {
             std::env::var_os(key)
@@ -63,41 +57,32 @@ impl RuntimeLimits {
     }
 
     fn from_lookup(mut get: impl FnMut(&str) -> Result<Option<String>>) -> Result<Self> {
-        let mut number = |key: &str, default: Option<usize>, maximum: usize| -> Result<usize> {
-            let value = match get(key)? {
-                Some(value) => value
-                    .parse::<usize>()
-                    .map_err(|_| anyhow!("{key} must be an integer in 1..{maximum}"))?,
-                None => default.ok_or_else(|| anyhow!("{key} is required"))?,
+        let mut number = |key: &str, maximum: usize| -> Result<Option<usize>> {
+            let Some(value) = get(key)? else {
+                return Ok(None);
             };
+            let value = value
+                .parse::<usize>()
+                .map_err(|_| anyhow!("{key} must be an integer in 1..{maximum}"))?;
             if !(1..=maximum).contains(&value) {
                 return Err(anyhow!("{key} must be in 1..{maximum}"));
             }
 
-            Ok(value)
+            Ok(Some(value))
         };
-        let clients = number("AHRARA_MAX_CLIENTS", None, MAX_CLIENTS)?;
-        let defaults = Self::with_clients(clients);
-        let smtp_sessions = number(
-            "AHRARA_SMTP_MAX_SESSIONS",
-            Some(defaults.smtp_sessions),
-            MAX_SETTING,
-        )?;
-        let smtp_per_source = number(
-            "AHRARA_SMTP_MAX_SESSIONS_PER_SOURCE",
-            Some(defaults.smtp_per_source.min(smtp_sessions)),
-            smtp_sessions,
-        )?;
-        let clients_per_source = number(
-            "AHRARA_MAX_CLIENTS_PER_SOURCE",
-            Some(defaults.clients_per_source),
-            MAX_CLIENTS_PER_SOURCE,
-        )?;
-        let mut secs = |key: &str, default: Duration| -> Result<Duration> {
-            Ok(Duration::from_secs(
-                number(key, Some(default.as_secs() as usize), MAX_SETTING)? as u64,
-            ))
-        };
+        let defaults = Self::default();
+        let clients = number("AHRARA_MAX_CLIENTS", MAX_CLIENTS)?;
+        let smtp_sessions =
+            number("AHRARA_SMTP_MAX_SESSIONS", MAX_SETTING)?.unwrap_or(defaults.smtp_sessions);
+        let smtp_per_source = number("AHRARA_SMTP_MAX_SESSIONS_PER_SOURCE", smtp_sessions)?
+            .unwrap_or(defaults.smtp_per_source.min(smtp_sessions));
+        let clients_per_source = number("AHRARA_MAX_CLIENTS_PER_SOURCE", MAX_CLIENTS_PER_SOURCE)?
+            .unwrap_or(defaults.clients_per_source);
+        let mut secs =
+            |key: &str, default: Duration| -> Result<Duration> {
+                Ok(number(key, MAX_SETTING)?
+                    .map_or(default, |value| Duration::from_secs(value as u64)))
+            };
 
         Ok(Self {
             clients,
@@ -213,7 +198,11 @@ impl Admission {
 
     fn admit_client(self: &Arc<Self>, ip: Option<IpAddr>) -> Result<ClientPermit, &'static str> {
         let mut clients = self.clients.lock().unwrap();
-        if clients.active >= self.settings.clients {
+        if self
+            .settings
+            .clients
+            .is_some_and(|limit| clients.active >= limit)
+        {
             return Err("clients_limit");
         }
         let Some(source) = ip.map(source_key) else {
@@ -407,12 +396,11 @@ impl Drop for SourcePermit {
 mod tests {
     use super::*;
 
-    /// Like the environment, with the required global cap unless `values` sets it.
+    /// Like the environment, holding only `values`.
     fn configured(values: &[(&str, &str)]) -> Result<RuntimeLimits> {
         RuntimeLimits::from_lookup(|key| {
             Ok(values
                 .iter()
-                .chain(&[("AHRARA_MAX_CLIENTS", "600000")])
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).into()))
         })
@@ -430,16 +418,17 @@ mod tests {
 
     #[test]
     fn settings_validate_every_bound_without_mutating_the_environment() {
-        assert!(
-            RuntimeLimits::from_lookup(|_| Ok(None)).is_err(),
-            "the global client cap has no default"
+        assert_eq!(configured(&[]).unwrap(), RuntimeLimits::default());
+        assert_eq!(
+            configured(&[]).unwrap().clients,
+            None,
+            "no global client cap unless AHRARA_MAX_CLIENTS sets one"
         );
         assert_eq!(
-            configured(&[]).unwrap(),
-            RuntimeLimits {
-                clients: 600_000,
-                ..RuntimeLimits::default()
-            }
+            configured(&[("AHRARA_MAX_CLIENTS", "600000")])
+                .unwrap()
+                .clients,
+            Some(600_000)
         );
         let small = configured(&[("AHRARA_SMTP_MAX_SESSIONS", "2")]).unwrap();
 
@@ -489,9 +478,9 @@ mod tests {
             configured(&[("AHRARA_MAX_CLIENTS", "10000000")])
                 .unwrap()
                 .clients,
-            10_000_000
+            Some(10_000_000)
         );
-        for value in ["0", "10000001", "forever"] {
+        for value in ["0", "10000001", "forever", ""] {
             assert!(configured(&[("AHRARA_MAX_CLIENTS", value)]).is_err());
         }
     }
@@ -499,7 +488,7 @@ mod tests {
     #[test]
     fn clients_from_every_source_share_one_global_limit() {
         let admission = Admission::new(RuntimeLimits {
-            clients: 3,
+            clients: Some(3),
             ..RuntimeLimits::default()
         });
         let held = [
