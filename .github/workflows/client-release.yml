@@ -319,6 +319,9 @@ jobs:
         shell: bash
         run: echo "RELEASE_VERSION=${RELEASE_REF#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The manifest checks the version against src/cli/Cargo.toml.
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: client-*
