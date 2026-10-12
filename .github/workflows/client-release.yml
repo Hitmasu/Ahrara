@@ -242,12 +242,13 @@ jobs:
           registry-url: https://registry.npmjs.org
       # Trusted publishing first, NPM_TOKEN only for a package's first version.
       # Platform packages go first, so the launcher never points at missing ones.
+      # Tarball paths start with ./: npm reads npm/<file> as the GitHub repository <owner>/<name>.
       - name: Publish the CLI to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           version=${RELEASE_REF#v}
-          for tarball in npm/ahrara-cli-*-"$version".tgz "npm/ahrara-$version.tgz"; do
+          for tarball in ./npm/ahrara-cli-*-"$version".tgz "./npm/ahrara-$version.tgz"; do
             name=$(tar -xzOf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0)).name')
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name $version is already published"
@@ -507,7 +508,7 @@ jobs:
             echo "@ahrara/sdk $version is already published"
             exit 0
           fi
-          npm publish "packages/sdk-npm/ahrara-sdk-$version.tgz" --access public --provenance
+          npm publish "./packages/sdk-npm/ahrara-sdk-$version.tgz" --access public --provenance
   maven:
     needs: smoke
     runs-on: ubuntu-latest
