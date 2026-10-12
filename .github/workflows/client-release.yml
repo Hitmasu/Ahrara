@@ -1,12 +1,13 @@
 name: Client release
 on:
-  # Every pushed version tag (vX.Y.Z) publishes a release; the tag must match src/cli/Cargo.toml.
+  # Every version tag (vX.Y.Z, pushed or created with a GitHub release) publishes that
+  # version: the jobs set it in every manifest, and main records it afterwards.
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: Stable version matching src/cli/Cargo.toml (without v)
+        description: Stable version to publish (without v)
         required: true
       initial_release:
         description: First publication only (there is no previous signed manifest)
@@ -53,12 +54,13 @@ jobs:
           import base64, os, re, tomllib
           from pathlib import Path
           assert re.fullmatch(r'[0-9a-fA-F]{64}', os.environ['AHRARA_UPDATE_PUBLIC_KEY']), 'Configure the public release key first'
-          assert os.environ['RELEASE_VERSION'] == tomllib.loads(Path('src/cli/Cargo.toml').read_text())['package']['version'], 'Version mismatch'
           pin = os.environ['AHRARA_SERVER_PUBLIC_KEY']
           assert re.fullmatch(r'ahrara_server_v1_[A-Za-z0-9_-]{43}', pin), 'Configure the verified public relay transport key first'
           raw = base64.urlsafe_b64decode(pin.removeprefix('ahrara_server_v1_') + '=')
           assert len(raw) == 32 and base64.urlsafe_b64encode(raw).decode().rstrip('=') == pin.removeprefix('ahrara_server_v1_'), 'Invalid relay public key'
           PY
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: builder.tar.zst
@@ -84,6 +86,7 @@ jobs:
     env:
       AHRARA_UPDATE_PUBLIC_KEY: ${{ vars.AHRARA_UPDATE_PUBLIC_KEY }}
       AHRARA_SERVER_PUBLIC_KEY: ${{ vars.AHRARA_SERVER_PUBLIC_KEY }}
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
     steps:
       # The test builds outgrow the runner's free disk.
       - name: Free disk space
@@ -91,6 +94,8 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: builder.tar.zst
@@ -111,8 +116,12 @@ jobs:
   sdk-packages:
     needs: [build, validate]
     runs-on: ubuntu-latest
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: client-*
@@ -246,6 +255,21 @@ jobs:
               npm publish "$tarball" --access public --provenance
             fi
           done
+  # A release created with the tag in the GitHub UI goes back to draft until publish adds
+  # its binaries, so the installers keep reading the previous release meanwhile.
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_REF: ${{ inputs.version || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Keep a release without binaries as a draft
+        run: |
+          tag="v${RELEASE_REF#v}"
+          binaries=$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets -q '[.assets[].name | select(startswith("ahrara-"))] | length' 2>/dev/null || echo none)
+          if [ "$binaries" = 0 ]; then gh release edit "$tag" -R "$GITHUB_REPOSITORY" --draft=true; fi
   # The image ships the direct binary and follows that channel, so it is pushed before the manifest is signed.
   docker:
     needs: smoke
@@ -276,7 +300,7 @@ jobs:
           docker buildx create --use
           make docker-cli DOCKER_CLI_ARGS="--platform linux/amd64,linux/arm64 --push -t $image:$version -t $image:latest"
   publish:
-    needs: [build, smoke, npm-cli, docker]
+    needs: [build, smoke, npm-cli, docker, draft]
     # Runs when npm-cli is skipped, not when it fails.
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
@@ -308,7 +332,7 @@ jobs:
           set -euo pipefail
           # Tag pushes have no inputs: only the first release lacks a previous signed manifest.
           if [ -z "$INITIAL_RELEASE" ]; then
-            INITIAL_RELEASE=$([ "$(gh release list --limit 1 --json tagName --jq length)" = 0 ] && echo true || echo false)
+            INITIAL_RELEASE=$([ "$(gh release list --exclude-drafts --limit 1 --json tagName --jq length)" = 0 ] && echo true || echo false)
           fi
           umask 077
           key_file=$(mktemp)
@@ -349,14 +373,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo 'Release exists; binaries are immutable, so publish a new version.' >&2
-            exit 1
+          tag="v$RELEASE_VERSION"
+          if binaries=$(gh release view "$tag" --json assets -q '[.assets[].name | select(startswith("ahrara-"))] | length' 2>/dev/null); then
+            if [ "$binaries" != 0 ]; then
+              echo 'Release exists; binaries are immutable, so publish a new version.' >&2
+              exit 1
+            fi
+            # Created in the GitHub UI: keep its notes, add the files and publish it.
+            gh release upload "$tag" dist/ahrara-* dist/stable.json Formula/ahrara.rb
+            gh release edit "$tag" --draft=false --latest
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" \
+              --title "Ahrara $RELEASE_VERSION" --generate-notes \
+              dist/ahrara-* dist/stable.json Formula/ahrara.rb
           fi
-          gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" \
-            --title "Ahrara $RELEASE_VERSION" --generate-notes \
-            dist/ahrara-* dist/stable.json Formula/ahrara.rb
-  # The tap is this repository, so Homebrew sees the release once the formula is on main.
+  # Records the release on main: the Homebrew formula (the tap is this repository) and,
+  # unless main already moved past it, the version in every manifest and snippet.
   homebrew:
     needs: publish
     # A skipped npm-cli upstream would skip the jobs after publish without this.
@@ -372,17 +404,22 @@ jobs:
         with:
           name: ahrara-homebrew-formula
           path: Formula
-      - name: Commit the formula to main
+      - name: Commit the formula and the version to main
         env:
           RELEASE_REF: ${{ inputs.version || github.ref_name }}
         run: |
-          if git diff --quiet -- Formula/ahrara.rb; then
-            echo 'Formula/ahrara.rb is already up to date'
+          version=${RELEASE_REF#v}
+          current=$(sed -n 's/^version = "\(.*\)"/\1/p' src/cli/Cargo.toml | head -n 1)
+          if [ "$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -n 1)" = "$version" ]; then
+            make version VERSION="$version"
+          fi
+          if git diff --quiet; then
+            echo "main already records Ahrara $version"
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit --quiet -m "Homebrew formula for Ahrara ${RELEASE_REF#v}" Formula/ahrara.rb
+          git commit --quiet -am "Ahrara $version"
           git push origin HEAD:main
   # The scripts read the manifest of the latest release, which is now this one.
   installers:
@@ -480,6 +517,8 @@ jobs:
       RELEASE_REF: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: client-*
@@ -531,6 +570,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set the tag's version in every manifest
+        run: make version VERSION="${RELEASE_REF#v}"
       # The runner image's Go provides gofmt and the module proxy check.
       - name: Tag the Go SDK and the k6 extension
         shell: bash
@@ -547,7 +588,7 @@ jobs:
           gofmt -w src/sdks/go/native_checksums.go
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit --quiet -m "Go SDK $version native library checksums" src/sdks/go/native_checksums.go
+          git commit --quiet -am "Go SDK and k6 extension $version: version and native library checksums"
           for module in go k6; do
             tag="src/sdks/$module/v$version"
             if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then

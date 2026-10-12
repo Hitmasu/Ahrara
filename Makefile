@@ -447,6 +447,12 @@ sdk-stage:
 		cp dist/ahrara-third-party-licenses.md "src/sdks/$$sdk/LICENSE-THIRD-PARTY.md"
 	done
 
+# Sets VERSION in every manifest, lockfile and documented snippet; the release
+# workflow runs it with the tag's version, so a release needs no version commit.
+.PHONY: version
+version:
+	python3 scripts/set-version.py "$(VERSION)"
+
 # The CLI image from the Linux release binaries in dist. Builds the host's
 # architecture into the local image store unless DOCKER_CLI_ARGS says otherwise;
 # the release workflow passes both platforms, its tags and --push.
