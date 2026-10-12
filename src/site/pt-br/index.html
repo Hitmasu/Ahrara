@@ -514,13 +514,12 @@ Receive Email
         <h2 id="ownership-title">Seus e-mails são seus</h2>
         <p>Seus endereços são gerados localmente e vinculados à sua identidade criptográfica. Sua chave privada fica no seu computador e comprova que os endereços são seus quando você se conecta.</p>
       </section>
-      <ol class="retention-flow" aria-label="Fluxo de entrega de e-mails">
-        <li><svg aria-hidden="true"><use href="#mail"/></svg><strong>E-mail recebido</strong><span>Entregue em tempo real</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#server"/></svg><strong>Servidor Ahrara</strong><span>Nenhum e-mail retido</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#computer"/></svg><strong>Seu computador</strong><span>Sua caixa de entrada local</span></li>
-      </ol>
+      <figure class="retention-flow">
+        <picture>
+          <source media="(max-width: 820px)" srcset="../assets/diagrams/delivery-pt-br-tb.svg">
+          <img src="../assets/diagrams/delivery-pt-br-lr.svg" width="1021" height="164" alt="Um remetente envia um e-mail para o seu endereço. O Ahrara Relay o repassa por uma conexão criptografada ao Ahrara no seu computador, usado pelo terminal, SDKs, agentes de IA ou pela Web, que o salva em uma caixa criptografada.">
+        </picture>
+      </figure>
       <p class="section-note">Seus e-mails e endereços ficam salvos apenas no seu computador.</p>
     </div>
 

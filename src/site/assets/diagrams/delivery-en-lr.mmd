@@ -1,0 +1,50 @@
+---
+config:
+  theme: base
+  look: classic
+  htmlLabels: false
+  fontFamily: Arial, sans-serif
+  themeVariables:
+    primaryColor: '#102439'
+    primaryTextColor: '#e1e9f5'
+    primaryBorderColor: '#40516a'
+    lineColor: '#73bde8'
+    secondaryColor: '#0b131e'
+    tertiaryColor: '#0b131e'
+    clusterBkg: '#0b131e'
+    clusterBorder: '#304159'
+    edgeLabelBackground: '#0b131e'
+    fontFamily: 'Arial, sans-serif'
+    fontSize: '14px'
+  flowchart:
+    subGraphTitleMargin:
+      top: 4
+      bottom: 18
+    curve: basis
+    nodeSpacing: 32
+    rankSpacing: 48
+    wrappingWidth: 240
+    padding: 14
+---
+flowchart LR
+  accTitle: How Ahrara delivers email
+  accDescr: A sender emails your address. The Ahrara Relay forwards it over an encrypted connection to Ahrara on your computer, used from the terminal, SDKs, AI agents or the Web, which saves it in an encrypted inbox.
+  Sender(["`📨 **Sender**`"]) -- Email --> Relay["`🛰️ **Ahrara Relay**`"]
+  Relay -- 🔐 Encrypted --> Ahrara
+  subgraph Computer["💻 Your computer"]
+    direction LR
+    Ahrara["`🦜 **Ahrara**
+    Terminal · SDK · AI · Web`"] --> Inbox[("`🗄️ **Encrypted inbox**`")]
+  end
+
+  classDef sender fill:#fff4e5,stroke:#f59e0b,stroke-width:2px,color:#7c2d12
+  classDef cloud fill:#f1f5f9,stroke:#94a3b8,stroke-width:2px,color:#0f172a
+  classDef relay fill:#e8f1ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
+  classDef ahrara fill:#ffecec,stroke:#e11a1c,stroke-width:2px,color:#7f1d1d
+  classDef sdk fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+  classDef inbox fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#064e3b
+  class Sender sender
+  class Relay relay
+  class Ahrara ahrara
+  class Inbox inbox
+  style Computer fill:transparent,stroke-dasharray:6 4

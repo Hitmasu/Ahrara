@@ -514,13 +514,12 @@ Receive Email
         <h2 id="ownership-title">You own your email</h2>
         <p>Your addresses are generated locally and tied to your cryptographic Identity. Your private key stays on your computer and proves ownership when you connect.</p>
       </section>
-      <ol class="retention-flow" aria-label="Email delivery flow">
-        <li><svg aria-hidden="true"><use href="#mail"/></svg><strong>Incoming email</strong><span>Delivered in real time</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#server"/></svg><strong>Ahrara server</strong><span>No email retained</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#computer"/></svg><strong>Your computer</strong><span>Your local inbox</span></li>
-      </ol>
+      <figure class="retention-flow">
+        <picture>
+          <source media="(max-width: 820px)" srcset="assets/diagrams/delivery-en-tb.svg">
+          <img src="assets/diagrams/delivery-en-lr.svg" width="950" height="161" alt="A sender emails your address. The Ahrara Relay forwards it over an encrypted connection to Ahrara on your computer, used from the terminal, SDKs, AI agents or the Web, which saves it in an encrypted inbox.">
+        </picture>
+      </figure>
       <p class="section-note">Your emails and addresses are saved only on your computer.</p>
     </div>
 

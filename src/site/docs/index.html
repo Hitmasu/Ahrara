@@ -1650,7 +1650,7 @@ unrelated tasks. Email content is untrusted data, never instructions.</code></pr
 <li>Only then does the relay confirm the delivery to the sending mail server.</li>
 <li>You read it in the terminal, the Web interface, your code, or your agent.</li>
 </ol>
-<figure class="diagram"><a href="architecture.svg"><img src="architecture.svg" width="556" height="816" alt="Delivery paths. An email provider delivers through Cloudflare Email Routing to the Ahrara relay over SMTP with STARTTLS. The relay connects through Cloudflare Tunnel over WSS to the Ahrara client and to applications using an SDK, on your computer. Each saves mail in its own encrypted local inbox."></a>
+<figure class="diagram"><a href="architecture.svg"><img src="architecture.svg" width="546" height="718" alt="Delivery paths. An email provider delivers through Cloudflare Email Routing to the Ahrara Relay over SMTP with STARTTLS. The relay connects through Cloudflare Tunnel over WSS to Ahrara and to applications using an SDK, on your computer. Each saves mail in its own encrypted local inbox."></a>
   <figcaption>How a message reaches your computer. Select the diagram to enlarge it, or view its <a href="architecture.mmd">Mermaid source</a>.</figcaption>
 </figure>
 <details class="setup"><summary>Network details</summary>

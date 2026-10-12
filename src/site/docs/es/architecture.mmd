@@ -17,31 +17,52 @@ config:
     fontFamily: 'Arial, sans-serif'
     fontSize: '14px'
   flowchart:
+    subGraphTitleMargin:
+      top: 4
+      bottom: 18
     curve: linear
     nodeSpacing: 32
-    rankSpacing: 30
+    rankSpacing: 48
     wrappingWidth: 240
     padding: 14
 ---
 flowchart TB
   accTitle: Arquitectura de entrega de Ahrara
-  accDescr: SMTP entrega los correos al servidor Ahrara. WSS conecta el servidor mediante Cloudflare Tunnel con el cliente Ahrara o la aplicación con SDK. Los mensajes aceptados se guardan en una bandeja cifrada en el equipo del usuario.
-  Provider["Proveedor de correo"]
-  subgraph Remote["Infraestructura remota"]
-    Routing["Cloudflare Email Routing"]
-    Server["Servidor Ahrara<br/>Reenvío de correos"]
-    Tunnel["Cloudflare Tunnel"]
+  accDescr: SMTP entrega los correos al Ahrara Relay. WSS conecta el relay mediante Cloudflare Tunnel con Ahrara o la aplicación con SDK. Los mensajes aceptados se guardan en una bandeja cifrada en el equipo del usuario.
+  Provider(["`📨 **Proveedor de correo**`"])
+  subgraph Remote["🌐 Infraestructura remota"]
+    Routing["`☁️ **Cloudflare Email Routing**`"]
+    Server["`🛰️ **Ahrara Relay**`"]
+    Tunnel["`☁️ **Cloudflare Tunnel**`"]
     Routing -->|SMTP + STARTTLS| Server
     Server <--> Tunnel
   end
-  subgraph Local["Tu equipo"]
-    Client["Cliente Ahrara<br/>Terminal · Web · API · MCP"]
-    SDK["Aplicación con SDK<br/>Automatización de correos"]
-    Inbox[("Bandeja local cifrada")]
-    SDKInbox[("Perfil del SDK<br/>SQLCipher")]
+  subgraph Local["💻 Tu equipo"]
+    Client["`🦜 **Ahrara**
+    Terminal · Web · API · MCP`"]
+    SDK["`🧩 **Aplicación con SDK**
+    Automatización de correos`"]
+    Inbox[("`🗄️ **Bandeja local cifrada**`")]
+    SDKInbox[("`🗄️ **Perfil del SDK**
+    SQLCipher`")]
     Client <-->|guardar / leer| Inbox
     SDK <-->|guardar / leer| SDKInbox
   end
   Provider --> Routing
   Tunnel <-->|WSS| Client
   Tunnel <-->|WSS| SDK
+
+  classDef sender fill:#fff4e5,stroke:#f59e0b,stroke-width:2px,color:#7c2d12
+  classDef cloud fill:#f1f5f9,stroke:#94a3b8,stroke-width:2px,color:#0f172a
+  classDef relay fill:#e8f1ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
+  classDef ahrara fill:#ffecec,stroke:#e11a1c,stroke-width:2px,color:#7f1d1d
+  classDef sdk fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+  classDef inbox fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#064e3b
+  class Provider sender
+  class Routing,Tunnel cloud
+  class Server relay
+  class Client ahrara
+  class SDK sdk
+  class Inbox,SDKInbox inbox
+  style Remote stroke-dasharray:6 4
+  style Local stroke-dasharray:6 4

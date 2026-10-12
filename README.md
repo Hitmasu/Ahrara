@@ -187,10 +187,27 @@ between the browser and the CLI.
 ## 🏗️ How it works
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "basis", "wrappingWidth": 400}}}%%
 flowchart LR
-    Sender["Sender"] -->|Email| Relay["Ahrara relay<br/>no inbox"]
-    Relay -->|Encrypted connection| Client["Ahrara on your computer<br/>Terminal · Web · MCP · SDK"]
-    Client --- Inbox[("Encrypted local inbox")]
+    Sender(["`📨 **Sender**`"]) -- Email --> Relay["`🛰️ **Ahrara Relay**`"]
+    Relay -- 🔐 Encrypted --> Ahrara
+
+    subgraph Computer["💻 Your computer"]
+        direction LR
+        Ahrara["`🦜 **Ahrara**
+        Terminal · SDK · AI · Web`"] --> Inbox[("`🗄️ **Encrypted inbox**`")]
+    end
+
+    classDef sender fill:#fff4e5,stroke:#f59e0b,stroke-width:2px,color:#7c2d12
+    classDef relay fill:#e8f1ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
+    classDef ahrara fill:#ffecec,stroke:#e11a1c,stroke-width:2px,color:#7f1d1d
+    classDef inbox fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#064e3b
+    class Sender sender
+    class Relay relay
+    class Ahrara ahrara
+    class Inbox inbox
+    style Computer fill:transparent,stroke:#94a3b8,stroke-width:1.5px,stroke-dasharray:6 4
+    linkStyle default stroke:#64748b,stroke-width:2px
 ```
 
 1. A sender delivers mail to your Ahrara address.

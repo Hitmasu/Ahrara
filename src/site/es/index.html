@@ -514,13 +514,12 @@ Receive Email
         <h2 id="ownership-title">Tu correo es tuyo</h2>
         <p>Tus direcciones se generan localmente y están vinculadas a tu identidad criptográfica. Tu clave privada permanece en tu equipo y demuestra que son tuyas al conectarte.</p>
       </section>
-      <ol class="retention-flow" aria-label="Flujo de entrega de correo">
-        <li><svg aria-hidden="true"><use href="#mail"/></svg><strong>Correo entrante</strong><span>Entregado en tiempo real</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#server"/></svg><strong>Servidor Ahrara</strong><span>Sin retención de correos</span></li>
-        <li class="flow-route" aria-hidden="true"></li>
-        <li><svg aria-hidden="true"><use href="#computer"/></svg><strong>Tu equipo</strong><span>Tu bandeja local</span></li>
-      </ol>
+      <figure class="retention-flow">
+        <picture>
+          <source media="(max-width: 820px)" srcset="../assets/diagrams/delivery-es-tb.svg">
+          <img src="../assets/diagrams/delivery-es-lr.svg" width="954" height="161" alt="Un remitente envía un correo a tu dirección. Ahrara Relay lo reenvía por una conexión cifrada a Ahrara en tu equipo, usado desde la terminal, SDKs, agentes de IA o la Web, que lo guarda en una bandeja cifrada.">
+        </picture>
+      </figure>
       <p class="section-note">Tus correos y direcciones solo se guardan en tu equipo.</p>
     </div>
 
