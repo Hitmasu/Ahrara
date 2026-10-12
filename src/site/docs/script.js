@@ -261,18 +261,20 @@
   });
   narrow.addEventListener("change", () => setNav(false));
 
-  /* Language menu: plain links that carry the current hash, closed like a native select. */
-  const lang = document.querySelector("details.lang");
+  /* Language menus (top bar and sidebar): plain links that carry the current hash, closed like a native select. */
+  const langs = $$("details.lang");
   const langLinks = $$(".lang-menu a");
   document.addEventListener("click", (event) => {
-    if (!lang.contains(event.target)) lang.open = false;
+    for (const lang of langs) if (!lang.contains(event.target)) lang.open = false;
   });
-  lang.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || !lang.open) return;
-    event.stopPropagation();
-    lang.open = false;
-    lang.querySelector("summary").focus();
-  });
+  for (const lang of langs) {
+    lang.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !lang.open) return;
+      event.stopPropagation();
+      lang.open = false;
+      lang.querySelector("summary").focus();
+    });
+  }
 
   /* Pages: one article at a time, chosen by the URL hash. */
   const pages = $$(".page");
@@ -325,7 +327,7 @@
     }
     document.title = page.id === "overview" ? ui.siteTitle : ui.pageTitle.replace("{page}", page.dataset.title);
     for (const link of langLinks) link.hash = location.hash;
-    lang.open = false;
+    for (const lang of langs) lang.open = false;
     setNav(false);
     const folded = target?.closest("details");
     if (folded) folded.open = true;

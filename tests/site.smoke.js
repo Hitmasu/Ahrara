@@ -191,8 +191,8 @@ async (page) => {
     check(await selectedKey('.tabs[data-sync="agent"]') === "cline" && await page.locator('.tabs[data-sync="agent"] [role=listbox]').isHidden(), "Clicking an agent selects it and closes the picker.");
 
     // Copy to clipboard.
-    await visit(`${docs}#install-manual`);
-    const block = page.locator("#install .code").filter({ hasText: "chmod +x ahrara" });
+    await visit(`${docs}#install-update`);
+    const block = page.locator("#install .code").filter({ hasText: "ahrara update" });
     await block.getByRole("button", { name: text.copyCode, exact: true }).click();
     await page.waitForFunction((message) => document.getElementById("status").textContent === message, text.copiedStatus);
     check(await page.evaluate(() => navigator.clipboard.readText()) === await block.locator("pre").textContent(), "Copy preserves the code exactly.");
@@ -200,6 +200,13 @@ async (page) => {
     const group = page.locator("#install .tabs").first();
     await group.locator(".code-bar .copy").click();
     check(await page.evaluate(() => navigator.clipboard.readText()) === await group.locator(".tab-panel:not([hidden]) pre").textContent(), "Tabbed examples copy the visible panel.");
+    await group.getByRole("tab", { name: "Binaries", exact: true }).click();
+    check(await group.locator('.tab-panel:not([hidden]) a[href$="/releases/latest/download/ahrara-linux-x86_64"]').isVisible(), "The Binaries tab lists the downloads.");
+    const sdkPackages = page.locator('#install .tabs[data-sync="lang"]');
+    await sdkPackages.getByRole("tab", { name: "Rust", exact: true }).click();
+    const cargo = sdkPackages.locator(".tab-panel:not([hidden]) .code");
+    await cargo.getByRole("button", { name: text.copyCode, exact: true }).click();
+    await page.waitForFunction(async (expected) => (await navigator.clipboard.readText()) === expected, await cargo.locator("pre").textContent());
 
     // Search.
     await page.evaluate(() => document.activeElement?.blur());
@@ -233,18 +240,18 @@ async (page) => {
     check(await page.evaluate(() => document.documentElement.dataset.theme) === (dark ? "light" : "dark"), "The chosen theme is remembered.");
     await page.evaluate(() => localStorage.removeItem("ahrara-docs-theme"));
 
-    // Docs language menu keeps the current page.
+    // Docs language menu, beside the theme toggle, keeps the current page.
     await visit(`${docs}#ref-mcp`);
-    const languageLinks = await page.locator(".lang-menu a").evaluateAll((links) => links.map((link) => ({ href: link.href, lang: link.hreflang, current: link.getAttribute("aria-current") })));
+    const languageLinks = await page.locator(".sidebar-head .lang-menu a").evaluateAll((links) => links.map((link) => ({ href: link.href, lang: link.hreflang, current: link.getAttribute("aria-current") })));
     check(languageLinks.map((link) => link.lang).join() === "en,pt-BR,es", "The docs offer English, Portuguese and Spanish.");
     check(languageLinks.every((link) => new URL(link.href).hash === "#ref-mcp"), "Language links keep the current page.");
     await page.locator(".nav a[href='#ref-api']").click();
     await expectPage("ref-api");
     check(await page.locator(".lang-menu a").evaluateAll((links) => links.every((link) => link.hash === "#ref-api")), "Language links follow navigation.");
-    await page.locator("details.lang summary").click();
-    check(await page.locator(".lang-menu a").first().isVisible(), "The docs language menu opens.");
+    await page.locator(".sidebar-head details.lang summary").click();
+    check(await page.locator(".sidebar-head .lang-menu a").first().isVisible(), "The docs language menu opens.");
     await page.keyboard.press("Escape");
-    check(!await page.locator("details.lang").evaluate((menu) => menu.open), "Escape closes the docs language menu.");
+    check(!await page.locator(".sidebar-head details.lang").evaluate((menu) => menu.open), "Escape closes the docs language menu.");
 
     // Narrow screens: drawer navigation and no horizontal scrolling.
     await page.setViewportSize({ width: 390, height: 844 });
@@ -254,8 +261,7 @@ async (page) => {
     await menu.click();
     check(await menu.getAttribute("aria-expanded") === "true" && await menu.getAttribute("aria-label") === text.menuClose, "The menu opens.");
     check(await page.locator("main").evaluate((element) => element.inert), "The open drawer takes focus away from the article.");
-    await page.locator("details.lang summary").scrollIntoViewIfNeeded();
-    check(await page.locator("details.lang summary").isVisible(), "The language menu is reachable on mobile.");
+    check(await page.locator(".topbar details.lang summary").isVisible(), "The language menu is in the top bar on mobile.");
     await page.locator('.nav a[href="#ref-mcp"]').click();
     await expectPage("ref-mcp");
     check(await menu.getAttribute("aria-expanded") === "false", "Choosing a page closes the drawer.");
@@ -297,7 +303,7 @@ async (page) => {
           ids: [...document.querySelectorAll("[id]")].map((element) => element.id).sort().join(),
           keys: Object.keys(JSON.parse(document.getElementById("ui-strings").textContent)).sort().join(),
           pages: [...document.querySelectorAll("article.page")].filter((article) => article.offsetHeight > 0 && article.querySelector("h1").textContent.trim()).length,
-          languages: [...document.querySelectorAll(".lang-menu a")].map((link) => link.href.split("#")[0]),
+          languages: [...document.querySelectorAll(".sidebar-head .lang-menu a")].map((link) => link.href.split("#")[0]),
           shared: [...document.querySelectorAll("script[src], link[rel=stylesheet]")].map((element) => new URL(element.src || element.href).pathname).sort().join(),
           images: [...document.images].every((image) => image.complete && image.naturalWidth > 0),
           search: document.querySelector(".search").hidden,
@@ -351,13 +357,14 @@ async (page) => {
     // Switching language keeps the page, for every converted locale.
     await visit(`${docs}#ref-mcp`);
     for (const lang of checked.filter((lang) => lang !== "en" && !lang.startsWith("landing"))) {
-      await page.locator("details.lang summary").click();
-      await page.locator(`.lang-menu a[hreflang="${lang}"]`).click();
+      // Whichever menu the viewport shows: the top bar on narrow screens, the sidebar otherwise.
+      await page.locator("details.lang:visible summary").click();
+      await page.locator(`details.lang[open] .lang-menu a[hreflang="${lang}"]`).click();
       await page.waitForURL((url) => url.hash === "#ref-mcp" && url.pathname !== "/docs/");
       await expectPage("ref-mcp");
       check(await page.evaluate(() => document.documentElement.lang) === lang, `Switching to ${lang} opens that language.`);
-      await page.locator("details.lang summary").click();
-      await page.locator('.lang-menu a[hreflang="en"]').click();
+      await page.locator("details.lang:visible summary").click();
+      await page.locator('details.lang[open] .lang-menu a[hreflang="en"]').click();
       await page.waitForURL(`${docs}#ref-mcp`);
       await expectPage("ref-mcp");
     }

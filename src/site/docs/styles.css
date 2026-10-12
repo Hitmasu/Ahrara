@@ -128,7 +128,11 @@ kbd { display: inline-block; min-width: 1.75em; padding: 0 .4em; border: 1px sol
 .topbar { display: none; }
 .shell { display: grid; grid-template-columns: 304px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; display: flex; flex-direction: column; gap: 22px; height: 100vh; padding: 24px 18px 20px 22px; overflow-y: auto; border-right: 1px solid var(--rule); background: var(--bg); scrollbar-width: thin; }
-.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Smaller than the page brand, so the language and theme controls fit beside it. */
+.sidebar-head .brand { gap: 10px; font-size: 20px; }
+.sidebar-head .brand img { width: 32px; height: 32px; }
+.sidebar-head .brand span { font-size: 17px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; color: var(--text); font-size: 24px; font-weight: 760; letter-spacing: -.015em; text-decoration: none; }
 .brand img { width: 42px; height: 42px; }
 .brand span { color: var(--text-2); font: italic 400 21px/1 var(--serif); letter-spacing: 0; }
@@ -173,16 +177,19 @@ kbd { display: inline-block; min-width: 1.75em; padding: 0 .4em; border: 1px sol
 .sidebar-foot a { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); text-decoration: none; }
 .sidebar-foot a:hover { color: var(--text); }
 .sidebar-foot svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
-/* Language selector: a native disclosure of plain links, so it also works without JavaScript. */
-.sidebar-foot { flex-wrap: wrap; }
-.lang { --accent-mark: var(--text-3); position: relative; flex-basis: 100%; }
-.lang summary { gap: 9px; height: 38px; padding: 0 12px; border: 1px solid var(--rule); border-radius: 10px; color: var(--text-2); font-weight: 600; }
+/* Language selector beside the theme toggle: a native disclosure of plain links, so it also works without JavaScript. */
+.head-tools { display: flex; align-items: center; gap: 6px; }
+.lang { --accent-mark: var(--text-3); position: relative; }
+.lang summary { gap: 5px; height: 38px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 10px; color: var(--text-2); font-size: 13.5px; font-weight: 650; }
 .lang summary:hover, .lang[open] > summary { margin: 0; border-color: var(--rule-strong); color: var(--text); }
 .lang summary svg { width: 17px; height: 17px; fill: none; stroke: currentColor; }
-.lang summary::before { order: 1; margin-left: auto; transform: rotate(45deg) translate(-2px, -2px); }
-.lang[open] > summary::before { transform: rotate(-135deg) translate(-2px, -2px); }
-.lang .lang-menu { position: absolute; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 5; margin: 0; padding: 4px; border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--bg-raised); list-style: none; box-shadow: 0 10px 28px rgba(8, 13, 20, .16); }
-.lang-menu a { display: flex; padding: 7px 10px; border-radius: 7px; color: var(--text); font-size: 14.5px; line-height: 1.35; }
+.lang summary::before { order: 1; width: 5px; height: 5px; margin-left: 2px; transform: rotate(45deg) translate(-1px, -1px); }
+.lang[open] > summary::before { transform: rotate(-135deg) translate(-1px, -1px); }
+/* The sidebar has room for the globe only, a square like the theme toggle; the menu marks the current language. */
+.sidebar-head .lang summary { justify-content: center; width: 38px; padding: 0; }
+.sidebar-head .lang summary > span[aria-hidden], .sidebar-head .lang summary::before { display: none; }
+.lang .lang-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 25; min-width: 200px; width: max-content; margin: 0; padding: 4px; border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--bg-raised); list-style: none; box-shadow: 0 10px 28px rgba(8, 13, 20, .16); }
+.lang-menu a { display: flex; padding: 7px 10px; text-decoration: none; white-space: nowrap; border-radius: 7px; color: var(--text); font-size: 14.5px; line-height: 1.35; }
 .lang-menu a:hover { background: var(--bg-hover); color: var(--text); }
 .lang-menu a:focus-visible { outline-offset: -2px; }
 .lang-menu a[aria-current] { font-weight: 650; }
@@ -286,6 +293,14 @@ pre code { padding: 0; background: none; font: inherit; }
 .tab-note:last-child { padding-bottom: 18px; }
 .tab-note a { color: #9cc8ff; }
 .tab-note code { background: rgba(140, 170, 205, .14); color: var(--code-text); }
+/* Panels that need more than one command: the binary downloads, and a file to edit after the commands. */
+.tab-panel .table-wrap { margin: 14px 18px 0; border-color: var(--code-rule); background: transparent; }
+.tab-panel table { font-size: 14px; }
+.tab-panel th, .tab-panel td { padding: 10px 12px; border-color: var(--code-rule); color: var(--code-text); }
+.tab-panel td:first-child { white-space: nowrap; }
+.tab-panel thead th { color: var(--code-dim); }
+.tab-panel td a { color: #9cc8ff; }
+.tab-panel .code { margin: 14px 18px 18px; }
 .token-comment { color: #8b97ab; font-style: italic; }
 .token-string { color: #f2c66d; }
 .token-keyword { color: #8ec1ff; }
