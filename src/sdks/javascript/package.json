@@ -1,6 +1,6 @@
 {
   "name": "@ahrara/sdk",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Disposable email inboxes powered by the shared Ahrara Rust core",
   "license": "MIT",
   "homepage": "https://ahrara.dev",
