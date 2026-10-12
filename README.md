@@ -29,6 +29,12 @@ agent through MCP, or assert on it from your test suite.
 
 ## 📦 Install
 
+Use Ahrara as a CLI on your computer, as an SDK inside your tests, as a plugin for
+your AI agent, or in the browser with nothing to install.
+
+<details>
+<summary><strong>CLI</strong>: Shell, PowerShell, npm, Homebrew, Docker or a binary</summary>
+
 macOS and Linux:
 
 ```sh
@@ -41,20 +47,20 @@ Windows (PowerShell):
 iwr https://ahrara.dev/install.ps1 -useb | iex
 ```
 
-Or with npm, on any of them:
+npm, on any of them:
 
 ```sh
 npm install -g ahrara
 ```
 
-Or with Homebrew:
+Homebrew:
 
 ```sh
 brew tap hitmasu/ahrara https://github.com/Hitmasu/Ahrara.git
 brew install hitmasu/ahrara/ahrara
 ```
 
-Or with Docker, on Linux x64 and ARM64. Add any command after the image name; the
+Docker, on Linux x64 and ARM64. Add any command after the image name; the
 `ahrara` volume keeps your identity and inbox between runs:
 
 ```sh
@@ -66,26 +72,25 @@ they are also on [GitHub Releases](https://github.com/Hitmasu/Ahrara/releases/la
 ([manual install](https://ahrara.dev/docs/#install-manual)). Run `ahrara --version`
 to confirm the installation.
 
-## 🚀 Quick start
+</details>
 
-```sh
-ahrara
-```
+<details>
+<summary><strong>SDKs</strong>: TypeScript, Python, .NET, Java, Go, Rust and k6</summary>
 
-1. Wait for **Connected**. Your first address is created automatically and shown
-   in the **Email** row; press **C** to copy it.
-2. Send a message to that address, or sign up with it in the app you are testing.
-3. Select the received message with **↑/↓** and press **Enter** to read it.
+| Language | Install |
+| --- | --- |
+| TypeScript / JavaScript | `npm install @ahrara/sdk` |
+| Python | `pip install ahrara` |
+| .NET | `dotnet add package Ahrara` |
+| Java | Maven dependency `io.github.hitmasu:ahrara` |
+| Go | `go get github.com/Hitmasu/Ahrara/src/sdks/go@latest` |
+| Rust | From source, see the [Rust guide](src/core/README.md) |
+| k6 | Custom k6 build, see the [k6 guide](src/sdks/k6/README.md) |
 
-Keep Ahrara running to receive email: mail is not queued while you are offline.
-Press **/** for address, Web and MCP commands, and **Ctrl+C** to stop. The
-[user guide](docs/usage.md) covers every command and setting.
+</details>
 
-## 🤖 AI agents
-
-Install the plugin and your agent installs and starts Ahrara itself. Through MCP
-it can create addresses, wait for verification codes, read messages and check
-email templates.
+<details>
+<summary><strong>AI agents</strong>: plugins for Claude Code, Codex, Copilot CLI, Gemini CLI and 21 more</summary>
 
 | Agent | Install |
 | --- | --- |
@@ -96,7 +101,37 @@ email templates.
 
 Plugins need Node.js 20+. Cursor, Windsurf, Cline, OpenCode, Kiro and 16 other
 agents are supported through plugins, rules or instructions; see the
-[agents guide](docs/agents.md). Any other MCP host can run Ahrara over stdio:
+[agents guide](docs/agents.md).
+
+</details>
+
+<details>
+<summary><strong>Browser</strong>: nothing to install</summary>
+
+Open [app.ahrara.dev](https://app.ahrara.dev); see the [Web interface](#-web-interface).
+
+</details>
+
+## 🚀 Quick start
+
+```sh
+ahrara
+```
+
+1. Wait for **Connected**. Your first address is created automatically and shown
+   in the **Email** row; press **C** to copy it.
+2. Send a message to that address, or use it in the app you are testing.
+3. Select the received message with **↑/↓** and press **Enter** to read it.
+
+Keep Ahrara running to receive email: mail is not queued while you are offline.
+Press **/** for address, Web and MCP commands, and **Ctrl+C** to stop. The
+[user guide](docs/usage.md) covers every command and setting.
+
+## 🤖 AI agents
+
+With its [plugin](#-install), your agent installs and starts Ahrara itself. Through
+MCP it can create addresses, wait for verification codes, read messages and check
+email templates. Any other MCP host can run Ahrara over stdio:
 
 ```json
 {
@@ -114,24 +149,14 @@ To connect over HTTP instead, see the [MCP guide](docs/usage.md#mcp).
 ## 🧩 SDKs
 
 Give each test its own inbox. SDKs connect directly to the relay, so no CLI needs
-to run alongside your tests.
-
-| Language | Install |
-| --- | --- |
-| TypeScript / JavaScript | `npm install @ahrara/sdk` |
-| Python | `pip install ahrara` |
-| .NET | `dotnet add package Ahrara` |
-| Java | Maven dependency `io.github.hitmasu:ahrara` |
-| Go | `go get github.com/Hitmasu/Ahrara/src/sdks/go@latest` |
-| Rust | From source, see the [Rust guide](src/core/README.md) |
-| k6 | Custom k6 build, see the [k6 guide](src/sdks/k6/README.md) |
+to run alongside your tests ([install](#-install)).
 
 ```ts
 import { Ahrara } from '@ahrara/sdk';
 
 const inbox = await Ahrara.createInbox();
 try {
-  // Use inbox.address in the signup form of the app under test.
+  // Use inbox.address wherever the app under test sends email.
   const match = await inbox.waitForRegexMatch('[0-9]{6}', {
     timeoutMs: 30_000,
     filter: { subject: 'Verification' },
