@@ -209,17 +209,22 @@ fn identity_recovery_and_shared_go_rust_vectors() {
     let address = auth::address(&route, &alias);
 
     assert_eq!(address, fixture["address"]);
-    assert_eq!(address.split('@').next().unwrap().len(), 32);
+    assert_eq!(address.split('@').next().unwrap().len(), 39);
     assert_eq!(auth::decode_address(&address).unwrap().0, route);
+    // Senders may change the case of the whole address.
     assert_eq!(
-        auth::decode_address(&address.replace("@ahrara.dev", "@AHRARA.DEV"))
-            .unwrap()
-            .2,
-        address
+        auth::decode_address(&address.to_ascii_uppercase()).unwrap(),
+        (route, alias, address.clone())
     );
-    assert_ne!(address.to_ascii_lowercase(), address);
+
+    // Addresses generated before base32 keep working, and their case still matters.
+    let legacy = fixture["legacy_address"].as_str().unwrap();
+    assert_eq!(
+        auth::decode_address(&legacy.replace("@ahrara.dev", "@AHRARA.DEV")).unwrap(),
+        (route, alias, legacy.to_string())
+    );
     assert_ne!(
-        auth::decode_address(&address.to_ascii_lowercase())
+        auth::decode_address(&legacy.to_ascii_lowercase())
             .unwrap()
             .0,
         route

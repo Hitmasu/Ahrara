@@ -76,6 +76,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "cssparser",
+ "data-encoding",
  "directories",
  "ed25519-dalek",
  "futures-util",

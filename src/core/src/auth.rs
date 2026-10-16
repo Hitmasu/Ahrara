@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::config::{Config, private_write};
-pub use crate::protocol::{decode_address, derive_route};
+pub use crate::protocol::{address, decode_address, derive_route};
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
@@ -184,13 +184,6 @@ impl Identity {
             ))
             .to_bytes())
     }
-}
-
-pub fn address(route: &[u8; 16], alias: &[u8; 8]) -> String {
-    let mut bytes = [0; 24];
-    bytes[..16].copy_from_slice(route);
-    bytes[16..].copy_from_slice(alias);
-    format!("{}@ahrara.dev", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

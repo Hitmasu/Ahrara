@@ -789,6 +789,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recipient_case_neither_hides_the_identity_nor_repeats_the_offer() {
+        let broker = Broker::encrypted([1; 32]);
+        let route = [4; 16];
+        let _peer = broker.attach(route);
+        let address = p::address(&route, &[5; 8]);
+        let mut transfer = Transfer::new(
+            "sender@example.test".into(),
+            0,
+            Duration::from_secs(5),
+            None,
+        );
+        let refused = |reason| metrics::labelled("ahrara_recipients_refused_total", reason);
+        let retried = refused("retried");
+
+        // The test peer cannot answer; an offline refusal would return before recording the offer.
+        assert!(
+            transfer
+                .offer(&broker, &address.to_ascii_uppercase())
+                .await
+                .is_err()
+        );
+        assert!(transfer.offered.contains(&address));
+        assert!(transfer.offer(&broker, &address).await.is_err());
+        assert!(refused("retried") > retried);
+    }
+
+    #[tokio::test]
     async fn commands_without_committed_mail_cannot_hold_a_session() {
         let broker = Broker::encrypted_with_limits(
             [1; 32],

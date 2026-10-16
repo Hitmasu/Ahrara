@@ -13,6 +13,7 @@ schemars = "1.0"
 ammonia = "=4.2.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+data-encoding = "2.11"
 cssparser = { version = "=0.38.0", default-features = false }
 ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
 hex = "0.4"

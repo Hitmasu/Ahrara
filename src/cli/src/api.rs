@@ -179,7 +179,7 @@ pub struct Pagination {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in=Query)]
 pub struct EmailQuery {
-    // Generated addresses are base64url and may begin with `-`.
+    // Legacy base64url addresses may begin with `-`.
     #[arg(long, allow_hyphen_values = true)]
     pub address: Option<String>,
     #[arg(long)]

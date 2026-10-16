@@ -1,5 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use data_encoding::BASE32_NOPAD;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -95,23 +96,49 @@ pub fn derive_route(public: &[u8; 32]) -> Route {
     h.finalize()[..16].try_into().expect("16 bytes")
 }
 
+/// New addresses are lowercase base32, so senders that lowercase addresses still reach them.
+pub fn address(route: &Route, alias: &[u8; 8]) -> String {
+    let token = BASE32_NOPAD.encode(&[route.as_slice(), alias].concat());
+    format!("{}@ahrara.dev", token.to_ascii_lowercase())
+}
+
+/// Accepts base32 in any case and legacy 32-character base64url, whose case is significant.
 pub fn decode_address(value: &str) -> Result<(Route, [u8; 8], String)> {
     let (local, domain) = value.split_once('@').context("invalid address")?;
-    if local.len() != 32 || !domain.eq_ignore_ascii_case("ahrara.dev") {
+    if !domain.eq_ignore_ascii_case("ahrara.dev") {
         bail!("invalid address")
     }
 
-    let bytes = URL_SAFE_NO_PAD
-        .decode(local)
-        .context("invalid address token")?;
-    if bytes.len() != 24 || URL_SAFE_NO_PAD.encode(&bytes) != local {
-        bail!("invalid address token")
-    }
+    let (bytes, canonical) = match local.len() {
+        39 => {
+            let canonical = local.to_ascii_lowercase();
+            let bytes = BASE32_NOPAD
+                .decode(local.to_ascii_uppercase().as_bytes())
+                .context("invalid address token")?;
+            ensure!(
+                BASE32_NOPAD.encode(&bytes).to_ascii_lowercase() == canonical,
+                "invalid address token"
+            );
+            (bytes, canonical)
+        }
+        32 => {
+            let bytes = URL_SAFE_NO_PAD
+                .decode(local)
+                .context("invalid address token")?;
+            ensure!(
+                URL_SAFE_NO_PAD.encode(&bytes) == local,
+                "invalid address token"
+            );
+            (bytes, local.to_owned())
+        }
+        _ => bail!("invalid address"),
+    };
+    ensure!(bytes.len() == 24, "invalid address token");
 
     Ok((
         bytes[..16].try_into()?,
         bytes[16..].try_into()?,
-        format!("{local}@ahrara.dev"),
+        format!("{canonical}@ahrara.dev"),
     ))
 }
 
@@ -134,7 +161,48 @@ mod tests {
     }
 
     #[test]
-    fn address_roundtrip_and_canonical_domain() {
+    fn address_survives_case_changes() {
+        let route = derive_route(&[42; 32]);
+        let generated = address(&route, &[7; 8]);
+        let (local, _) = generated.split_once('@').unwrap();
+
+        assert_eq!(local.len(), 39);
+        assert_eq!(generated, generated.to_ascii_lowercase());
+        for variant in [generated.to_ascii_uppercase(), mixed_case(&generated)] {
+            assert_eq!(
+                decode_address(&variant).unwrap(),
+                (route, [7; 8], generated.clone())
+            );
+        }
+
+        let zeros = "a".repeat(38);
+        for bad in [
+            format!("{zeros}b@ahrara.dev"), // non-zero trailing bits
+            format!("{zeros}1@ahrara.dev"),
+            format!("{zeros}=@ahrara.dev"),
+            format!("{zeros}a@example.test"),
+        ] {
+            assert!(decode_address(&bad).is_err(), "{bad}");
+        }
+        assert!(decode_address(&format!("{zeros}a@ahrara.dev")).is_ok());
+    }
+
+    fn mixed_case(value: &str) -> String {
+        value
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if i % 2 == 0 {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn legacy_address_roundtrip_and_canonical_domain() {
         let route = derive_route(&[42; 32]);
         let encoded = URL_SAFE_NO_PAD.encode([route.as_slice(), &[7; 8]].concat());
         let (got, alias, canonical) = decode_address(&format!("{encoded}@AHRARA.DEV")).unwrap();
