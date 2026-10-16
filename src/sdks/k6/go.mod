@@ -3,7 +3,7 @@ module github.com/Hitmasu/Ahrara/src/sdks/k6
 go 1.26.0
 
 require (
-	github.com/Hitmasu/Ahrara/src/sdks/go v0.1.0
+	github.com/Hitmasu/Ahrara/src/sdks/go v0.2.0
 	github.com/grafana/sobek v0.0.0-20260908083152-4698bc773ae7
 	go.k6.io/k6/v2 v2.3.0
 )
